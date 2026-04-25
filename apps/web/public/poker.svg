@@ -1,0 +1,59 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Poker icon</title>
+  <desc>Original poker logo with two cards and a chip.</desc>
+  <defs>
+    <linearGradient id="bg" x1="32" y1="24" x2="224" y2="232" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#194C3B"/>
+      <stop offset="1" stop-color="#0A1E19"/>
+    </linearGradient>
+    <linearGradient id="chip" x1="92" y1="96" x2="170" y2="206" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F86D61"/>
+      <stop offset="1" stop-color="#B1161D"/>
+    </linearGradient>
+    <radialGradient id="center" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(128 150) rotate(90) scale(34)">
+      <stop stop-color="#7A1217"/>
+      <stop offset="1" stop-color="#43080C"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <rect x="14" y="14" width="228" height="228" rx="42" stroke="#2A6B55" stroke-width="4"/>
+  <circle cx="78" cy="58" r="34" fill="#FFFFFF" fill-opacity="0.04"/>
+  <circle cx="198" cy="198" r="44" fill="#FFFFFF" fill-opacity="0.03"/>
+
+  <g transform="rotate(-12 87 118)">
+    <rect x="48" y="64" width="78" height="108" rx="12" fill="#FBF7EE"/>
+    <rect x="48" y="64" width="78" height="108" rx="12" stroke="#D9D1C2" stroke-width="4"/>
+    <path d="M0 -38L28 0L0 38L-28 0Z" transform="translate(88 116) scale(0.52)" fill="#D94045"/>
+    <path d="M0 -38L28 0L0 38L-28 0Z" transform="translate(66 86) scale(0.18)" fill="#D94045"/>
+    <path d="M0 -38L28 0L0 38L-28 0Z" transform="translate(108 150) scale(0.18)" fill="#D94045"/>
+  </g>
+
+  <g transform="rotate(10 171 110)">
+    <rect x="132" y="56" width="78" height="108" rx="12" fill="#FBF7EE"/>
+    <rect x="132" y="56" width="78" height="108" rx="12" stroke="#D9D1C2" stroke-width="4"/>
+    <path d="M0 -50C-8 -33 -34 -18 -34 10C-34 30 -19 42 -2 42C-10 54 -14 64 -14 78H14C14 64 10 54 2 42C19 42 34 30 34 10C34 -18 8 -33 0 -50Z" transform="translate(171 106) scale(0.44)" fill="#182128"/>
+    <path d="M0 -50C-8 -33 -34 -18 -34 10C-34 30 -19 42 -2 42C-10 54 -14 64 -14 78H14C14 64 10 54 2 42C19 42 34 30 34 10C34 -18 8 -33 0 -50Z" transform="translate(150 77) scale(0.14)" fill="#182128"/>
+    <path d="M0 -50C-8 -33 -34 -18 -34 10C-34 30 -19 42 -2 42C-10 54 -14 64 -14 78H14C14 64 10 54 2 42C19 42 34 30 34 10C34 -18 8 -33 0 -50Z" transform="translate(192 143) scale(0.14)" fill="#182128"/>
+  </g>
+
+  <ellipse cx="128" cy="170" rx="62" ry="16" fill="#000000" fill-opacity="0.18"/>
+
+  <g>
+    <circle cx="128" cy="150" r="58" fill="url(#chip)"/>
+    <circle cx="128" cy="150" r="58" stroke="#7C1018" stroke-width="6"/>
+    <rect x="121" y="90" width="14" height="24" rx="5" fill="#FFF5E2"/>
+    <rect x="121" y="90" width="14" height="24" rx="5" transform="rotate(45 128 150)" fill="#FFF5E2"/>
+    <rect x="121" y="90" width="14" height="24" rx="5" transform="rotate(90 128 150)" fill="#FFF5E2"/>
+    <rect x="121" y="90" width="14" height="24" rx="5" transform="rotate(135 128 150)" fill="#FFF5E2"/>
+    <rect x="121" y="90" width="14" height="24" rx="5" transform="rotate(180 128 150)" fill="#FFF5E2"/>
+    <rect x="121" y="90" width="14" height="24" rx="5" transform="rotate(225 128 150)" fill="#FFF5E2"/>
+    <rect x="121" y="90" width="14" height="24" rx="5" transform="rotate(270 128 150)" fill="#FFF5E2"/>
+    <rect x="121" y="90" width="14" height="24" rx="5" transform="rotate(315 128 150)" fill="#FFF5E2"/>
+    <circle cx="128" cy="150" r="40" fill="#FFF5E2"/>
+    <circle cx="128" cy="150" r="40" stroke="#FFE3B6" stroke-width="2"/>
+    <circle cx="128" cy="150" r="30" fill="url(#center)" stroke="#8E1B21" stroke-width="2"/>
+    <path d="M0 -50C-8 -33 -34 -18 -34 10C-34 30 -19 42 -2 42C-10 54 -14 64 -14 78H14C14 64 10 54 2 42C19 42 34 30 34 10C34 -18 8 -33 0 -50Z" transform="translate(128 136) scale(0.34)" fill="#FFF5E2"/>
+    <ellipse cx="112" cy="128" rx="18" ry="11" fill="#FFFFFF" fill-opacity="0.16" transform="rotate(-25 112 128)"/>
+  </g>
+</svg>

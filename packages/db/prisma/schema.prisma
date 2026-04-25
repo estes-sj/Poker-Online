@@ -1,0 +1,230 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ClubRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum RoomVisibility {
+  PRIVATE
+  CLUB
+}
+
+enum RoomStatus {
+  WAITING
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum HandStreet {
+  PREFLOP
+  FLOP
+  TURN
+  RIVER
+  SHOWDOWN
+}
+
+enum HandActionType {
+  POST_SMALL_BLIND
+  POST_BIG_BLIND
+  FOLD
+  CHECK
+  CALL
+  BET
+  RAISE
+  ALL_IN
+}
+
+enum RankingScope {
+  GLOBAL
+  CLUB
+}
+
+model User {
+  id                String           @id @default(cuid())
+  email             String           @unique
+  username          String           @unique
+  passwordHash      String
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  sessions          Session[]
+  ownedClubs        Club[]           @relation("ClubOwner")
+  memberships       ClubMembership[]
+  adminRooms        Room[]           @relation("RoomAdmin")
+  roomParticipants  TableParticipant[]
+  actions           HandAction[]
+  rankings          UserRanking[]
+}
+
+model Session {
+  id          String   @id @default(cuid())
+  userId      String
+  tokenHash   String   @unique
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Club {
+  id           String           @id @default(cuid())
+  slug         String           @unique
+  name         String
+  ownerId      String
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  owner        User             @relation("ClubOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  memberships  ClubMembership[]
+  rooms        Room[]
+  rankings     UserRanking[]
+}
+
+model ClubMembership {
+  id                    String    @id @default(cuid())
+  clubId                 String
+  userId                 String
+  role                   ClubRole @default(MEMBER)
+  canManageRooms         Boolean  @default(false)
+  isVisibleInLeaderboard Boolean  @default(true)
+  joinedAt               DateTime @default(now())
+  club                   Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, userId])
+  @@index([userId])
+}
+
+model Room {
+  id                    String             @id @default(cuid())
+  slug                  String             @unique
+  name                  String
+  adminId               String
+  clubId                String?
+  visibility            RoomVisibility     @default(PRIVATE)
+  passwordHash          String?
+  maxPlayers            Int
+  startingStack         Int
+  autoStartNextHand     Boolean            @default(true)
+  autoStartDelaySeconds Int                @default(8)
+  autoExpireAfterHours  Int?
+  blindSchedule         Json
+  runtimeState          Json?
+  status                RoomStatus         @default(WAITING)
+  createdAt             DateTime           @default(now())
+  lastActivityAt        DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  admin                 User               @relation("RoomAdmin", fields: [adminId], references: [id], onDelete: Cascade)
+  club                  Club?              @relation(fields: [clubId], references: [id], onDelete: SetNull)
+  sessions              TableSession[]
+  participants          TableParticipant[]
+
+  @@index([clubId])
+  @@index([autoExpireAfterHours, lastActivityAt])
+}
+
+model TableParticipant {
+  id          String    @id @default(cuid())
+  roomId       String
+  userId       String
+  displayName  String
+  seatIndex    Int?
+  joinedAt     DateTime  @default(now())
+  leftAt       DateTime?
+  buyInTotal   Int       @default(0)
+  room         Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  handResults  HandResult[]
+
+  @@unique([roomId, userId])
+  @@index([userId])
+}
+
+model TableSession {
+  id             String     @id @default(cuid())
+  roomId          String
+  startedById     String
+  startedAt       DateTime   @default(now())
+  endedAt         DateTime?
+  blindSchedule   Json
+  room            Room       @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  hands           Hand[]
+
+  @@index([roomId])
+}
+
+model Hand {
+  id             String        @id @default(cuid())
+  sessionId       String
+  handNumber      Int
+  dealerSeat      Int
+  smallBlindSeat  Int
+  bigBlindSeat    Int
+  smallBlind      Int
+  bigBlind        Int
+  ante            Int          @default(0)
+  street          HandStreet   @default(PREFLOP)
+  boardCards      Json
+  startedAt       DateTime     @default(now())
+  completedAt     DateTime?
+  session         TableSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  actions         HandAction[]
+  results         HandResult[]
+
+  @@unique([sessionId, handNumber])
+}
+
+model HandAction {
+  id             String         @id @default(cuid())
+  handId          String
+  actorId         String?
+  actionType      HandActionType
+  amount          Int            @default(0)
+  orderIndex      Int
+  createdAt       DateTime       @default(now())
+  hand            Hand           @relation(fields: [handId], references: [id], onDelete: Cascade)
+  actor           User?          @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@unique([handId, orderIndex])
+  @@index([actorId])
+}
+
+model HandResult {
+  id             String           @id @default(cuid())
+  handId          String
+  participantId   String
+  netChips        Int
+  finalStack      Int
+  holeCards       Json
+  createdAt       DateTime         @default(now())
+  hand            Hand             @relation(fields: [handId], references: [id], onDelete: Cascade)
+  participant      TableParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@unique([handId, participantId])
+}
+
+model UserRanking {
+  id            String       @id @default(cuid())
+  userId         String
+  clubId         String?
+  scope          RankingScope
+  scopeKey       String
+  totalProfit    BigInt       @default(0)
+  gamesPlayed    Int          @default(0)
+  updatedAt      DateTime     @updatedAt
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  club           Club?        @relation(fields: [clubId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, scopeKey])
+  @@index([scope])
+  @@index([clubId])
+}

@@ -1,0 +1,114 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: poker
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d poker"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  livekit:
+    image: livekit/livekit-server:v1.10.1
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml --node-ip ${LIVEKIT_NODE_IP:-192.168.22.55}
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50100:50000-50100/udp"
+    volumes:
+      - ./infra/media/livekit.yaml:/etc/livekit.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  api:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: sh -lc "pnpm --filter @poker/db prisma db push && pnpm --filter @poker/api start"
+    env_file:
+      - .env.example
+    environment:
+      ROOM_CREATION_ADMIN_ONLY: ${ROOM_CREATION_ADMIN_ONLY:-false}
+      ROOM_CREATION_ADMIN_USERNAME: ${ROOM_CREATION_ADMIN_USERNAME:-}
+      ROOM_CREATION_ADMIN_PASSWORD: ${ROOM_CREATION_ADMIN_PASSWORD:-}
+    ports:
+      - "4100:4100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  game:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: apps/game/Dockerfile
+    env_file:
+      - .env.example
+    environment:
+      ROOM_CREATION_ADMIN_ONLY: ${ROOM_CREATION_ADMIN_ONLY:-false}
+      ROOM_CREATION_ADMIN_USERNAME: ${ROOM_CREATION_ADMIN_USERNAME:-}
+      ROOM_CREATION_ADMIN_PASSWORD: ${ROOM_CREATION_ADMIN_PASSWORD:-}
+    ports:
+      - "4200:4200"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    env_file:
+      - .env.example
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    env_file:
+      - .env.example
+    environment:
+      GAME_INTERNAL_BASE_URL: http://game:4200
+      ROOM_CREATION_ADMIN_ONLY: ${ROOM_CREATION_ADMIN_ONLY:-false}
+      ROOM_CREATION_ADMIN_USERNAME: ${ROOM_CREATION_ADMIN_USERNAME:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_started
+      game:
+        condition: service_started
+      livekit:
+        condition: service_started
+
+volumes:
+  postgres-data:

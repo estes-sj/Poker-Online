@@ -1,0 +1,17 @@
+node_modules
+.pnpm-store
+.tools
+.git
+.next
+**/.next
+**/dist
+!infra/docker/pnpm/**/dist
+!infra/docker/pnpm/**/dist/**
+coverage
+.vscode
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+postgres-data

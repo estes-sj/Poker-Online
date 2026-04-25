@@ -1,0 +1,22 @@
+{
+  "name": "@poker/root",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.12.3",
+  "scripts": {
+    "dev:web": "pnpm --filter @poker/web dev",
+    "dev:api": "pnpm --filter @poker/api dev",
+    "dev:game": "pnpm --filter @poker/game dev",
+    "dev:worker": "pnpm --filter @poker/worker dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:generate": "pnpm --filter @poker/db prisma generate",
+    "db:push": "pnpm --filter @poker/db prisma db push"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "typescript": "^5.7.2"
+  }
+}

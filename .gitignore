@@ -1,0 +1,12 @@
+node_modules
+.pnpm-store
+.tools
+.next
+coverage
+dist
+build
+.env
+.env.local
+*.log
+prisma/dev.db
+docs/
