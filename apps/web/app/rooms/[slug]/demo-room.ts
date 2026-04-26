@@ -296,7 +296,7 @@ export function buildDemoRoomPreset(slug: string): DemoRoomPreset | null {
                     id: "sample-chat-2",
                     accountId: "sample-seat-4",
                     displayName: "Omar",
-                    content: "Priya had every heart in the deck there.",
+                    content: "Omar had the ace of hearts the whole way.",
                     createdAt: timestamp(nowMs - 70_000),
                 },
                 {
@@ -356,7 +356,7 @@ export function buildDemoRoomPreset(slug: string): DemoRoomPreset | null {
 }
 
 function buildLatestHand(nowMs: number): LastHandResult {
-    const concludedAtMs = nowMs - 26_000;
+    const concludedAtMs = nowMs - 1_200;
 
     return {
         handId: "sample-hand-48",
@@ -397,26 +397,31 @@ function buildLatestHand(nowMs: number): LastHandResult {
             makeAction(23, "sample-seat-3", 2, "call", "preflop", 800, 1200, concludedAtMs - 19_000),
             makeAction(24, "sample-seat-4", 3, "call", "preflop", 800, 1200, concludedAtMs - 17_000),
             makeAction(25, "sample-seat-3", 2, "check", "flop", 0, 1200, concludedAtMs - 14_000),
-            makeAction(26, "sample-seat-4", 3, "bet", "flop", 1800, 1800, concludedAtMs - 12_000),
+            makeAction(26, "sample-seat-4", 3, "all_in", "flop", 1800, 1800, concludedAtMs - 12_000),
             makeAction(27, "sample-seat-5", 4, "call", "flop", 1800, 1800, concludedAtMs - 10_000),
             makeAction(28, "sample-seat-8", 7, "fold", "flop", 0, 0, concludedAtMs - 8_000),
             makeAction(29, "sample-seat-10", 9, "fold", "flop", 0, 0, concludedAtMs - 7_000),
-            makeAction(30, "sample-seat-3", 2, "fold", "turn", 0, 0, concludedAtMs - 4_000),
-            makeAction(31, "sample-seat-4", 3, "bet", "river", 2200, 2200, concludedAtMs - 2_500),
-            makeAction(32, "sample-seat-5", 4, "call", "river", 2200, 2200, concludedAtMs - 1_000),
+            makeAction(30, "sample-seat-3", 2, "fold", "flop", 0, 0, concludedAtMs - 4_000),
         ],
         winners: [
             {
-                accountId: "sample-seat-5",
-                seatIndex: 4,
+                accountId: "sample-seat-4",
+                seatIndex: 3,
                 amountWon: 7800,
                 netChips: 3200,
-                finalStack: 21100,
+                finalStack: 16750,
                 handLabel: "Ace-high flush",
             },
         ],
-        revealedHoleCards: Object.fromEntries(DEMO_SEAT_PROFILES.map((profile) => [profile.accountId, profile.cards])),
-        allInRunout: null,
+        revealedHoleCards: {
+            "sample-seat-4": [card("A", "hearts"), card("9", "hearts")],
+            "sample-seat-5": [card("K", "hearts"), card("8", "hearts")],
+        },
+        allInRunout: {
+            startBoardCount: 3,
+            revealIntervalMs: 2000,
+            revealedAccountIds: ["sample-seat-4", "sample-seat-5"],
+        },
     };
 }
 

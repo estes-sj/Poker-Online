@@ -28,7 +28,7 @@ const CATEGORY_LABELS = [
     "Straight flush",
 ] as const;
 
-interface EvaluatedHand {
+export interface EvaluatedHand {
     category: number;
     tiebreakers: number[];
     label: string;
@@ -48,7 +48,7 @@ export function getCurrentHeroHandLabel(holeCards: [Card, Card] | null, board: C
     return holeCards[0].rank === holeCards[1].rank ? "Pair" : "High card";
 }
 
-function evaluateHoldemHand(cards: Card[]): EvaluatedHand {
+export function evaluateHoldemHand(cards: Card[]): EvaluatedHand {
     if (cards.length < 5 || cards.length > 7) {
         throw new Error("Hold'em hand evaluation expects 5 to 7 cards.");
     }
@@ -66,7 +66,7 @@ function evaluateHoldemHand(cards: Card[]): EvaluatedHand {
     return best!;
 }
 
-function compareEvaluatedHands(left: EvaluatedHand, right: EvaluatedHand): number {
+export function compareEvaluatedHands(left: EvaluatedHand, right: EvaluatedHand): number {
     if (left.category !== right.category) {
         return left.category - right.category;
     }

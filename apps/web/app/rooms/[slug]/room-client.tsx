@@ -7,7 +7,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { HOUSE_RULES_CONFIG } from "../../lib/house-rules-config";
 import { buildBrowserHttpUrl, buildBrowserWsUrl, getBrowserGameHttpBaseUrl, getBrowserGameWsBaseUrl } from "../../lib/public-service-urls";
-import { getCurrentHeroHandLabel } from "./hand-evaluator";
+import { compareEvaluatedHands, evaluateHoldemHand, getCurrentHeroHandLabel } from "./hand-evaluator";
 import type { MediaParticipantState } from "./media-types";
 import { MediaAudioRack, ParticipantCameraSurface, useTableMedia } from "./table-media";
 import type { Card, HandActionRecord, HeroActionState, LastHandResult, RevealMode, RoomPlayer, RoomSnapshot, SessionState } from "./room-types";
@@ -50,6 +50,11 @@ const ENGINE_HAND_RANKS = [
     "One pair",
     "High card",
 ] as const;
+const RUNOUT_EQUITY_TRANSITION_MS = 360;
+const RUNOUT_EQUITY_EXACT_COMBINATION_LIMIT = 20_000;
+const RUNOUT_EQUITY_SAMPLE_COUNT = 5_000;
+const RUNOUT_EQUITY_DECK_RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"] as const;
+const RUNOUT_EQUITY_DECK_SUITS: Card["suit"][] = ["clubs", "diamonds", "hearts", "spades"];
 
 const TABLE_LAYOUTS: Record<number, ReadonlyArray<{ left: number; top: number }>> = {
     2: [
@@ -158,6 +163,22 @@ interface RoomClientProps {
 }
 
 type ConnectionState = "connecting" | "live" | "disconnected" | "reconnecting" | "demo";
+type EquityTrend = "steady" | "up" | "down";
+
+interface AllInRunoutView {
+    isActive: boolean;
+    visibleBoard: Card[];
+    revealedAccountIds: string[];
+}
+
+interface RunoutEquitySnapshot {
+    percentByAccount: Map<string, number>;
+    leaderAccountIds: Set<string>;
+}
+
+interface RunoutEquityViewState extends RunoutEquitySnapshot {
+    trendByAccount: Map<string, EquityTrend>;
+}
 
 interface TableSeatView {
     seatIndex: number;
@@ -183,6 +204,9 @@ interface TableSeatView {
     pendingRequest: { displayName: string; requestedStack: number } | null;
     handsWonCount: number;
     rebuyCount: number;
+    runoutWinPercent: number | null;
+    runoutEquityTrend: EquityTrend;
+    isRunoutEquityLeader: boolean;
     mediaPlacement: "above" | "below" | "left" | "right";
     shiftCardsLeftMore: boolean;
     shiftCardsRightMore: boolean;
@@ -281,11 +305,14 @@ export function RoomClient({
     const [adminOptionsDraft, setAdminOptionsDraft] = useState<AdminOptionsDraft>(createEmptyAdminOptionsDraft);
     const [selectedLedgerHandId, setSelectedLedgerHandId] = useState<string | null>(null);
     const [turnClockNow, setTurnClockNow] = useState(() => getSnapshotClockMs(initialSnapshot));
+    const [runoutEquityState, setRunoutEquityState] = useState<RunoutEquityViewState>(createEmptyRunoutEquityViewState);
     const reconnectTimerRef = useRef<number | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
     const chatInputRef = useRef<HTMLInputElement | null>(null);
     const autoActionRef = useRef<string | null>(null);
     const adminApprovalSeenRef = useRef<Set<string>>(new Set());
+    const runoutEquitySnapshotRef = useRef<RunoutEquitySnapshot | null>(null);
+    const runoutEquityTrendResetTimerRef = useRef<number | null>(null);
     const isAdmin = Boolean(!demoMode && snapshot && accountId === snapshot.adminAccountId);
 
     useEffect(() => {
@@ -328,6 +355,14 @@ export function RoomClient({
 
         mediaQuery.addListener(syncViewport);
         return () => mediaQuery.removeListener(syncViewport);
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (runoutEquityTrendResetTimerRef.current !== null) {
+                window.clearTimeout(runoutEquityTrendResetTimerRef.current);
+            }
+        };
     }, []);
 
     useEffect(() => {
@@ -622,6 +657,9 @@ export function RoomClient({
         suppressWinnerHighlights: isAllInRunoutAnimating,
         completedHandReveals: runoutRevealedHoleCards,
         pendingRunoutWinners,
+        runoutWinPercentByAccount: runoutEquityState.percentByAccount,
+        runoutEquityLeaderAccountIds: runoutEquityState.leaderAccountIds,
+        runoutEquityTrendByAccount: runoutEquityState.trendByAccount,
     });
     const displayedBoard = currentHand?.board ?? allInRunoutView?.visibleBoard ?? latestCompletedHand?.board ?? [];
     const displayedPot = currentHand?.pot ?? latestCompletedHand?.totalPot ?? 0;
@@ -631,6 +669,61 @@ export function RoomClient({
         ? snapshot.lastCompletedHand.revealedHoleCards[heroPlayer.accountId] ?? [null, null]
         : null;
     const blindScheduleValidation = validateBlindScheduleDraft(adminOptionsDraft);
+    const runoutEquityBoardKey = buildCardListKey(allInRunoutView?.visibleBoard ?? []);
+    const runoutEquityAccountIdsKey = buildAccountListKey(allInRunoutView?.revealedAccountIds ?? latestCompletedHand?.allInRunout?.revealedAccountIds ?? []);
+
+    useEffect(() => {
+        if (runoutEquityTrendResetTimerRef.current !== null) {
+            window.clearTimeout(runoutEquityTrendResetTimerRef.current);
+            runoutEquityTrendResetTimerRef.current = null;
+        }
+
+        const nextSnapshot = buildRunoutEquitySnapshot(latestCompletedHand, allInRunoutView);
+
+        if (!nextSnapshot) {
+            runoutEquitySnapshotRef.current = null;
+            setRunoutEquityState(createEmptyRunoutEquityViewState());
+            return;
+        }
+
+        const previousSnapshot = runoutEquitySnapshotRef.current;
+        const trendByAccount = new Map<string, EquityTrend>();
+        let hasDirectionalChange = false;
+
+        for (const [accountId, percent] of nextSnapshot.percentByAccount) {
+            const previousPercent = previousSnapshot?.percentByAccount.get(accountId);
+            const trend = previousPercent === undefined || previousPercent === percent
+                ? "steady"
+                : percent > previousPercent
+                    ? "up"
+                    : "down";
+
+            if (trend !== "steady") {
+                hasDirectionalChange = true;
+            }
+
+            trendByAccount.set(accountId, trend);
+        }
+
+        runoutEquitySnapshotRef.current = nextSnapshot;
+        setRunoutEquityState({
+            percentByAccount: nextSnapshot.percentByAccount,
+            leaderAccountIds: nextSnapshot.leaderAccountIds,
+            trendByAccount,
+        });
+
+        if (!hasDirectionalChange) {
+            return;
+        }
+
+        runoutEquityTrendResetTimerRef.current = window.setTimeout(() => {
+            setRunoutEquityState((current) => ({
+                ...current,
+                trendByAccount: new Map(Array.from(current.percentByAccount.keys(), (accountId) => [accountId, "steady"] satisfies [string, EquityTrend])),
+            }));
+            runoutEquityTrendResetTimerRef.current = null;
+        }, RUNOUT_EQUITY_TRANSITION_MS);
+    }, [latestCompletedHand?.handId, latestCompletedHand?.concludedAt, runoutEquityBoardKey, runoutEquityAccountIdsKey]);
 
     useEffect(() => {
         if (openMenuPanel === "rebuy" && !canShowRebuyMenu) {
@@ -2054,6 +2147,20 @@ export function RoomClient({
                                     ].filter(Boolean).join(" ")}
                                     style={seat.style}
                                 >
+                                    {seat.runoutWinPercent !== null ? (
+                                        <div
+                                            className={[
+                                                "table-seat__equity",
+                                                seat.runoutEquityTrend === "up" ? "table-seat__equity--up" : "",
+                                                seat.runoutEquityTrend === "down" ? "table-seat__equity--down" : "",
+                                                seat.isRunoutEquityLeader ? "table-seat__equity--leader" : "",
+                                            ].filter(Boolean).join(" ")}
+                                            aria-label={`${seat.name} win chance ${seat.runoutWinPercent}%`}
+                                        >
+                                            <span className="table-seat__equity-label">Win</span>
+                                            <strong className="table-seat__equity-value">{seat.runoutWinPercent}%</strong>
+                                        </div>
+                                    ) : null}
                                     {seatGesture ? <div className={["table-seat__gesture", `table-seat__gesture--${seat.mediaPlacement}`].join(" ")}>{seatGesture.emoji}</div> : null}
                                     {seatReaction ? <div className="table-seat__reaction">{seatReaction.emoji}</div> : null}
                                     {seat.actionBubble ? <div className="table-seat__bubble">{seat.actionBubble}</div> : null}
@@ -2836,6 +2943,9 @@ function buildTableSeats(
         suppressWinnerHighlights?: boolean;
         completedHandReveals?: Record<string, [Card | null, Card | null]> | null;
         pendingRunoutWinners?: ReadonlyMap<string, LastHandResult["winners"][number]>;
+        runoutWinPercentByAccount?: ReadonlyMap<string, number>;
+        runoutEquityLeaderAccountIds?: ReadonlySet<string>;
+        runoutEquityTrendByAccount?: ReadonlyMap<string, EquityTrend>;
     },
 ): TableSeatView[] {
     const totalSeats = clampSeatCount(snapshot?.maxPlayers ?? 6);
@@ -2846,6 +2956,9 @@ function buildTableSeats(
     const completedHandReveals = options?.completedHandReveals ?? snapshot?.lastCompletedHand?.revealedHoleCards ?? null;
     const suppressWinnerHighlights = options?.suppressWinnerHighlights ?? false;
     const pendingRunoutWinners = options?.pendingRunoutWinners ?? new Map<string, LastHandResult["winners"][number]>();
+    const runoutWinPercentByAccount = options?.runoutWinPercentByAccount ?? new Map<string, number>();
+    const runoutEquityLeaderAccountIds = options?.runoutEquityLeaderAccountIds ?? new Set<string>();
+    const runoutEquityTrendByAccount = options?.runoutEquityTrendByAccount ?? new Map<string, EquityTrend>();
 
     const seats = seatOrder.map((seatIndex, displayIndex) => {
         const player = snapshot?.players.find((entry) => entry.seatIndex === seatIndex) ?? null;
@@ -2936,6 +3049,9 @@ function buildTableSeats(
             } : null,
             handsWonCount: player ? getDisplayedHandsWonCount(player.accountId, totalHandsWon, pendingRunoutWinners) : 0,
             rebuyCount: player ? snapshot?.playerStats.rebuyCountByAccount[player.accountId] ?? 0 : 0,
+            runoutWinPercent: player ? runoutWinPercentByAccount.get(player.accountId) ?? null : null,
+            runoutEquityTrend: player ? runoutEquityTrendByAccount.get(player.accountId) ?? "steady" : "steady",
+            isRunoutEquityLeader: Boolean(player && runoutEquityLeaderAccountIds.has(player.accountId)),
             mediaPlacement: getSeatMediaPlacement(position),
             shiftCardsLeftMore: false,
             shiftCardsRightMore: false,
@@ -3059,7 +3175,7 @@ function buildSeatCardSlots(seat: TableSeatView): CardSlot[] {
     }));
 }
 
-function buildAllInRunoutView(lastCompletedHand: LastHandResult | null, nowMs: number): { isActive: boolean; visibleBoard: Card[]; revealedAccountIds: string[] } | null {
+function buildAllInRunoutView(lastCompletedHand: LastHandResult | null, nowMs: number): AllInRunoutView | null {
     const allInRunout = lastCompletedHand?.allInRunout;
 
     if (!lastCompletedHand || !allInRunout || allInRunout.startBoardCount >= lastCompletedHand.board.length) {
@@ -3107,6 +3223,275 @@ function filterRevealedHoleCards(
     return Object.fromEntries(
         Object.entries(revealedHoleCards).filter(([accountId]) => visibleAccountIds.has(accountId))
     );
+}
+
+function createEmptyRunoutEquityViewState(): RunoutEquityViewState {
+    return {
+        percentByAccount: new Map(),
+        leaderAccountIds: new Set(),
+        trendByAccount: new Map(),
+    };
+}
+
+function buildRunoutEquitySnapshot(
+    lastCompletedHand: LastHandResult | null,
+    allInRunoutView: AllInRunoutView | null,
+): RunoutEquitySnapshot | null {
+    if (!lastCompletedHand?.allInRunout || !allInRunoutView) {
+        return null;
+    }
+
+    const participants = allInRunoutView.revealedAccountIds
+        .map((accountId) => {
+            const holeCards = lastCompletedHand.revealedHoleCards[accountId];
+
+            return hasCompleteHoleCards(holeCards)
+                ? { accountId, holeCards }
+                : null;
+        })
+        .filter((entry): entry is { accountId: string; holeCards: [Card, Card] } => entry !== null);
+
+    if (participants.length < 2) {
+        return null;
+    }
+
+    const cardsToDraw = 5 - allInRunoutView.visibleBoard.length;
+
+    if (cardsToDraw < 0) {
+        return null;
+    }
+
+    const knownCardKeys = new Set<string>();
+
+    for (const card of allInRunoutView.visibleBoard) {
+        const cardKey = buildCardIdentity(card);
+
+        if (knownCardKeys.has(cardKey)) {
+            return null;
+        }
+
+        knownCardKeys.add(cardKey);
+    }
+
+    for (const participant of participants) {
+        for (const card of participant.holeCards) {
+            const cardKey = buildCardIdentity(card);
+
+            if (knownCardKeys.has(cardKey)) {
+                return null;
+            }
+
+            knownCardKeys.add(cardKey);
+        }
+    }
+
+    const remainingDeck = buildRunoutEquityDeck(knownCardKeys);
+    const boardCompletions = buildRunoutBoardCompletions(
+        remainingDeck,
+        cardsToDraw,
+        [
+            lastCompletedHand.handId,
+            buildCardListKey(allInRunoutView.visibleBoard),
+            buildAccountListKey(participants.map((participant) => participant.accountId)),
+        ].join(":"),
+    );
+
+    if (!boardCompletions.length) {
+        return null;
+    }
+
+    const totalShares = new Map(participants.map((participant) => [participant.accountId, 0]));
+
+    for (const completion of boardCompletions) {
+        const fullBoard = [...allInRunoutView.visibleBoard, ...completion];
+        let bestHand = evaluateHoldemHand([...participants[0]!.holeCards, ...fullBoard]);
+        let winningAccountIds = [participants[0]!.accountId];
+
+        for (let index = 1; index < participants.length; index += 1) {
+            const participant = participants[index]!;
+            const evaluatedHand = evaluateHoldemHand([...participant.holeCards, ...fullBoard]);
+            const comparison = compareEvaluatedHands(evaluatedHand, bestHand);
+
+            if (comparison > 0) {
+                bestHand = evaluatedHand;
+                winningAccountIds = [participant.accountId];
+                continue;
+            }
+
+            if (comparison === 0) {
+                winningAccountIds.push(participant.accountId);
+            }
+        }
+
+        const share = 1 / winningAccountIds.length;
+
+        for (const accountId of winningAccountIds) {
+            totalShares.set(accountId, (totalShares.get(accountId) ?? 0) + share);
+        }
+    }
+
+    const percentByAccount = new Map(
+        participants.map((participant) => [
+            participant.accountId,
+            Math.round(((totalShares.get(participant.accountId) ?? 0) / boardCompletions.length) * 100),
+        ]),
+    );
+    const highestPercent = Math.max(...Array.from(percentByAccount.values()));
+
+    return {
+        percentByAccount,
+        leaderAccountIds: new Set(
+            Array.from(percentByAccount.entries())
+                .filter(([, percent]) => percent === highestPercent)
+                .map(([accountId]) => accountId),
+        ),
+    };
+}
+
+function hasCompleteHoleCards(cards: [Card | null, Card | null] | undefined): cards is [Card, Card] {
+    return Boolean(cards?.[0] && cards?.[1]);
+}
+
+function buildRunoutBoardCompletions(cards: Card[], count: number, seed: string): Card[][] {
+    if (count === 0) {
+        return [[]];
+    }
+
+    const combinationCount = calculateCombinationCount(cards.length, count);
+
+    if (combinationCount <= RUNOUT_EQUITY_EXACT_COMBINATION_LIMIT) {
+        return enumerateCardCombinations(cards, count);
+    }
+
+    return sampleCardCombinations(cards, count, Math.min(RUNOUT_EQUITY_SAMPLE_COUNT, combinationCount), seed);
+}
+
+function enumerateCardCombinations(cards: Card[], count: number): Card[][] {
+    if (count <= 0) {
+        return [[]];
+    }
+
+    if (count > cards.length) {
+        return [];
+    }
+
+    const combinations: Card[][] = [];
+
+    function visit(startIndex: number, current: Card[]) {
+        if (current.length === count) {
+            combinations.push([...current]);
+            return;
+        }
+
+        for (let index = startIndex; index <= cards.length - (count - current.length); index += 1) {
+            current.push(cards[index]!);
+            visit(index + 1, current);
+            current.pop();
+        }
+    }
+
+    visit(0, []);
+    return combinations;
+}
+
+function sampleCardCombinations(cards: Card[], count: number, sampleCount: number, seed: string): Card[][] {
+    const random = createSeededRandom(seed);
+    const combinations: Card[][] = [];
+    const seen = new Set<string>();
+    const maxAttempts = sampleCount * 6;
+    let attempts = 0;
+
+    while (combinations.length < sampleCount && attempts < maxAttempts) {
+        attempts += 1;
+        const remainingCards = [...cards];
+        const combination: Card[] = [];
+
+        for (let drawIndex = 0; drawIndex < count; drawIndex += 1) {
+            const nextIndex = Math.floor(random() * remainingCards.length);
+            const [nextCard] = remainingCards.splice(nextIndex, 1);
+
+            if (!nextCard) {
+                return combinations;
+            }
+
+            combination.push(nextCard);
+        }
+
+        const combinationKey = combination.map((card) => buildCardIdentity(card)).sort().join("|");
+
+        if (seen.has(combinationKey)) {
+            continue;
+        }
+
+        seen.add(combinationKey);
+        combinations.push(combination);
+    }
+
+    return combinations;
+}
+
+function calculateCombinationCount(totalCards: number, picks: number): number {
+    if (picks < 0 || picks > totalCards) {
+        return 0;
+    }
+
+    const reducedPicks = Math.min(picks, totalCards - picks);
+    let result = 1;
+
+    for (let step = 1; step <= reducedPicks; step += 1) {
+        result = (result * (totalCards - reducedPicks + step)) / step;
+    }
+
+    return Math.round(result);
+}
+
+function buildRunoutEquityDeck(knownCardKeys: Set<string>): Card[] {
+    const deck: Card[] = [];
+
+    for (const rank of RUNOUT_EQUITY_DECK_RANKS) {
+        for (const suit of RUNOUT_EQUITY_DECK_SUITS) {
+            const card = { rank, suit } satisfies Card;
+
+            if (!knownCardKeys.has(buildCardIdentity(card))) {
+                deck.push(card);
+            }
+        }
+    }
+
+    return deck;
+}
+
+function buildCardListKey(cards: Card[]): string {
+    return cards.map((card) => buildCardIdentity(card)).join("|");
+}
+
+function buildAccountListKey(accountIds: string[]): string {
+    return [...accountIds].sort().join("|");
+}
+
+function buildCardIdentity(card: Card): string {
+    return `${normalizeCardRank(card.rank)}:${card.suit}`;
+}
+
+function normalizeCardRank(rank: string): string {
+    return rank === "10" ? "T" : rank.toUpperCase();
+}
+
+function createSeededRandom(seed: string): () => number {
+    let state = 1779033703 ^ seed.length;
+
+    for (let index = 0; index < seed.length; index += 1) {
+        state = Math.imul(state ^ seed.charCodeAt(index), 3432918353);
+        state = (state << 13) | (state >>> 19);
+    }
+
+    return () => {
+        state += 0x6d2b79f5;
+        let next = state;
+        next = Math.imul(next ^ (next >>> 15), next | 1);
+        next ^= next + Math.imul(next ^ (next >>> 7), next | 61);
+        return ((next ^ (next >>> 14)) >>> 0) / 4294967296;
+    };
 }
 
 function toggleRevealMode(currentMode: RevealMode, cardIndex: 0 | 1): RevealMode {
