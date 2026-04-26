@@ -331,6 +331,10 @@ export function buildDemoRoomPreset(slug: string): DemoRoomPreset | null {
                 maxRebuyAmount: 15000,
                 buyInTotalByAccount: Object.fromEntries(DEMO_SEAT_PROFILES.map((profile) => [profile.accountId, profile.buyInTotal])),
             },
+            ledgerState: {
+                displayNameByAccount: Object.fromEntries(DEMO_SEAT_PROFILES.map((profile) => [profile.accountId, profile.displayName])),
+                buyOutByAccount: {},
+            },
             playerStats: {
                 handsWonByAccount: Object.fromEntries(DEMO_SEAT_PROFILES.map((profile) => [profile.accountId, profile.handsWon])),
                 rebuyCountByAccount: Object.fromEntries(DEMO_SEAT_PROFILES.map((profile) => [profile.accountId, profile.rebuys])),

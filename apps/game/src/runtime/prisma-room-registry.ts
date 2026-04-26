@@ -43,6 +43,7 @@ import type {
   RoomChatMessage,
   RoomChatRequest,
   RoomGestureRequest,
+  RoomLedgerState,
   RoomPendingRebuyRequest,
   RoomPendingSeatRequest,
   RoomPlayerStatsState,
@@ -75,8 +76,8 @@ const DEFAULT_BLIND_SCHEDULE: BlindLevel[] = [
   { level: 3, smallBlind: 400, bigBlind: 800, durationMinutes: 20 },
 ];
 
-const DEFAULT_TURN_SECONDS = 18;
-const DEFAULT_TIMEBANK_SECONDS = 60;
+const DEFAULT_TURN_SECONDS = 20;
+const DEFAULT_TIMEBANK_SECONDS = 15;
 const MAX_CHAT_MESSAGES = 40;
 const MAX_SEAT_REACTIONS = 12;
 const MAX_SEAT_GESTURES = 12;
@@ -120,6 +121,7 @@ interface PersistedRoomRuntimeState {
   seatReactions: RoomSeatReaction[];
   seatGestures: RoomSeatGesture[];
   buyInState: RoomBuyInState;
+  ledgerState: RoomLedgerState;
   playerStats: RoomPlayerStatsState;
   turnState: RoomTurnState;
   adminOptions: RoomAdminOptionsState;
@@ -545,8 +547,11 @@ export class PrismaRoomRegistry implements RoomRegistry {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
+    const departingPlayer = runtimeState.table.players.find((player) => player.accountId === input.accountId) ?? null;
     const table = leaveSeat(runtimeState.table, input.accountId);
-    const nextRuntimeState = syncRuntimeState(runtimeState, table);
+    const nextRuntimeState = departingPlayer
+      ? applyLedgerCashOuts(syncRuntimeState(runtimeState, table), [departingPlayer])
+      : syncRuntimeState(runtimeState, table);
 
     await this.database.$transaction(async (transaction) => {
       await transaction.tableParticipant.updateMany({
@@ -1043,9 +1048,12 @@ export class PrismaRoomRegistry implements RoomRegistry {
       throw new Error("Finish the current hand before removing that player.");
     }
 
+    const departingPlayer = runtimeState.table.players.find((player) => player.accountId === input.targetAccountId) ?? null;
     const table = leaveSeat(runtimeState.table, input.targetAccountId);
     const nextRuntimeState: PersistedRoomRuntimeState = {
-      ...syncRuntimeState(runtimeState, table),
+      ...(departingPlayer
+        ? applyLedgerCashOuts(syncRuntimeState(runtimeState, table), [departingPlayer])
+        : syncRuntimeState(runtimeState, table)),
       pendingSeatRequests: runtimeState.pendingSeatRequests.filter((request) => request.accountId !== input.targetAccountId),
       pendingRebuyRequests: runtimeState.pendingRebuyRequests.filter((request) => request.accountId !== input.targetAccountId),
     };
@@ -1386,15 +1394,18 @@ export class PrismaRoomRegistry implements RoomRegistry {
     }
 
     let table = runtimeState.table;
+    const departingPlayers = activeBustedAccountIds
+      .map((accountId) => runtimeState.table.players.find((player) => player.accountId === accountId) ?? null)
+      .filter((player): player is TableState["players"][number] => player !== null);
 
     for (const accountId of activeBustedAccountIds) {
       table = leaveSeat(table, accountId, now);
     }
 
-    const nextRuntimeState = syncRuntimeState({
+    const nextRuntimeState = applyLedgerCashOuts(syncRuntimeState({
       ...runtimeState,
       pendingRebuyRequests: runtimeState.pendingRebuyRequests.filter((request) => !activeBustedAccountIds.includes(request.accountId)),
-    }, table, { now });
+    }, table, { now }), departingPlayers);
 
     await this.database.$transaction(async (transaction) => {
       await transaction.tableParticipant.updateMany({
@@ -1629,6 +1640,7 @@ function createRuntimeState(table: TableState): PersistedRoomRuntimeState {
       maxRebuyAmount: table.startingStack * 5,
       buyInTotalByAccount: ensureBuyInEntries({}, table.players, table.startingStack),
     },
+    ledgerState: ensureLedgerState(undefined, table.players),
     playerStats: {
       handsWonByAccount: ensureCounterEntries({}, table.players),
       rebuyCountByAccount: ensureCounterEntries({}, table.players),
@@ -1681,6 +1693,7 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
       maxRebuyAmount: runtimeState.buyInState?.maxRebuyAmount ?? runtimeState.table.startingStack * 5,
       buyInTotalByAccount: ensureBuyInEntries(runtimeState.buyInState?.buyInTotalByAccount ?? {}, runtimeState.table.players, runtimeState.table.startingStack),
     },
+    ledgerState: ensureLedgerState(runtimeState.ledgerState, runtimeState.table.players),
     playerStats: {
       handsWonByAccount: ensureCounterEntries(runtimeState.playerStats?.handsWonByAccount ?? {}, runtimeState.table.players),
       rebuyCountByAccount: ensureCounterEntries(runtimeState.playerStats?.rebuyCountByAccount ?? {}, runtimeState.table.players),
@@ -1753,6 +1766,7 @@ function syncRuntimeState(
       maxRebuyAmount: runtimeState.buyInState.maxRebuyAmount,
       buyInTotalByAccount: ensureBuyInEntries(runtimeState.buyInState.buyInTotalByAccount, table.players, table.startingStack, options.ensurePlayerAccountId),
     },
+    ledgerState: ensureLedgerState(runtimeState.ledgerState, table.players),
     playerStats,
     turnState: {
       ...turnState,
@@ -1838,6 +1852,7 @@ function buildFullRoomSnapshot(
       ...runtimeState.buyInState,
       buyInTotalByAccount: ensureBuyInEntries(runtimeState.buyInState.buyInTotalByAccount, table.players, table.startingStack),
     },
+    ledgerState: ensureLedgerState(runtimeState.ledgerState, table.players),
     playerStats: {
       handsWonByAccount: ensureCounterEntries(runtimeState.playerStats.handsWonByAccount, table.players),
       rebuyCountByAccount: ensureCounterEntries(runtimeState.playerStats.rebuyCountByAccount, table.players),
@@ -1900,6 +1915,10 @@ function buildLockedRoomSnapshot(runtimeState: PersistedRoomRuntimeState): RoomS
       minRebuyAmount: Math.max(100, Math.floor(table.startingStack / 20)),
       maxRebuyAmount: table.startingStack * 5,
       buyInTotalByAccount: {},
+    },
+    ledgerState: {
+      displayNameByAccount: {},
+      buyOutByAccount: {},
     },
     playerStats: {
       handsWonByAccount: {},
@@ -2591,6 +2610,50 @@ function ensureBuyInEntries(
   }
 
   return nextEntries;
+}
+
+function ensureLedgerState(
+  current: RoomLedgerState | null | undefined,
+  players: TableState["players"]
+): RoomLedgerState {
+  const displayNameByAccount = Object.fromEntries(
+    Object.entries(current?.displayNameByAccount ?? {}).filter(([, displayName]) => typeof displayName === "string" && displayName.trim().length > 0)
+  );
+  const buyOutByAccount = Object.fromEntries(
+    Object.entries(current?.buyOutByAccount ?? {})
+      .filter(([, amount]) => typeof amount === "number" && Number.isFinite(amount) && amount >= 0)
+      .map(([accountId, amount]) => [accountId, Math.floor(amount)])
+  );
+
+  for (const player of players) {
+    displayNameByAccount[player.accountId] = player.displayName;
+  }
+
+  return {
+    displayNameByAccount,
+    buyOutByAccount,
+  };
+}
+
+function applyLedgerCashOuts(
+  runtimeState: PersistedRoomRuntimeState,
+  departingPlayers: Array<TableState["players"][number]>
+): PersistedRoomRuntimeState {
+  if (departingPlayers.length === 0) {
+    return runtimeState;
+  }
+
+  const ledgerState = ensureLedgerState(runtimeState.ledgerState, runtimeState.table.players);
+
+  for (const player of departingPlayers) {
+    ledgerState.displayNameByAccount[player.accountId] = player.displayName;
+    ledgerState.buyOutByAccount[player.accountId] = (ledgerState.buyOutByAccount[player.accountId] ?? 0) + Math.max(0, player.stack);
+  }
+
+  return {
+    ...runtimeState,
+    ledgerState,
+  };
 }
 
 function ensureCounterEntries(

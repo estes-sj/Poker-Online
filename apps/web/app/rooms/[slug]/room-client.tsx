@@ -3736,13 +3736,15 @@ function buildSessionLedgerRows(snapshot: RoomSnapshot | null): SessionLedgerRow
     const accountIds = new Set<string>();
     snapshot.players.forEach((player) => accountIds.add(player.accountId));
     Object.keys(snapshot.buyInState.buyInTotalByAccount).forEach((accountId) => accountIds.add(accountId));
+    Object.keys(snapshot.ledgerState.buyOutByAccount).forEach((accountId) => accountIds.add(accountId));
+    Object.keys(snapshot.ledgerState.displayNameByAccount).forEach((accountId) => accountIds.add(accountId));
     Object.keys(snapshot.playerStats.handsWonByAccount).forEach((accountId) => accountIds.add(accountId));
     Object.keys(snapshot.playerStats.rebuyCountByAccount).forEach((accountId) => accountIds.add(accountId));
 
     return Array.from(accountIds).map((accountId) => {
         const player = snapshot.players.find((entry) => entry.accountId === accountId) ?? null;
         const buyIn = snapshot.buyInState.buyInTotalByAccount[accountId] ?? (player ? snapshot.startingStack : 0);
-        const buyOut = 0;
+        const buyOut = snapshot.ledgerState.buyOutByAccount[accountId] ?? 0;
         const stack = player?.stack ?? 0;
         const wins = snapshot.playerStats.handsWonByAccount[accountId] ?? 0;
         const rebuys = snapshot.playerStats.rebuyCountByAccount[accountId] ?? 0;
@@ -3750,7 +3752,7 @@ function buildSessionLedgerRows(snapshot: RoomSnapshot | null): SessionLedgerRow
 
         return {
             accountId,
-            displayName: player?.displayName ?? accountId,
+            displayName: player?.displayName ?? snapshot.ledgerState.displayNameByAccount[accountId] ?? accountId,
             buyIn,
             buyOut,
             stack,
@@ -3758,7 +3760,7 @@ function buildSessionLedgerRows(snapshot: RoomSnapshot | null): SessionLedgerRow
             rebuys,
             net,
         } satisfies SessionLedgerRow;
-    }).filter((row) => row.buyIn > 0 || row.stack > 0 || row.wins > 0 || row.rebuys > 0)
+    }).filter((row) => row.buyIn > 0 || row.buyOut > 0 || row.stack > 0 || row.wins > 0 || row.rebuys > 0)
         .sort((left, right) => right.net - left.net || right.wins - left.wins || right.stack - left.stack || left.displayName.localeCompare(right.displayName));
 }
 

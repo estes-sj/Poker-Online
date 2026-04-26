@@ -223,6 +223,7 @@ export interface RoomSnapshot {
   seatReactions: RoomSeatReaction[];
   seatGestures: RoomSeatGesture[];
   buyInState: RoomBuyInState;
+  ledgerState: RoomLedgerState;
   playerStats: RoomPlayerStatsState;
   turnState: RoomTurnState;
   pendingSeatRequests: RoomPendingSeatRequest[];
@@ -310,6 +311,11 @@ export interface RoomBuyInState {
   minRebuyAmount: number;
   maxRebuyAmount: number;
   buyInTotalByAccount: Record<string, number>;
+}
+
+export interface RoomLedgerState {
+  displayNameByAccount: Record<string, string>;
+  buyOutByAccount: Record<string, number>;
 }
 
 export interface RoomPlayerStatsState {
