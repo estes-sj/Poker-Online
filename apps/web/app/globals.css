@@ -1115,6 +1115,14 @@ button {
   border-radius: 999px;
 }
 
+.table-center__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+}
+
 .table-seat {
   position: absolute;
   transform: translate(-50%, -50%);
@@ -3041,6 +3049,10 @@ button {
   pointer-events: none;
 }
 
+.table-command-deck__action-wrap--dragging {
+  z-index: 6;
+}
+
 .table-command-deck__action-wrap:hover,
 .table-command-deck__action-wrap:focus-within {
   z-index: 6;
@@ -3194,6 +3206,13 @@ button {
   gap: 4px;
 }
 
+.table-action-panel__topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
 .table-utility-dock__eyebrow,
 .table-action-panel__eyebrow {
   font-size: 0.72rem;
@@ -3222,6 +3241,19 @@ button {
   transform: translateY(0px);
 }
 
+.table-action-panel--inline {
+  will-change: transform;
+}
+
+.table-action-panel--dragging {
+  opacity: 1;
+  background: rgba(10, 13, 17, 0.88);
+  border-color: rgba(245, 240, 223, 0.08);
+  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.26);
+  backdrop-filter: blur(18px);
+  transition: none;
+}
+
 .table-action-panel--dialog {
   width: 100%;
   opacity: 1;
@@ -3234,6 +3266,32 @@ button {
 .table-mobile-actions__toggle {
   display: none;
   pointer-events: auto;
+}
+
+.table-action-panel__drag-handle {
+  pointer-events: auto;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 240, 223, 0.12);
+  background: rgba(245, 240, 223, 0.08);
+  color: rgba(245, 240, 223, 0.9);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: grab;
+  touch-action: none;
+}
+
+.table-action-panel__drag-handle:hover,
+.table-action-panel__drag-handle:focus-visible {
+  background: rgba(245, 240, 223, 0.14);
+  border-color: rgba(245, 240, 223, 0.2);
+}
+
+.table-action-panel--dragging .table-action-panel__drag-handle {
+  cursor: grabbing;
 }
 
 .table-dialog__panel--mobile-actions,
@@ -4546,11 +4604,20 @@ button {
   }
 
   .table-chat-panel__composer,
+  .table-center__actions,
   .table-action-panel__raise-row,
   .table-utility-dock__rebuy-row,
   .hero-dock__raise-row,
   .hero-dock__raise-row--utility {
     grid-template-columns: 1fr;
+  }
+
+  .table-center__actions {
+    width: 100%;
+  }
+
+  .table-center__action {
+    width: min(280px, 100%);
   }
 
   .table-command-deck__quick-bets {

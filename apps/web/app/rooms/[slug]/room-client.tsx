@@ -3,18 +3,21 @@
 import emojiData from "@emoji-mart/data";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 
 import { HOUSE_RULES_CONFIG } from "../../lib/house-rules-config";
 import { buildBrowserHttpUrl, buildBrowserWsUrl, getBrowserGameHttpBaseUrl, getBrowserGameWsBaseUrl } from "../../lib/public-service-urls";
 import { compareEvaluatedHands, evaluateHoldemHand, getCurrentHeroHandLabel } from "./hand-evaluator";
 import type { MediaParticipantState } from "./media-types";
+import { useTableSoundEffects } from "./table-sound-effects";
 import { MediaAudioRack, ParticipantCameraSurface, useTableMedia } from "./table-media";
 import type { Card, HandActionRecord, HeroActionState, LastHandResult, RevealMode, RoomPlayer, RoomSnapshot, SessionState } from "./room-types";
 
 const STORAGE_KEY = "river-club-session";
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
 const MOBILE_LAYOUT_RECOMMENDATION_STORAGE_KEY = "river-club-mobile-layout-recommendation-dismissed";
+const ACTION_PAD_VIEWPORT_MARGIN = 16;
+const ACTION_PAD_TOP_MARGIN = 96;
 const QUICK_REACTIONS = ["👏", "🔥", "😂", "😮", "💀"] as const;
 const EmojiPicker = dynamic(() => import("@emoji-mart/react"), { ssr: false });
 const ENGINE_EXPLAINER_SECTIONS = [
@@ -266,6 +269,22 @@ interface AdminOptionsDraft {
     revealAllShowdownHands: boolean;
 }
 
+interface ActionPadOffset {
+    x: number;
+    y: number;
+}
+
+interface ActionPadDragState {
+    pointerId: number;
+    lastClientX: number;
+    lastClientY: number;
+}
+
+const DEFAULT_ACTION_PAD_OFFSET: ActionPadOffset = {
+    x: 0,
+    y: 0,
+};
+
 export function RoomClient({
     slug,
     initialSnapshot,
@@ -306,14 +325,90 @@ export function RoomClient({
     const [selectedLedgerHandId, setSelectedLedgerHandId] = useState<string | null>(null);
     const [turnClockNow, setTurnClockNow] = useState(() => getSnapshotClockMs(initialSnapshot));
     const [runoutEquityState, setRunoutEquityState] = useState<RunoutEquityViewState>(createEmptyRunoutEquityViewState);
+    const [actionPadOffset, setActionPadOffset] = useState<ActionPadOffset>(DEFAULT_ACTION_PAD_OFFSET);
+    const [isActionPadDragging, setIsActionPadDragging] = useState(false);
     const reconnectTimerRef = useRef<number | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
     const chatInputRef = useRef<HTMLInputElement | null>(null);
+    const actionPadRef = useRef<HTMLElement | null>(null);
+    const actionPadDragStateRef = useRef<ActionPadDragState | null>(null);
     const autoActionRef = useRef<string | null>(null);
     const adminApprovalSeenRef = useRef<Set<string>>(new Set());
     const runoutEquitySnapshotRef = useRef<RunoutEquitySnapshot | null>(null);
     const runoutEquityTrendResetTimerRef = useRef<number | null>(null);
     const isAdmin = Boolean(!demoMode && snapshot && accountId === snapshot.adminAccountId);
+
+    function stopActionPadDrag(pointerId?: number) {
+        const dragState = actionPadDragStateRef.current;
+
+        if (!dragState || typeof window === "undefined") {
+            return;
+        }
+
+        if (pointerId !== undefined && dragState.pointerId !== pointerId) {
+            return;
+        }
+
+        window.removeEventListener("pointermove", handleActionPadPointerMove);
+        window.removeEventListener("pointerup", handleActionPadPointerEnd);
+        window.removeEventListener("pointercancel", handleActionPadPointerEnd);
+        actionPadDragStateRef.current = null;
+        setIsActionPadDragging(false);
+    }
+
+    function handleActionPadPointerMove(event: PointerEvent) {
+        const dragState = actionPadDragStateRef.current;
+        const actionPad = actionPadRef.current;
+
+        if (!dragState || dragState.pointerId !== event.pointerId || !actionPad || typeof window === "undefined") {
+            return;
+        }
+
+        const rect = actionPad.getBoundingClientRect();
+        const deltaX = event.clientX - dragState.lastClientX;
+        const deltaY = event.clientY - dragState.lastClientY;
+        const minLeft = ACTION_PAD_VIEWPORT_MARGIN;
+        const maxLeft = Math.max(minLeft, window.innerWidth - rect.width - ACTION_PAD_VIEWPORT_MARGIN);
+        const minTop = ACTION_PAD_TOP_MARGIN;
+        const maxTop = Math.max(minTop, window.innerHeight - rect.height - ACTION_PAD_VIEWPORT_MARGIN);
+        const nextLeft = Math.min(Math.max(rect.left + deltaX, minLeft), maxLeft);
+        const nextTop = Math.min(Math.max(rect.top + deltaY, minTop), maxTop);
+        const appliedDeltaX = nextLeft - rect.left;
+        const appliedDeltaY = nextTop - rect.top;
+
+        if (appliedDeltaX !== 0 || appliedDeltaY !== 0) {
+            setActionPadOffset((current) => ({
+                x: current.x + appliedDeltaX,
+                y: current.y + appliedDeltaY,
+            }));
+        }
+
+        dragState.lastClientX = event.clientX;
+        dragState.lastClientY = event.clientY;
+    }
+
+    function handleActionPadPointerEnd(event: PointerEvent) {
+        stopActionPadDrag(event.pointerId);
+    }
+
+    function handleActionPadPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+        if (isPhoneViewport || typeof window === "undefined") {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        stopActionPadDrag();
+        actionPadDragStateRef.current = {
+            pointerId: event.pointerId,
+            lastClientX: event.clientX,
+            lastClientY: event.clientY,
+        };
+        setIsActionPadDragging(true);
+        window.addEventListener("pointermove", handleActionPadPointerMove);
+        window.addEventListener("pointerup", handleActionPadPointerEnd);
+        window.addEventListener("pointercancel", handleActionPadPointerEnd);
+    }
 
     useEffect(() => {
         const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -359,11 +454,21 @@ export function RoomClient({
 
     useEffect(() => {
         return () => {
+            stopActionPadDrag();
+
             if (runoutEquityTrendResetTimerRef.current !== null) {
                 window.clearTimeout(runoutEquityTrendResetTimerRef.current);
             }
         };
     }, []);
+
+    useEffect(() => {
+        if (!isPhoneViewport) {
+            return;
+        }
+
+        stopActionPadDrag();
+    }, [isPhoneViewport]);
 
     useEffect(() => {
         const heroActionState = snapshot?.currentHand?.heroActionState;
@@ -373,14 +478,37 @@ export function RoomClient({
         }
 
         setRaiseTarget((current) => {
-            if (current) {
-                return current;
+            const nextDefault = getDefaultWagerInputValue(heroActionState);
+
+            if (nextDefault <= 0) {
+                return "";
             }
 
-            const fallback = heroActionState.minRaiseTo ?? heroActionState.maxRaiseTo;
-            return fallback > 0 ? String(fallback) : "";
+            if (!current) {
+                return String(nextDefault);
+            }
+
+            const parsedCurrent = parseWholeNumberInput(current);
+            const nextConfig = getHeroWagerInputConfig(heroActionState);
+
+            if (!nextConfig || parsedCurrent === null) {
+                return String(nextDefault);
+            }
+
+            if (parsedCurrent < nextConfig.minInputAmount || parsedCurrent > nextConfig.maxInputAmount) {
+                return String(nextDefault);
+            }
+
+            return current;
         });
-    }, [snapshot?.currentHand?.handNumber, snapshot?.currentHand?.heroActionState?.minRaiseTo, snapshot?.currentHand?.heroActionState?.maxRaiseTo]);
+    }, [
+        snapshot?.currentHand?.handNumber,
+        snapshot?.currentHand?.heroActionState?.minRaiseTo,
+        snapshot?.currentHand?.heroActionState?.maxRaiseTo,
+        snapshot?.currentHand?.heroActionState?.callAmount,
+        snapshot?.currentHand?.heroActionState?.streetContribution,
+        snapshot?.currentHand?.heroActionState?.allowedActions,
+    ]);
 
     useEffect(() => {
         if (demoMode) {
@@ -609,7 +737,7 @@ export function RoomClient({
     const activeSeatReactions = buildActiveReactionMap(snapshot, turnClockNow);
     const seatGesturesByAccountId = buildSeatGestureMap(snapshot);
     const heroContribution = heroPlayer && currentHand ? currentHand.contributions[heroPlayer.accountId] ?? 0 : 0;
-    const quickBetTargets = currentHand && heroActionState ? buildQuickBetTargets(heroActionState, currentHand.pot) : [];
+    const heroWagerInputConfig = heroActionState ? getHeroWagerInputConfig(heroActionState) : null;
     const rebuyPresets = snapshot ? buildRebuyPresets(snapshot) : [];
     const adminName = snapshot?.players.find((player) => player.accountId === snapshot.adminAccountId)?.displayName ?? snapshot?.adminAccountId ?? "Unknown";
     const canAdminStartHand = Boolean(snapshot && accountId === snapshot.adminAccountId && !currentHand && readyPlayerCount >= 2);
@@ -620,7 +748,7 @@ export function RoomClient({
     const heroPendingRebuyRequest = accountId ? snapshot?.pendingRebuyRequests.find((request) => request.accountId === accountId) ?? null : null;
     const canShowRebuyMenu = Boolean(heroPlayer && (heroPlayer.stack <= 0 || heroPendingRebuyRequest));
     const isSpectating = heroPlayer === null;
-    const showTopReadyButton = Boolean(heroPlayer && !heroPlayer.isReady && !heroPlayer.isSittingOut);
+    const showCenterReadyButton = Boolean(heroPlayer && !heroPlayer.isReady && !heroPlayer.isSittingOut);
     const showCenterStartHand = Boolean(canAdminStartHand && snapshot?.status !== "paused");
     const activeAdminApproval = adminApprovalQueue[0] ?? null;
     const activeAdminSeatRequest = activeAdminApproval?.kind === "seat"
@@ -672,6 +800,20 @@ export function RoomClient({
     const blindScheduleValidation = validateBlindScheduleDraft(adminOptionsDraft);
     const runoutEquityBoardKey = buildCardListKey(allInRunoutView?.visibleBoard ?? []);
     const runoutEquityAccountIdsKey = buildAccountListKey(allInRunoutView?.revealedAccountIds ?? latestCompletedHand?.allInRunout?.revealedAccountIds ?? []);
+
+    useTableSoundEffects({
+        snapshot,
+        accountId,
+        isAdmin,
+        viewerHasRoomAccess,
+        displayedBoardCount: displayedBoard.length,
+        isAllInRunoutActive: isAllInRunoutAnimating,
+        turnActorAccountId: currentHand?.actorAccountId ?? null,
+        turnStartedAt: snapshot?.turnState.currentTurnStartedAt ?? null,
+        turnMainSecondsRemaining: turnMetrics?.mainSecondsRemaining ?? null,
+        isUsingTimeBank: turnMetrics?.isUsingTimeBank ?? false,
+        demoMode,
+    });
 
     useEffect(() => {
         if (runoutEquityTrendResetTimerRef.current !== null) {
@@ -796,31 +938,37 @@ export function RoomClient({
         }
     }
 
-    function renderActionPanel(includeQuickBetTargets: boolean, variant: "inline" | "dialog") {
-        return (
-            <section className={[
-                "table-action-panel",
-                variant === "inline" ? "table-action-panel--inline" : "table-action-panel--dialog",
-            ].join(" ")}>
-                <div className="table-action-panel__header">
-                    <span className="table-action-panel__eyebrow">Action pad</span>
-                    <strong className="table-action-panel__title">{heroPlayer ? heroPlayer.displayName : "Waiting for seat"}</strong>
-                </div>
+    function renderActionPanel(variant: "inline" | "dialog") {
+        const isInline = variant === "inline";
 
-                {includeQuickBetTargets && quickBetTargets.length > 0 ? (
-                    <div className="table-action-panel__presets table-action-panel__presets--phone">
-                        {quickBetTargets.map((target) => (
-                            <button
-                                key={`${target.label}-${target.amount}`}
-                                className="button button--secondary quick-bet-strip__button table-action-panel__preset"
-                                type="button"
-                                onClick={() => setRaiseTarget(String(target.amount))}
-                            >
-                                {target.label} {formatNumber(target.amount)}
-                            </button>
-                        ))}
+        return (
+            <section
+                ref={isInline ? actionPadRef : undefined}
+                className={[
+                    "table-action-panel",
+                    isInline ? "table-action-panel--inline" : "table-action-panel--dialog",
+                    isInline && isActionPadDragging ? "table-action-panel--dragging" : "",
+                ].filter(Boolean).join(" ")}
+                style={isInline ? { transform: `translate(${actionPadOffset.x}px, ${actionPadOffset.y}px)` } : undefined}
+            >
+                <div className="table-action-panel__topbar">
+                    <div className="table-action-panel__header">
+                        <span className="table-action-panel__eyebrow">Action pad</span>
+                        <strong className="table-action-panel__title">{heroPlayer ? heroPlayer.displayName : "Waiting for seat"}</strong>
                     </div>
-                ) : null}
+
+                    {isInline && !isPhoneViewport ? (
+                        <button
+                            className="table-action-panel__drag-handle"
+                            type="button"
+                            onPointerDown={handleActionPadPointerDown}
+                            aria-label="Drag action pad"
+                            aria-grabbed={isActionPadDragging}
+                        >
+                            Move
+                        </button>
+                    ) : null}
+                </div>
 
                 {heroActionState?.canAct ? (
                     <>
@@ -859,9 +1007,9 @@ export function RoomClient({
                                 <input
                                     className="control-input"
                                     type="number"
-                                    min={heroActionState.minRaiseTo ?? undefined}
-                                    max={heroActionState.maxRaiseTo}
-                                    step={100}
+                                    min={heroWagerInputConfig?.minInputAmount}
+                                    max={heroWagerInputConfig?.maxInputAmount}
+                                    step={1}
                                     value={raiseTarget}
                                     onChange={(event) => setRaiseTarget(event.target.value)}
                                 />
@@ -871,7 +1019,7 @@ export function RoomClient({
                                     onClick={() => void handlePlayerAction(heroActionState.allowedActions.includes("raise") ? "raise" : "bet")}
                                     disabled={isMutating}
                                 >
-                                    {heroActionState.allowedActions.includes("raise") ? "Raise to" : "Bet"}
+                                    {heroWagerInputConfig?.buttonLabel ?? (heroActionState.allowedActions.includes("raise") ? "Raise by" : "Bet")}
                                 </button>
                             </div>
                         ) : null}
@@ -1148,8 +1296,17 @@ export function RoomClient({
             actionType,
         };
 
-        if ((actionType === "bet" || actionType === "raise") && raiseTarget.trim()) {
-            payload.amount = Number(raiseTarget);
+        if (actionType === "bet" || actionType === "raise") {
+            try {
+                if (!heroActionState) {
+                    throw new Error("This action is not available right now.");
+                }
+
+                payload.amount = getWagerTargetContribution(actionType, raiseTarget, heroActionState);
+            } catch (error) {
+                setActionError(error instanceof Error ? error.message : "Enter a valid wager before acting.");
+                return;
+            }
         }
 
         await submitRoomMutation(`/v1/rooms/${slug}/action`, payload);
@@ -2075,11 +2232,6 @@ export function RoomClient({
                             {snapshot?.blindState.nextLevel && blindCountdownMs !== null ? <span className="chip-pill chip-pill--timer">Next {formatBlindLevelCompact(snapshot.blindState.nextLevel)} in {formatClockCountdown(blindCountdownMs)}</span> : null}
                             {turnMetrics ? <span className="chip-pill chip-pill--timer">Turn {formatTurnSeconds(turnMetrics.mainSecondsRemaining)}</span> : null}
                             {turnMetrics && currentActor ? <span className="chip-pill">Action {currentActor.displayName}</span> : null}
-                            {showTopReadyButton ? (
-                                <button className="table-status-rack__control table-status-rack__control--primary" type="button" onClick={() => void handleReadyToggle()} disabled={isMutating}>
-                                    Ready
-                                </button>
-                            ) : null}
                             {isAdmin ? (
                                 <>
                                     <button className="table-status-rack__control" type="button" onClick={() => void handlePauseToggle()} disabled={isMutating}>
@@ -2110,10 +2262,28 @@ export function RoomClient({
                                 </div>
                             ) : null}
                             <p className="table-center__status">{centerStatus}</p>
-                            {showCenterStartHand ? (
-                                <button className="button button--primary table-center__action" type="button" onClick={() => void handleStartHand()} disabled={isMutating}>
-                                    Start hand
-                                </button>
+                            {showCenterReadyButton || showCenterStartHand ? (
+                                <div className="table-center__actions">
+                                    {showCenterReadyButton ? (
+                                        <button className="button button--primary table-center__action" type="button" onClick={() => void handleReadyToggle()} disabled={isMutating}>
+                                            Ready
+                                        </button>
+                                    ) : null}
+                                    {showCenterStartHand ? (
+                                        <button
+                                            className={[
+                                                "button",
+                                                showCenterReadyButton ? "button--secondary" : "button--primary",
+                                                "table-center__action",
+                                            ].join(" ")}
+                                            type="button"
+                                            onClick={() => void handleStartHand()}
+                                            disabled={isMutating}
+                                        >
+                                            Start hand
+                                        </button>
+                                    ) : null}
+                                </div>
                             ) : null}
                         </div>
 
@@ -2398,23 +2568,11 @@ export function RoomClient({
                         })}
 
                         <div className="table-command-deck">
-                            {quickBetTargets.length > 0 ? (
-                                <div className="table-command-deck__quick-bets quick-bet-strip quick-bet-strip--utility">
-                                    {quickBetTargets.map((target) => (
-                                        <button
-                                            key={`${target.label}-${target.amount}`}
-                                            className="button button--secondary quick-bet-strip__button"
-                                            type="button"
-                                            onClick={() => setRaiseTarget(String(target.amount))}
-                                        >
-                                            {target.label} {formatNumber(target.amount)}
-                                        </button>
-                                    ))}
-                                </div>
-                            ) : null}
-
-                            <div className="table-command-deck__action-wrap">
-                                {renderActionPanel(false, "inline")}
+                            <div className={[
+                                "table-command-deck__action-wrap",
+                                isActionPadDragging ? "table-command-deck__action-wrap--dragging" : "",
+                            ].filter(Boolean).join(" ")}>
+                                {renderActionPanel("inline")}
                                 <button className="button button--primary table-mobile-actions__toggle" type="button" onClick={() => setIsMobileActionMenuOpen(true)}>
                                     {heroActionState?.canAct ? "Open actions" : "Table actions"}
                                 </button>
@@ -2900,7 +3058,7 @@ export function RoomClient({
                 <div className="table-dialog" role="dialog" aria-modal="true" aria-label="Action menu">
                     <button className="table-dialog__backdrop" type="button" aria-label="Close action menu" onClick={() => setIsMobileActionMenuOpen(false)} />
                     <section className="table-dialog__panel table-dialog__panel--compact table-dialog__panel--mobile-actions">
-                        {renderActionPanel(true, "dialog")}
+                        {renderActionPanel("dialog")}
 
                         <div className="table-dialog__actions">
                             <button className="button button--secondary" type="button" onClick={() => setIsMobileActionMenuOpen(false)}>
@@ -3906,33 +4064,66 @@ function getSeatCardAdjustment(position: { left: number; top: number }): SeatCar
     return SEAT_CARD_ADJUSTMENTS[`${position.left}:${position.top}`] ?? DEFAULT_SEAT_CARD_ADJUSTMENT;
 }
 
-function buildQuickBetTargets(heroActionState: HeroActionState, pot: number): Array<{ label: string; amount: number }> {
-    if (heroActionState.minRaiseTo === null) {
-        return [];
-    }
-
-    const targets = [
-        { label: "Min", amount: heroActionState.minRaiseTo },
-        { label: "1/2 Pot", amount: normalizeRaiseTarget(heroActionState.streetContribution + heroActionState.callAmount + Math.floor(pot / 2), heroActionState) },
-        { label: "Pot", amount: normalizeRaiseTarget(heroActionState.streetContribution + heroActionState.callAmount + pot, heroActionState) },
-        { label: "Max", amount: heroActionState.maxRaiseTo },
-    ];
-
-    const seen = new Set<number>();
-
-    return targets.filter((target) => {
-        if (seen.has(target.amount)) {
-            return false;
+function getHeroWagerInputConfig(heroActionState: HeroActionState): {
+    buttonLabel: string;
+    minInputAmount: number;
+    maxInputAmount: number;
+} | null {
+    if (heroActionState.allowedActions.includes("raise")) {
+        if (heroActionState.minRaiseTo === null) {
+            return null;
         }
 
-        seen.add(target.amount);
-        return true;
-    });
+        const currentBet = heroActionState.streetContribution + heroActionState.callAmount;
+
+        return {
+            buttonLabel: "Raise by",
+            minInputAmount: Math.max(1, heroActionState.minRaiseTo - currentBet),
+            maxInputAmount: Math.max(1, heroActionState.maxRaiseTo - currentBet),
+        };
+    }
+
+    if (heroActionState.allowedActions.includes("bet")) {
+        return {
+            buttonLabel: "Bet",
+            minInputAmount: Math.max(1, heroActionState.minRaiseTo ?? 1),
+            maxInputAmount: Math.max(1, heroActionState.maxRaiseTo),
+        };
+    }
+
+    return null;
 }
 
-function normalizeRaiseTarget(targetAmount: number, heroActionState: HeroActionState): number {
-    const minRaiseTo = heroActionState.minRaiseTo ?? heroActionState.maxRaiseTo;
-    return Math.max(minRaiseTo, Math.min(heroActionState.maxRaiseTo, Math.round(targetAmount)));
+function getDefaultWagerInputValue(heroActionState: HeroActionState): number {
+    return getHeroWagerInputConfig(heroActionState)?.minInputAmount ?? 0;
+}
+
+function getWagerTargetContribution(
+    actionType: Extract<HeroActionState["allowedActions"][number], "bet" | "raise">,
+    inputValue: string,
+    heroActionState: HeroActionState,
+): number {
+    const inputAmount = parseRequiredWholeNumber(inputValue, actionType === "raise" ? "Raise amount" : "Bet amount");
+    const wagerConfig = getHeroWagerInputConfig(heroActionState);
+
+    if (!wagerConfig) {
+        throw new Error("This wager is not available right now.");
+    }
+
+    if (inputAmount < wagerConfig.minInputAmount) {
+        throw new Error(`${wagerConfig.buttonLabel} must be at least ${formatNumber(wagerConfig.minInputAmount)}.`);
+    }
+
+    if (inputAmount > wagerConfig.maxInputAmount) {
+        throw new Error(`${wagerConfig.buttonLabel} cannot exceed ${formatNumber(wagerConfig.maxInputAmount)}.`);
+    }
+
+    if (actionType === "raise") {
+        const currentBet = heroActionState.streetContribution + heroActionState.callAmount;
+        return currentBet + inputAmount;
+    }
+
+    return inputAmount;
 }
 
 function describeMediaBadge(participant: MediaParticipantState): string {
