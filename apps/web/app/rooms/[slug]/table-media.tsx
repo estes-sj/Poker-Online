@@ -17,15 +17,42 @@ interface TableMediaOptions {
     displayName: string;
 }
 
+interface TurnTlsOverride {
+    domain: string;
+    port: number;
+    url: string;
+}
+
 interface MediaTokenResponse {
     token: string;
     wsUrl: string;
     roomName: string;
+    turnTls?: TurnTlsOverride;
     participant: {
         id: string;
         name: string;
     };
 }
+
+interface InternalLiveKitIceServer {
+    urls: string[];
+    username?: string;
+    credential?: string;
+}
+
+interface InternalLiveKitEngine {
+    rtcConfig: RTCConfiguration;
+    latestJoinResponse?: {
+        iceServers?: InternalLiveKitIceServer[];
+    };
+    pcManager?: {
+        updateConfiguration(config: RTCConfiguration, iceRestart?: boolean): void;
+    };
+}
+
+type InternalLiveKitRoom = LiveKitRoom & {
+    engine?: InternalLiveKitEngine;
+};
 
 export interface TableMediaState {
     participants: MediaParticipantState[];
@@ -125,6 +152,9 @@ export function useTableMedia({ slug, session, canConnect, displayName }: TableM
             }
 
             const nextRoom = new liveKitModule.Room();
+            nextRoom.on(liveKitModule.RoomEvent.SignalConnected, () => {
+                applyTurnTlsOverride(nextRoom as InternalLiveKitRoom, tokenPayload.turnTls);
+            });
             const syncParticipants = () => {
                 setParticipants(buildParticipantState(nextRoom));
             };
@@ -449,6 +479,67 @@ function formatMediaError(error: unknown): string {
     }
 
     return message;
+}
+
+function applyTurnTlsOverride(room: InternalLiveKitRoom, turnTls: TurnTlsOverride | undefined): void {
+    if (!turnTls) {
+        return;
+    }
+
+    const engine = room.engine;
+    const advertisedIceServers = engine?.latestJoinResponse?.iceServers;
+
+    if (!engine || !engine.pcManager || !advertisedIceServers || advertisedIceServers.length === 0) {
+        return;
+    }
+
+    let changed = false;
+    const iceServers: RTCIceServer[] = advertisedIceServers.map((iceServer) => {
+        const urls = iceServer.urls.map((url) => {
+            const rewrittenUrl = rewriteTurnTlsUrl(url, turnTls);
+
+            if (rewrittenUrl !== url) {
+                changed = true;
+            }
+
+            return rewrittenUrl;
+        });
+
+        return {
+            urls,
+            username: iceServer.username,
+            credential: iceServer.credential,
+        };
+    });
+
+    if (!changed) {
+        return;
+    }
+
+    // LiveKit 1.10.x advertises embedded TURN/TLS on :443 even when the listener is bound elsewhere.
+    const rtcConfig: RTCConfiguration = {
+        ...engine.rtcConfig,
+        iceServers,
+    };
+
+    engine.rtcConfig = rtcConfig;
+    engine.pcManager.updateConfiguration(rtcConfig, true);
+}
+
+function rewriteTurnTlsUrl(url: string, turnTls: TurnTlsOverride): string {
+    const match = url.match(/^turns:([^:]+):(\d+)(\?.*)?$/i);
+
+    if (!match) {
+        return url;
+    }
+
+    const [, domain, port, query] = match;
+
+    if (domain !== turnTls.domain || port !== "443") {
+        return url;
+    }
+
+    return `turns:${turnTls.domain}:${turnTls.port}${query ?? "?transport=tcp"}`;
 }
 
 function getMediaEnvironmentError(): string | null {

@@ -3,6 +3,12 @@ import { AccessToken } from "livekit-server-sdk";
 
 import type { AuthService } from "../services/auth-service.js";
 
+interface TurnTlsOverride {
+  domain: string;
+  port: number;
+  url: string;
+}
+
 export async function mediaRoutes(app: FastifyInstance, authService: AuthService): Promise<void> {
   app.post("/v1/media/token", async (request, reply) => {
     const sessionToken = getBearerToken(request.headers.authorization);
@@ -21,6 +27,7 @@ export async function mediaRoutes(app: FastifyInstance, authService: AuthService
     const livekitApiKey = process.env.LIVEKIT_API_KEY?.trim();
     const livekitApiSecret = process.env.LIVEKIT_API_SECRET?.trim();
     const livekitWsUrl = resolveLiveKitWsUrl(request.headers.host, request.headers["x-forwarded-host"], request.headers["x-forwarded-proto"], process.env.LIVEKIT_WS_URL?.trim());
+    const turnTls = resolveTurnTlsOverride(process.env.LIVEKIT_TURN_DOMAIN, process.env.LIVEKIT_TURN_TLS_PORT);
 
     if (!livekitApiKey || !livekitApiSecret) {
       return reply.code(500).send({ error: "LiveKit is not configured for token issuance." });
@@ -45,6 +52,7 @@ export async function mediaRoutes(app: FastifyInstance, authService: AuthService
         token: await accessToken.toJwt(),
         wsUrl: livekitWsUrl,
         roomName,
+        turnTls,
         participant: {
           id: account.id,
           name: participantName,
@@ -160,4 +168,33 @@ function normalizeRelativeServiceUrl(value: string): string {
   }
 
   return trimmed.startsWith("/") ? trimmed.replace(/\/+$/, "") : `/${trimmed.replace(/\/+$/, "")}`;
+}
+
+function resolveTurnTlsOverride(domainValue: string | undefined, portValue: string | undefined): TurnTlsOverride | undefined {
+  const domain = optionalString(domainValue);
+  const port = parsePort(portValue);
+
+  if (!domain || !port || port === 443) {
+    return undefined;
+  }
+
+  return {
+    domain,
+    port,
+    url: `turns:${domain}:${port}?transport=tcp`,
+  };
+}
+
+function parsePort(value: string | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value.trim(), 10);
+
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    return null;
+  }
+
+  return parsed;
 }

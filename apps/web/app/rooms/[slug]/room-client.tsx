@@ -619,6 +619,7 @@ export function RoomClient({
     const heroPendingSeatRequest = accountId ? snapshot?.pendingSeatRequests.find((request) => request.accountId === accountId) ?? null : null;
     const heroPendingRebuyRequest = accountId ? snapshot?.pendingRebuyRequests.find((request) => request.accountId === accountId) ?? null : null;
     const canShowRebuyMenu = Boolean(heroPlayer && (heroPlayer.stack <= 0 || heroPendingRebuyRequest));
+    const isSpectating = heroPlayer === null;
     const showTopReadyButton = Boolean(heroPlayer && !heroPlayer.isReady && !heroPlayer.isSittingOut);
     const showCenterStartHand = Boolean(canAdminStartHand && snapshot?.status !== "paused");
     const activeAdminApproval = adminApprovalQueue[0] ?? null;
@@ -2125,8 +2126,9 @@ export function RoomClient({
                             const seatCards = buildSeatCardSlots(seat);
                             const seatReaction = seat.player ? activeSeatReactions.get(seat.player.accountId) ?? null : null;
                             const seatGesture = seat.player ? seatGesturesByAccountId.get(seat.player.accountId) ?? null : null;
-                            const showSeatMediaTile = seat.isHero ? true : !isPhoneViewport && Boolean(mediaParticipant);
+                            const showSeatMediaTile = seat.isHero ? true : Boolean(mediaParticipant) && (!isPhoneViewport || isSpectating);
                             const hasVisibleRevealedCard = Boolean(seat.revealedCards?.some((card) => card !== null));
+                            const showHeroNotReadyNotice = Boolean(seat.isHero && heroPlayer && !heroPlayer.isReady && !heroPlayer.isSittingOut);
 
                             return (
                                 <article
@@ -2141,12 +2143,14 @@ export function RoomClient({
                                         seat.isWinner ? "table-seat--winner" : "",
                                         hasVisibleRevealedCard ? "table-seat--revealed" : "",
                                         showSeatMediaTile ? "table-seat--with-media" : "",
+                                        isSpectating && showSeatMediaTile ? "table-seat--spectator-media" : "",
                                         seat.shiftCardsLeftMore ? "table-seat--cards-left-more" : "",
                                         seat.shiftCardsRightMore ? "table-seat--cards-right-more" : "",
                                         `table-seat--media-${seat.mediaPlacement}`,
                                     ].filter(Boolean).join(" ")}
                                     style={seat.style}
                                 >
+                                    {showHeroNotReadyNotice ? <div className="table-seat__notice table-seat__notice--warning">Not ready</div> : null}
                                     {seat.runoutWinPercent !== null ? (
                                         <div
                                             className={[

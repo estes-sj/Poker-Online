@@ -5,8 +5,17 @@ rtc:
   tcp_port: 7881
   port_range_start: 50000
   port_range_end: 50100
-  # For LAN play, advertise the machine's LAN IP explicitly via --node-ip in Compose.
-  use_external_ip: false
+  # In Docker/public deployments, advertise only the host's public-reachable ICE candidates.
+  use_external_ip: true
+  external_ip_only: true
+  allow_tcp_fallback: true
+turn:
+  # Direct ICE is failing for remote and same-public-IP clients, so enable relay fallback.
+  enabled: true
+  udp_port: 3478
+  # Pin TURN relay allocations to a forwarded range instead of random UDP ports.
+  relay_range_start: 51000
+  relay_range_end: 51100
 redis:
   address: redis:6379
 keys:
