@@ -5,9 +5,13 @@ import { prisma } from "../../../../packages/db/src/index.js";
 import { getRoomCreationAdminConfig, isConfiguredRoomCreationAdmin } from "../../../../packages/db/src/room-creation-policy.js";
 import {
   addPlayerChips,
+  applyRunItTwiceDecision,
   BlindLevel,
   Card,
+  expirePendingRunItTwiceDecision,
+  isRunItTwiceVotingComplete,
   LastHandResult,
+  resolvePendingRunItTwiceDecision,
   Street,
   applyPlayerAction,
   createTable,
@@ -60,6 +64,7 @@ import type {
   PlayerSitOutRequest,
   RoomActionRequest,
   RoomRegistry,
+  RoomRunItTwiceDecisionRequest,
   RoomSnapshot,
   RoomTurnState,
   RoomManagementAdmin,
@@ -164,6 +169,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
       autoStartNextHand: input.autoStartNextHand ?? true,
       autoStartDelaySeconds: input.autoStartDelaySeconds ?? 8,
       revealAllShowdownHands: input.revealAllShowdownHands ?? false,
+      runItTwiceEnabled: false,
       passwordProtected: Boolean(input.password?.trim()),
     });
 
@@ -958,6 +964,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
       autoStartNextHand: input.autoStartNextHand,
       autoStartDelaySeconds: input.autoStartDelaySeconds,
       revealAllShowdownHands: input.revealAllShowdownHands,
+      runItTwiceEnabled: input.runItTwiceEnabled,
       nextHandStartsAt: runtimeState.table.currentHand
         ? null
         : input.autoStartNextHand && getActivePlayers(runtimeState.table).length >= 2
@@ -973,6 +980,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
         timeBankSeconds,
         timeBankRefillHands,
         revealAllShowdownHands: input.revealAllShowdownHands,
+        runItTwiceEnabled: input.runItTwiceEnabled,
       },
       turnState: {
         turnSeconds,
@@ -1413,6 +1421,69 @@ export class PrismaRoomRegistry implements RoomRegistry {
     return this.toSnapshot(nextRuntimeState, input.accountId);
   }
 
+  async submitRunItTwiceDecision(input: RoomRunItTwiceDecisionRequest): Promise<RoomSnapshot> {
+    const room = await this.requireRoom(input.slug);
+    const runtimeState = this.requireRuntimeState(room);
+    this.assertViewerHasRoomAccess(runtimeState, input.accountId);
+    const now = new Date();
+    const table = applyRunItTwiceDecision(runtimeState.table, {
+      accountId: input.accountId,
+      willing: input.willing,
+    }, now);
+    const nextRuntimeState = syncRuntimeState(runtimeState, table, { now });
+
+    await this.database.$transaction(async (transaction) => {
+      await transaction.room.update({
+        where: { id: room.id },
+        data: this.roomUpdatePayload(nextRuntimeState),
+      });
+    });
+
+    await this.onRoomUpdated?.(input.slug);
+    return this.toSnapshot(nextRuntimeState, input.accountId);
+  }
+
+  async expirePendingRunItTwiceDecision(slug: string): Promise<RoomSnapshot> {
+    const room = await this.requireRoom(slug);
+    const runtimeState = this.requireRuntimeState(room);
+    const now = new Date();
+    const table = expirePendingRunItTwiceDecision(runtimeState.table, now);
+    const nextRuntimeState = syncRuntimeState(runtimeState, table, { now });
+
+    await this.database.$transaction(async (transaction) => {
+      await transaction.room.update({
+        where: { id: room.id },
+        data: this.roomUpdatePayload(nextRuntimeState),
+      });
+    });
+
+    await this.onRoomUpdated?.(slug);
+    return this.toSnapshot(nextRuntimeState);
+  }
+
+  async resolvePendingRunItTwiceDecision(slug: string): Promise<RoomSnapshot> {
+    const room = await this.requireRoom(slug);
+    const runtimeState = this.requireRuntimeState(room);
+
+    if (!isRunItTwiceVotingComplete(runtimeState.table.currentHand?.runItTwicePrompt ?? null)) {
+      throw new Error("Run it twice voting is not complete.");
+    }
+
+    const now = new Date();
+    const table = resolvePendingRunItTwiceDecision(runtimeState.table, now);
+    const nextRuntimeState = syncRuntimeState(runtimeState, table, { now });
+
+    await this.database.$transaction(async (transaction) => {
+      await transaction.room.update({
+        where: { id: room.id },
+        data: this.roomUpdatePayload(nextRuntimeState),
+      });
+    });
+
+    await this.onRoomUpdated?.(slug);
+    return this.toSnapshot(nextRuntimeState);
+  }
+
   async getRoomSnapshot(slug: string, accountId?: string): Promise<RoomSnapshot> {
     const room = await this.requireRoom(slug);
     const runtimeState = this.requireRuntimeState(room);
@@ -1715,6 +1786,7 @@ function createRuntimeState(table: TableState): PersistedRoomRuntimeState {
       timeBankSeconds: DEFAULT_TIMEBANK_SECONDS,
       timeBankRefillHands: null,
       revealAllShowdownHands: table.revealAllShowdownHands,
+      runItTwiceEnabled: table.runItTwiceEnabled,
     },
     pendingSeatRequests: [],
     pendingRebuyRequests: [],
@@ -1732,11 +1804,13 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
   const timeBankSeconds = normalizeOptionalRuntimeSetting(runtimeState.turnState?.timeBankSeconds, DEFAULT_TIMEBANK_SECONDS);
   const normalizedLastCompletedHand = normalizeCompletedHand(runtimeState.table.lastCompletedHand);
   const revealAllShowdownHands = runtimeState.adminOptions?.revealAllShowdownHands ?? runtimeState.table.revealAllShowdownHands ?? false;
+  const runItTwiceEnabled = runtimeState.adminOptions?.runItTwiceEnabled ?? runtimeState.table.runItTwiceEnabled ?? false;
 
   return {
     table: {
       ...runtimeState.table,
       revealAllShowdownHands,
+      runItTwiceEnabled,
       lastCompletedHand: normalizedLastCompletedHand,
     },
     joinedViewerAccountIds: ensureJoinedViewerAccountIds(runtimeState.joinedViewerAccountIds ?? [], runtimeState.table),
@@ -1761,7 +1835,7 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
       turnSeconds,
       timeBankSeconds,
       currentTurnStartedAt: runtimeState.table.currentHand
-        ? runtimeState.turnState?.currentTurnStartedAt ?? runtimeState.table.currentHand.startedAt
+        ? runtimeState.turnState?.currentTurnStartedAt ?? runtimeState.table.currentHand.runItTwicePrompt?.createdAt ?? runtimeState.table.currentHand.startedAt
         : null,
       timeBankMsByAccount: ensureTimeBankEntries(runtimeState.turnState?.timeBankMsByAccount ?? {}, runtimeState.table.players, timeBankSeconds),
     },
@@ -1770,6 +1844,7 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
       timeBankSeconds,
       timeBankRefillHands: normalizeOptionalRuntimeSetting(runtimeState.adminOptions?.timeBankRefillHands, null),
       revealAllShowdownHands,
+      runItTwiceEnabled,
     },
     pendingSeatRequests: Array.isArray(runtimeState.pendingSeatRequests)
       ? runtimeState.pendingSeatRequests.filter((request) => request && typeof request.id === "string")
@@ -1830,7 +1905,9 @@ function syncRuntimeState(
     turnState: {
       ...turnState,
       currentTurnStartedAt: nextHand
-        ? shouldResetTurnClock
+        ? nextHand.runItTwicePrompt
+          ? turnState.currentTurnStartedAt ?? nextHand.runItTwicePrompt.createdAt
+          : shouldResetTurnClock
           ? now.toISOString()
           : turnState.currentTurnStartedAt ?? nextHand.startedAt
         : null,
@@ -1841,6 +1918,7 @@ function syncRuntimeState(
     adminOptions: {
       ...runtimeState.adminOptions,
       revealAllShowdownHands: table.revealAllShowdownHands,
+      runItTwiceEnabled: table.runItTwiceEnabled,
     },
     pendingSeatRequests: runtimeState.pendingSeatRequests,
     pendingRebuyRequests: runtimeState.pendingRebuyRequests,
@@ -1865,7 +1943,9 @@ function buildFullRoomSnapshot(
         smallBlindSeat: table.currentHand.smallBlindSeat,
         bigBlindSeat: table.currentHand.bigBlindSeat,
         actorSeat: table.currentHand.actorSeat,
-        actorAccountId: table.players.find((player) => player.seatIndex === table.currentHand?.actorSeat)?.accountId ?? null,
+        actorAccountId: table.currentHand.runItTwicePrompt
+          ? null
+          : table.players.find((player) => player.seatIndex === table.currentHand?.actorSeat)?.accountId ?? null,
         street: table.currentHand.street,
         board: table.currentHand.board,
         pot: table.currentHand.pot,
@@ -1878,6 +1958,7 @@ function buildFullRoomSnapshot(
         actions: table.currentHand.actions,
         heroHoleCards: accountId ? table.currentHand.holeCards[accountId] ?? null : null,
         heroActionState: accountId ? getPlayerActionState(table, accountId) : null,
+        runItTwicePrompt: table.currentHand.runItTwicePrompt,
         playerCardCounts: Object.fromEntries(
           Object.keys(table.currentHand.holeCards).map((playerAccountId) => [playerAccountId, 2])
         ),
@@ -1963,6 +2044,7 @@ function buildLockedRoomSnapshot(runtimeState: PersistedRoomRuntimeState): RoomS
       timeBankSeconds: null,
       timeBankRefillHands: null,
       revealAllShowdownHands: false,
+      runItTwiceEnabled: false,
     },
     nextHandStartsAt: null,
     handCount: 0,
@@ -2201,6 +2283,21 @@ function normalizeCompletedHand(value: LastHandResult | null | undefined): LastH
           revealedAccountIds: Array.isArray(value.allInRunout.revealedAccountIds)
             ? value.allInRunout.revealedAccountIds.filter((accountId): accountId is string => typeof accountId === "string")
             : [],
+          runouts: Array.isArray(value.allInRunout.runouts)
+            ? value.allInRunout.runouts.map((runout) => ({
+                board: Array.isArray(runout?.board) ? [...runout.board] : [],
+                winners: Array.isArray(runout?.winners)
+                  ? runout.winners
+                    .filter((winner) => winner && typeof winner.accountId === "string" && typeof winner.seatIndex === "number" && typeof winner.amountWon === "number")
+                    .map((winner) => ({
+                      accountId: winner.accountId,
+                      seatIndex: winner.seatIndex,
+                      amountWon: winner.amountWon,
+                      handLabel: typeof winner.handLabel === "string" ? winner.handLabel : undefined,
+                    }))
+                  : [],
+              }))
+            : undefined,
         }
       : null,
   };
@@ -2251,7 +2348,7 @@ function isForcedShowdownReveal(lastCompletedHand: LastHandResult, accountId: st
 function isAllInRunoutActive(lastCompletedHand: LastHandResult, nowMs: number): boolean {
   const allInRunout = lastCompletedHand.allInRunout;
 
-  if (!allInRunout || allInRunout.startBoardCount >= lastCompletedHand.board.length || allInRunout.revealIntervalMs <= 0) {
+  if (!allInRunout || allInRunout.revealIntervalMs <= 0) {
     return false;
   }
 
@@ -2261,8 +2358,11 @@ function isAllInRunoutActive(lastCompletedHand: LastHandResult, nowMs: number): 
     return false;
   }
 
-  const revealedCount = allInRunout.startBoardCount + Math.floor(Math.max(0, nowMs - concludedAtMs) / allInRunout.revealIntervalMs);
-  return revealedCount < lastCompletedHand.board.length;
+  const totalRevealSteps = allInRunout.runouts?.length
+    ? allInRunout.runouts.reduce((total, runout) => total + Math.max(0, runout.board.length - allInRunout.startBoardCount), 0)
+    : Math.max(0, lastCompletedHand.board.length - allInRunout.startBoardCount);
+  const revealedSteps = Math.floor(Math.max(0, nowMs - concludedAtMs) / allInRunout.revealIntervalMs);
+  return revealedSteps < totalRevealSteps;
 }
 
 function getBustedPlayerAccountIdsForCleanup(table: TableState, nowMs: number): string[] {

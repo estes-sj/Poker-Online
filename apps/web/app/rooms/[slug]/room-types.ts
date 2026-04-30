@@ -47,6 +47,20 @@ export interface LastHandWinner {
   handLabel?: string;
 }
 
+export interface AllInRunoutWinner {
+  accountId: string;
+  seatIndex: number;
+  amountWon: number;
+  handLabel?: string;
+}
+
+export interface AllInRunoutResult {
+  board: Card[];
+  winners: AllInRunoutWinner[];
+}
+
+export type RunItTwiceResponse = "yes" | "no";
+
 export interface LastHandResult {
   handId: string;
   handNumber: number;
@@ -61,6 +75,7 @@ export interface LastHandResult {
     startBoardCount: number;
     revealIntervalMs: number;
     revealedAccountIds: string[];
+    runouts?: AllInRunoutResult[];
   };
 }
 
@@ -144,6 +159,7 @@ export interface RoomAdminOptionsState {
   timeBankSeconds: number | null;
   timeBankRefillHands: number | null;
   revealAllShowdownHands: boolean;
+  runItTwiceEnabled: boolean;
 }
 
 export interface RoomPendingSeatRequest {
@@ -218,6 +234,11 @@ export interface RoomSnapshot {
     actions: HandActionRecord[];
     heroHoleCards: [Card, Card] | null;
     heroActionState: HeroActionState | null;
+    runItTwicePrompt: null | {
+      eligibleAccountIds: string[];
+      responsesByAccountId: Record<string, RunItTwiceResponse>;
+      createdAt: string;
+    };
     playerCardCounts: Record<string, number>;
     remainingDeckCount: number;
   };

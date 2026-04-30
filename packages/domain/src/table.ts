@@ -20,6 +20,7 @@ export interface CreateTableInput {
   autoStartNextHand: boolean;
   autoStartDelaySeconds: number;
   revealAllShowdownHands?: boolean;
+  runItTwiceEnabled?: boolean;
   passwordProtected: boolean;
 }
 
@@ -55,6 +56,7 @@ export interface HandState {
   lastRaiseSize: number;
   actions: HandActionRecord[];
   startedAt: string;
+  runItTwicePrompt: RunItTwicePromptState | null;
 }
 
 export interface HandActionRecord {
@@ -77,12 +79,33 @@ export interface LastHandWinner {
   handLabel?: string;
 }
 
+export interface AllInRunoutWinner {
+  accountId: string;
+  seatIndex: number;
+  amountWon: number;
+  handLabel?: string;
+}
+
+export interface AllInRunoutResult {
+  board: Card[];
+  winners: AllInRunoutWinner[];
+}
+
+export type RunItTwiceResponse = "yes" | "no";
+
+export interface RunItTwicePromptState {
+  eligibleAccountIds: string[];
+  responsesByAccountId: Record<string, RunItTwiceResponse>;
+  createdAt: string;
+}
+
 export type RevealedHoleCards = [Card | null, Card | null];
 
 export interface AllInRunoutState {
   startBoardCount: number;
   revealIntervalMs: number;
   revealedAccountIds: string[];
+  runouts?: AllInRunoutResult[];
 }
 
 export interface LastHandResult {
@@ -118,6 +141,7 @@ export interface TableState {
   autoStartNextHand: boolean;
   autoStartDelaySeconds: number;
   revealAllShowdownHands: boolean;
+  runItTwiceEnabled: boolean;
   handCount: number;
   players: TablePlayer[];
   currentHand: HandState | null;
@@ -138,6 +162,11 @@ export interface PlayerActionInput {
   accountId: string;
   type: PlayerActionType;
   amount?: number;
+}
+
+export interface RunItTwiceDecisionInput {
+  accountId: string;
+  willing: boolean;
 }
 
 export interface PlayerActionState {
@@ -194,6 +223,7 @@ export function createTable(input: CreateTableInput, now: Date = new Date()): Ta
     autoStartNextHand: input.autoStartNextHand,
     autoStartDelaySeconds: input.autoStartDelaySeconds,
     revealAllShowdownHands: input.revealAllShowdownHands ?? false,
+    runItTwiceEnabled: input.runItTwiceEnabled ?? false,
     handCount: 0,
     players: [],
     currentHand: null,
@@ -524,6 +554,7 @@ export function startHand(table: TableState, options: StartHandOptions = {}): Ta
       lastRaiseSize: blindLevel.bigBlind,
       actions,
       startedAt: now.toISOString(),
+      runItTwicePrompt: null,
     },
   };
 }
@@ -531,6 +562,10 @@ export function startHand(table: TableState, options: StartHandOptions = {}): Ta
 export function applyPlayerAction(table: TableState, input: PlayerActionInput, now: Date = new Date()): TableState {
   if (!table.currentHand) {
     throw new Error("A hand is not currently in progress.");
+  }
+
+  if (table.currentHand.runItTwicePrompt) {
+    throw new Error("Run it twice voting is in progress.");
   }
 
   const nextTable = cloneTable(table);
@@ -646,6 +681,71 @@ export function applyPlayerAction(table: TableState, input: PlayerActionInput, n
   nextTable.updatedAt = now.toISOString();
 
   return settleHandIfReady(nextTable, now);
+}
+
+export function applyRunItTwiceDecision(table: TableState, input: RunItTwiceDecisionInput, now: Date = new Date()): TableState {
+  const nextTable = cloneTable(table);
+  const hand = nextTable.currentHand;
+
+  if (!hand?.runItTwicePrompt) {
+    throw new Error("Run it twice is not awaiting player decisions.");
+  }
+
+  if (!hand.runItTwicePrompt.eligibleAccountIds.includes(input.accountId)) {
+    throw new Error("Only players involved in the showdown can vote on run it twice.");
+  }
+
+  hand.runItTwicePrompt = {
+    ...hand.runItTwicePrompt,
+    responsesByAccountId: {
+      ...hand.runItTwicePrompt.responsesByAccountId,
+      [input.accountId]: input.willing ? "yes" : "no",
+    },
+  };
+  nextTable.updatedAt = now.toISOString();
+
+  return nextTable;
+}
+
+export function expirePendingRunItTwiceDecision(table: TableState, now: Date = new Date()): TableState {
+  const nextTable = cloneTable(table);
+  const hand = nextTable.currentHand;
+
+  if (!hand?.runItTwicePrompt) {
+    throw new Error("Run it twice is not awaiting player decisions.");
+  }
+
+  const responsesByAccountId = { ...hand.runItTwicePrompt.responsesByAccountId };
+  let didDefaultAnyResponse = false;
+
+  for (const accountId of hand.runItTwicePrompt.eligibleAccountIds) {
+    if (responsesByAccountId[accountId]) {
+      continue;
+    }
+
+    responsesByAccountId[accountId] = "no";
+    didDefaultAnyResponse = true;
+  }
+
+  if (!didDefaultAnyResponse) {
+    return nextTable;
+  }
+
+  hand.runItTwicePrompt = {
+    ...hand.runItTwicePrompt,
+    responsesByAccountId,
+  };
+  nextTable.updatedAt = now.toISOString();
+
+  return nextTable;
+}
+
+export function resolvePendingRunItTwiceDecision(table: TableState, now: Date = new Date()): TableState {
+  if (!isRunItTwiceVotingComplete(table.currentHand?.runItTwicePrompt ?? null)) {
+    throw new Error("Run it twice voting is not complete.");
+  }
+
+  return resolveHand(cloneTable(table), now, "showdown");
 }
 
 export function getPlayerActionState(table: TableState, accountId: string): PlayerActionState | null {
@@ -830,6 +930,10 @@ function settleHandIfReady(table: TableState, now: Date): TableState {
     return table;
   }
 
+  if (table.currentHand.runItTwicePrompt) {
+    return table;
+  }
+
   const remainingPlayers = getPlayersStillInHand(table.players, table.currentHand);
 
   if (remainingPlayers.length === 1) {
@@ -843,6 +947,10 @@ function settleHandIfReady(table: TableState, now: Date): TableState {
   const actionablePlayers = remainingPlayers.filter((player) => player.stack > 0);
 
   if (table.currentHand.street === "river" || actionablePlayers.length <= 1) {
+    if (shouldOfferRunItTwicePrompt(table, table.currentHand, remainingPlayers, actionablePlayers)) {
+      return startRunItTwicePrompt(table, remainingPlayers, now);
+    }
+
     return resolveHand(table, now, "showdown");
   }
 
@@ -886,6 +994,7 @@ function advanceStreet(table: TableState, now: Date): TableState {
       actorSeat: playersToAct.length > 0
         ? table.players.find((player) => player.accountId === playersToAct[0])!.seatIndex
         : hand.dealerSeat,
+      runItTwicePrompt: null,
     },
   }, now);
 }
@@ -897,13 +1006,14 @@ function resolveHand(table: TableState, now: Date, winningReason: "fold" | "show
     return table;
   }
 
-  const finalizedHand = winningReason === "showdown"
-    ? finalizeBoard(hand)
-    : hand;
-  const folded = new Set(finalizedHand.foldedAccountIds);
-  const eligiblePlayers = table.players.filter((player) => finalizedHand.holeCards[player.accountId] && !folded.has(player.accountId));
-  const allInRunout = buildAllInRunoutState(hand, finalizedHand, eligiblePlayers, winningReason);
-  const payouts = distributePots(table.players, finalizedHand, eligiblePlayers, winningReason);
+  const folded = new Set(hand.foldedAccountIds);
+  const eligiblePlayers = table.players.filter((player) => hand.holeCards[player.accountId] && !folded.has(player.accountId));
+  const showdownResolution = winningReason === "showdown"
+    ? resolveShowdown(table, hand, eligiblePlayers)
+    : null;
+  const resolvedBoard = showdownResolution?.primaryBoard ?? hand.board;
+  const allInRunout = showdownResolution?.allInRunout ?? null;
+  const payouts = showdownResolution?.payouts ?? distributePots(table.players, hand, eligiblePlayers, winningReason);
   const updatedPlayers = table.players.map((player) => {
     const payout = payouts.get(player.accountId) ?? 0;
     return payout === 0
@@ -917,16 +1027,14 @@ function resolveHand(table: TableState, now: Date, winningReason: "fold" | "show
     .filter(([, amountWon]) => amountWon > 0)
     .map(([accountId, amountWon]) => {
       const player = updatedPlayers.find((entry) => entry.accountId === accountId)!;
-      const handCards = finalizedHand.holeCards[accountId]!;
-      const evaluated = winningReason === "showdown" ? evaluateHoldemHand([...handCards, ...finalizedHand.board]) : null;
 
       return {
         accountId,
         seatIndex: player.seatIndex,
         amountWon,
-        netChips: amountWon - (finalizedHand.contributions[accountId] ?? 0),
+        netChips: amountWon - (hand.contributions[accountId] ?? 0),
         finalStack: player.stack,
-        handLabel: evaluated?.label,
+        handLabel: showdownResolution?.winnerHandLabels.get(accountId),
       } satisfies LastHandWinner;
     })
     .sort((left, right) => left.seatIndex - right.seatIndex);
@@ -938,32 +1046,163 @@ function resolveHand(table: TableState, now: Date, winningReason: "fold" | "show
     players: updatedPlayers,
     currentHand: null,
     nextHandStartsAt: table.autoStartNextHand
-      ? new Date(now.getTime() + table.autoStartDelaySeconds * 1000 + getAllInRunoutDelayMs(allInRunout, finalizedHand.board.length)).toISOString()
+      ? new Date(now.getTime() + table.autoStartDelaySeconds * 1000 + getAllInRunoutDelayMs(allInRunout, resolvedBoard.length)).toISOString()
       : null,
     lastCompletedHand: {
-      handId: finalizedHand.id,
-      handNumber: finalizedHand.handNumber,
-      board: finalizedHand.board,
-      totalPot: finalizedHand.pot,
+      handId: hand.id,
+      handNumber: hand.handNumber,
+      board: resolvedBoard,
+      totalPot: hand.pot,
       winningReason,
       concludedAt: now.toISOString(),
-      actions: finalizedHand.actions.map((action) => ({ ...action })),
+      actions: hand.actions.map((action) => ({ ...action })),
       winners: winnerEntries,
       revealedHoleCards: winningReason === "showdown"
-        ? buildShowdownRevealedHoleCards(table, finalizedHand, eligiblePlayers, winnerEntries, allInRunout)
+        ? buildShowdownRevealedHoleCards(table, hand, eligiblePlayers, winnerEntries, allInRunout)
         : {},
       allInRunout,
     },
   };
 }
 
+function resolveShowdown(
+  table: TableState,
+  hand: HandState,
+  eligiblePlayers: TablePlayer[],
+): {
+  primaryBoard: Card[];
+  payouts: Map<string, number>;
+  winnerHandLabels: Map<string, string>;
+  allInRunout: AllInRunoutState | null;
+} {
+  const runoutCount = shouldRunItTwice(table, hand, eligiblePlayers) ? 2 : 1;
+  const runoutBoards = buildRunoutBoards(hand, runoutCount);
+  const pots = buildPots(table.players, hand);
+  const payouts = new Map<string, number>();
+  const winnerHandLabels = new Map<string, string>();
+  const runoutResults: AllInRunoutResult[] = [];
+
+  for (let runoutIndex = 0; runoutIndex < runoutBoards.length; runoutIndex += 1) {
+    const { result, payouts: runoutPayouts } = resolveShowdownRunout(
+      table.players,
+      hand,
+      eligiblePlayers,
+      pots,
+      runoutBoards[runoutIndex]!,
+      runoutBoards.length,
+      runoutIndex,
+    );
+
+    runoutResults.push(result);
+
+    for (const [accountId, amountWon] of runoutPayouts.entries()) {
+      payouts.set(accountId, (payouts.get(accountId) ?? 0) + amountWon);
+    }
+
+    if (runoutBoards.length === 1) {
+      for (const winner of result.winners) {
+        if (winner.handLabel) {
+          winnerHandLabels.set(winner.accountId, winner.handLabel);
+        }
+      }
+    }
+  }
+
+  return {
+    primaryBoard: runoutBoards[0] ?? hand.board,
+    payouts,
+    winnerHandLabels,
+    allInRunout: buildAllInRunoutState(hand, eligiblePlayers, "showdown", runoutResults),
+  };
+}
+
+function shouldRunItTwice(table: TableState, hand: HandState, eligiblePlayers: TablePlayer[]): boolean {
+  const prompt = hand.runItTwicePrompt;
+
+  if (!prompt) {
+    return false;
+  }
+
+  return table.runItTwiceEnabled
+    && hand.board.length < 5
+    && eligiblePlayers.length >= 2
+    && prompt.eligibleAccountIds.every((accountId) => prompt.responsesByAccountId[accountId] === "yes");
+}
+
+function shouldOfferRunItTwicePrompt(
+  table: TableState,
+  hand: HandState,
+  remainingPlayers: TablePlayer[],
+  actionablePlayers: TablePlayer[],
+): boolean {
+  return table.runItTwiceEnabled
+    && hand.street !== "river"
+    && !hand.runItTwicePrompt
+    && remainingPlayers.length >= 2
+    && actionablePlayers.length <= 1;
+}
+
+function startRunItTwicePrompt(table: TableState, remainingPlayers: TablePlayer[], now: Date): TableState {
+  if (!table.currentHand) {
+    return table;
+  }
+
+  return {
+    ...table,
+    updatedAt: now.toISOString(),
+    currentHand: {
+      ...table.currentHand,
+      runItTwicePrompt: {
+        eligibleAccountIds: remainingPlayers
+          .map((player) => player.accountId)
+          .sort((left, right) => table.players.find((player) => player.accountId === left)!.seatIndex - table.players.find((player) => player.accountId === right)!.seatIndex),
+        responsesByAccountId: {},
+        createdAt: now.toISOString(),
+      },
+    },
+  };
+}
+
+export function isRunItTwiceVotingComplete(prompt: RunItTwicePromptState | null): boolean {
+  if (!prompt) {
+    return false;
+  }
+
+  return Object.values(prompt.responsesByAccountId).includes("no")
+    || prompt.eligibleAccountIds.every((accountId) => prompt.responsesByAccountId[accountId] === "yes");
+}
+
+function buildRunoutBoards(hand: HandState, runoutCount: number): Card[][] {
+  if (hand.board.length === 5) {
+    return [hand.board];
+  }
+
+  const boards: Card[][] = [];
+  let remainingDeck = [...hand.remainingDeck];
+
+  for (let index = 0; index < runoutCount; index += 1) {
+    let board = [...hand.board];
+
+    while (board.length < 5) {
+      const nextStreet = board.length === 0 ? "flop" : board.length === 3 ? "turn" : "river";
+      const dealt = dealBoardForStreet(board, remainingDeck, nextStreet);
+      board = dealt.board;
+      remainingDeck = dealt.remainingDeck;
+    }
+
+    boards.push(board);
+  }
+
+  return boards;
+}
+
 function buildAllInRunoutState(
   hand: HandState,
-  finalizedHand: HandState,
   eligiblePlayers: TablePlayer[],
-  winningReason: "fold" | "showdown"
+  winningReason: "fold" | "showdown",
+  runoutResults: AllInRunoutResult[]
 ): AllInRunoutState | null {
-  if (winningReason !== "showdown" || hand.board.length >= finalizedHand.board.length) {
+  if (winningReason !== "showdown" || runoutResults.length === 0 || hand.board.length >= runoutResults[0]!.board.length) {
     return null;
   }
 
@@ -980,6 +1219,7 @@ function buildAllInRunoutState(
     startBoardCount: hand.board.length,
     revealIntervalMs: ALL_IN_RUNOUT_REVEAL_INTERVAL_MS,
     revealedAccountIds,
+    runouts: runoutResults.length > 1 ? runoutResults : undefined,
   };
 }
 
@@ -988,12 +1228,19 @@ function getAllInRunoutDelayMs(allInRunout: AllInRunoutState | null, finalBoardC
     return 0;
   }
 
+  if (allInRunout.runouts?.length) {
+    return allInRunout.runouts.reduce(
+      (totalDelayMs, runout) => totalDelayMs + Math.max(0, runout.board.length - allInRunout.startBoardCount) * allInRunout.revealIntervalMs,
+      0,
+    );
+  }
+
   return Math.max(0, finalBoardCount - allInRunout.startBoardCount) * allInRunout.revealIntervalMs;
 }
 
 function buildShowdownRevealedHoleCards(
   table: TableState,
-  finalizedHand: HandState,
+  hand: HandState,
   eligiblePlayers: TablePlayer[],
   winnerEntries: LastHandWinner[],
   allInRunout: AllInRunoutState | null
@@ -1011,7 +1258,7 @@ function buildShowdownRevealedHoleCards(
   return Object.fromEntries(
     Array.from(autoRevealAccountIds)
       .map((accountId) => {
-        const holeCards = finalizedHand.holeCards[accountId];
+        const holeCards = hand.holeCards[accountId];
 
         if (!holeCards) {
           return null;
@@ -1028,22 +1275,80 @@ function finalizeBoard(hand: HandState): HandState {
     return hand;
   }
 
-  let board = [...hand.board];
-  let remainingDeck = [...hand.remainingDeck];
-
-  while (board.length < 5) {
-    const nextStreet = board.length === 0 ? "flop" : board.length === 3 ? "turn" : "river";
-    const dealt = dealBoardForStreet(board, remainingDeck, nextStreet);
-    board = dealt.board;
-    remainingDeck = dealt.remainingDeck;
-  }
+  const [board] = buildRunoutBoards(hand, 1);
 
   return {
     ...hand,
-    board,
-    remainingDeck,
+    board: board ?? hand.board,
     street: "showdown",
   };
+}
+
+function resolveShowdownRunout(
+  players: TablePlayer[],
+  hand: HandState,
+  eligiblePlayers: TablePlayer[],
+  pots: Array<{ amount: number; eligibleAccountIds: string[] }>,
+  board: Card[],
+  runoutCount: number,
+  runoutIndex: number,
+): { result: AllInRunoutResult; payouts: Map<string, number> } {
+  const payouts = new Map<string, number>();
+  const playerByAccountId = new Map(players.map((player) => [player.accountId, player]));
+  const evaluatedHands = new Map(eligiblePlayers.map((player) => [player.accountId, evaluateHoldemHand([...hand.holeCards[player.accountId]!, ...board])]));
+
+  for (const pot of pots) {
+    const runoutAmount = getRunoutPotAmount(pot.amount, runoutCount, runoutIndex);
+
+    if (runoutAmount <= 0) {
+      continue;
+    }
+
+    const contenders = pot.eligibleAccountIds
+      .map((accountId) => playerByAccountId.get(accountId)!)
+      .filter((player) => eligiblePlayers.some((entry) => entry.accountId === player.accountId));
+
+    if (contenders.length === 0) {
+      continue;
+    }
+
+    const winners = getShowdownWinners(contenders, evaluatedHands);
+    const orderedWinners = orderWinnersForOddChips(players, winners, hand.dealerSeat);
+    const splitAmount = Math.floor(runoutAmount / orderedWinners.length);
+    let remainder = runoutAmount % orderedWinners.length;
+
+    for (const winner of orderedWinners) {
+      const award = splitAmount + (remainder > 0 ? 1 : 0);
+      payouts.set(winner.accountId, (payouts.get(winner.accountId) ?? 0) + award);
+      remainder = Math.max(0, remainder - 1);
+    }
+  }
+
+  return {
+    result: {
+      board: [...board],
+      winners: Array.from(payouts.entries())
+        .filter(([, amountWon]) => amountWon > 0)
+        .map(([accountId, amountWon]) => {
+          const player = playerByAccountId.get(accountId)!;
+
+          return {
+            accountId,
+            seatIndex: player.seatIndex,
+            amountWon,
+            handLabel: evaluatedHands.get(accountId)?.label,
+          } satisfies AllInRunoutWinner;
+        })
+        .sort((left, right) => left.seatIndex - right.seatIndex),
+    },
+    payouts,
+  };
+}
+
+function getRunoutPotAmount(totalPotAmount: number, runoutCount: number, runoutIndex: number): number {
+  const baseAmount = Math.floor(totalPotAmount / runoutCount);
+  const remainder = totalPotAmount % runoutCount;
+  return baseAmount + (runoutIndex < remainder ? 1 : 0);
 }
 
 function distributePots(
@@ -1270,6 +1575,13 @@ function cloneTable(table: TableState): TableState {
           foldedAccountIds: [...table.currentHand.foldedAccountIds],
           playersToAct: [...table.currentHand.playersToAct],
           actions: table.currentHand.actions.map((action) => ({ ...action })),
+          runItTwicePrompt: table.currentHand.runItTwicePrompt
+            ? {
+                ...table.currentHand.runItTwicePrompt,
+                eligibleAccountIds: [...table.currentHand.runItTwicePrompt.eligibleAccountIds],
+                responsesByAccountId: { ...table.currentHand.runItTwicePrompt.responsesByAccountId },
+              }
+            : null,
         }
       : null,
     lastCompletedHand: table.lastCompletedHand

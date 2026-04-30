@@ -9,6 +9,7 @@ import type { AutoExpiringRoom, RoomRegistry, RoomSnapshot } from "./runtime/roo
 
 const BOT_ACCOUNT_ID_PREFIX = "bot_";
 const BOT_ACTION_DELAY_MS = 900;
+const RUN_IT_TWICE_RESOLUTION_DELAY_MS = 1200;
 
 interface ClientMessage {
   type: "subscribe_room" | "seat_player" | "set_ready" | "admin_start_hand";
@@ -29,6 +30,7 @@ export function buildGameServer() {
   const autoStartTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const bustCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const roomExpirationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const runItTwiceResolutionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const turnTimeoutTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let roomExpirationBootstrapRetryTimer: ReturnType<typeof setTimeout> | null = null;
   const app = Fastify({ logger: true });
@@ -74,6 +76,17 @@ export function buildGameServer() {
     turnTimeoutTimers.delete(slug);
   };
 
+  const clearRunItTwiceResolutionTimer = (slug: string) => {
+    const timer = runItTwiceResolutionTimers.get(slug);
+
+    if (!timer) {
+      return;
+    }
+
+    clearTimeout(timer);
+    runItTwiceResolutionTimers.delete(slug);
+  };
+
   const clearBustCleanupTimer = (slug: string) => {
     const timer = bustCleanupTimers.get(slug);
 
@@ -112,6 +125,7 @@ export function buildGameServer() {
       clearAutoStartTimer(slug);
       clearBustCleanupTimer(slug);
       clearRoomExpirationTimer(slug);
+      clearRunItTwiceResolutionTimer(slug);
       clearTurnTimeoutTimer(slug);
     }
 
@@ -154,11 +168,15 @@ export function buildGameServer() {
 
     const allInRunout = snapshot.lastCompletedHand.allInRunout;
 
-    if (!allInRunout || allInRunout.startBoardCount >= snapshot.lastCompletedHand.board.length || allInRunout.revealIntervalMs <= 0) {
+    if (!allInRunout || allInRunout.revealIntervalMs <= 0) {
       return concludedAtMs;
     }
 
-    return concludedAtMs + Math.max(0, snapshot.lastCompletedHand.board.length - allInRunout.startBoardCount) * allInRunout.revealIntervalMs;
+    const revealSteps = allInRunout.runouts?.length
+      ? allInRunout.runouts.reduce((total, runout) => total + Math.max(0, runout.board.length - allInRunout.startBoardCount), 0)
+      : Math.max(0, snapshot.lastCompletedHand.board.length - allInRunout.startBoardCount);
+
+    return concludedAtMs + revealSteps * allInRunout.revealIntervalMs;
   };
 
   const executeBustCleanup = async (slug: string) => {
@@ -397,10 +415,48 @@ export function buildGameServer() {
     return Boolean(
       snapshot.currentHand
       && snapshot.currentHand.actorAccountId
+      && !snapshot.currentHand.runItTwicePrompt
       && snapshot.turnState.currentTurnStartedAt
       && snapshot.turnState.turnSeconds !== null
       && snapshot.status === "active"
     );
+  };
+
+  const shouldScheduleRunItTwiceResolution = (snapshot: RoomSnapshot): boolean => {
+    const prompt = snapshot.currentHand?.runItTwicePrompt;
+
+    if (!prompt) {
+      return false;
+    }
+
+    return Object.values(prompt.responsesByAccountId).includes("no")
+      || prompt.eligibleAccountIds.every((accountId) => prompt.responsesByAccountId[accountId] === "yes");
+  };
+
+  const getRemainingRunItTwiceVoteMs = (snapshot: RoomSnapshot): number | null => {
+    const prompt = snapshot.currentHand?.runItTwicePrompt;
+
+    if (!prompt || shouldScheduleRunItTwiceResolution(snapshot) || snapshot.turnState.turnSeconds === null || !snapshot.turnState.currentTurnStartedAt || snapshot.status !== "active") {
+      return null;
+    }
+
+    const voteStartedAt = Date.parse(snapshot.turnState.currentTurnStartedAt);
+
+    if (Number.isNaN(voteStartedAt)) {
+      return null;
+    }
+
+    return Math.max(0, (snapshot.turnState.turnSeconds * 1000) - (Date.now() - voteStartedAt));
+  };
+
+  const getPendingRunItTwiceBotAccountId = (snapshot: RoomSnapshot): string | null => {
+    const prompt = snapshot.currentHand?.runItTwicePrompt;
+
+    if (!prompt || snapshot.status !== "active") {
+      return null;
+    }
+
+    return prompt.eligibleAccountIds.find((accountId) => isBotAccountId(accountId) && !prompt.responsesByAccountId[accountId]) ?? null;
   };
 
   const getRemainingTurnMs = (snapshot: RoomSnapshot): number | null => {
@@ -459,6 +515,57 @@ export function buildGameServer() {
     }
   };
 
+  const executeBotRunItTwiceDecision = async (slug: string) => {
+    let snapshot: RoomSnapshot;
+
+    try {
+      snapshot = await registry.getRoomSnapshot(slug);
+    } catch (error) {
+      app.log.warn({ slug, error }, "Unable to read room before scheduled bot run-it-twice decision.");
+      return;
+    }
+
+    const botAccountId = getPendingRunItTwiceBotAccountId(snapshot);
+
+    if (!botAccountId) {
+      return;
+    }
+
+    try {
+      await registry.submitRunItTwiceDecision({
+        slug,
+        accountId: botAccountId,
+        willing: chooseBotRunItTwiceDecision(),
+      });
+    } catch (error) {
+      app.log.debug({ slug, error }, "Bot run-it-twice decision did not resolve cleanly.");
+    }
+  };
+
+  const executeRunItTwiceResolution = async (slug: string) => {
+    let snapshot: RoomSnapshot;
+
+    try {
+      snapshot = await registry.getRoomSnapshot(slug);
+    } catch (error) {
+      app.log.warn({ slug, error }, "Unable to read room before scheduled run-it-twice resolution.");
+      return;
+    }
+
+    if (!shouldScheduleRunItTwiceResolution(snapshot)) {
+      return;
+    }
+
+    try {
+      await registry.resolvePendingRunItTwiceDecision(slug);
+      await scheduleRoomBustCleanup(slug);
+      await scheduleRoomAutoStart(slug);
+      await scheduleRoomTurnTimeout(slug);
+    } catch (error) {
+      app.log.debug({ slug, error }, "Scheduled run-it-twice resolution did not resolve cleanly.");
+    }
+  };
+
   const executeTurnTimeout = async (slug: string) => {
     let snapshot: RoomSnapshot;
 
@@ -506,6 +613,34 @@ export function buildGameServer() {
     }
   };
 
+  const executeRunItTwiceVoteTimeout = async (slug: string) => {
+    let snapshot: RoomSnapshot;
+
+    try {
+      snapshot = await registry.getRoomSnapshot(slug);
+    } catch (error) {
+      app.log.warn({ slug, error }, "Unable to read room before scheduled run-it-twice timeout.");
+      return;
+    }
+
+    const remainingVoteMs = getRemainingRunItTwiceVoteMs(snapshot);
+
+    if (remainingVoteMs === null) {
+      return;
+    }
+
+    if (remainingVoteMs > 0) {
+      await scheduleRoomTurnTimeout(slug);
+      return;
+    }
+
+    try {
+      await registry.expirePendingRunItTwiceDecision(slug);
+    } catch (error) {
+      app.log.debug({ slug, error }, "Run-it-twice timeout auto-decline did not resolve cleanly.");
+    }
+  };
+
   const scheduleRoomTurnTimeout = async (slug: string) => {
     clearTurnTimeoutTimer(slug);
 
@@ -515,6 +650,36 @@ export function buildGameServer() {
       snapshot = await registry.getRoomSnapshot(slug);
     } catch (error) {
       app.log.warn({ slug, error }, "Unable to schedule room turn timeout.");
+      return;
+    }
+
+    const pendingRunItTwiceBotAccountId = getPendingRunItTwiceBotAccountId(snapshot);
+
+    if (pendingRunItTwiceBotAccountId) {
+      const remainingVoteMs = getRemainingRunItTwiceVoteMs(snapshot);
+
+      if (remainingVoteMs === null || remainingVoteMs <= 0) {
+        turnTimeoutTimers.set(slug, setTimeout(() => {
+          turnTimeoutTimers.delete(slug);
+          void executeRunItTwiceVoteTimeout(slug);
+        }, 0));
+        return;
+      }
+
+      turnTimeoutTimers.set(slug, setTimeout(() => {
+        turnTimeoutTimers.delete(slug);
+        void executeBotRunItTwiceDecision(slug);
+      }, Math.min(BOT_ACTION_DELAY_MS, remainingVoteMs)));
+      return;
+    }
+
+    const remainingRunItTwiceVoteMs = getRemainingRunItTwiceVoteMs(snapshot);
+
+    if (remainingRunItTwiceVoteMs !== null) {
+      turnTimeoutTimers.set(slug, setTimeout(() => {
+        turnTimeoutTimers.delete(slug);
+        void executeRunItTwiceVoteTimeout(slug);
+      }, remainingRunItTwiceVoteMs));
       return;
     }
 
@@ -538,11 +703,34 @@ export function buildGameServer() {
     }, remainingTurnMs));
   };
 
+  const scheduleRunItTwiceResolution = async (slug: string) => {
+    let snapshot: RoomSnapshot;
+
+    try {
+      snapshot = await registry.getRoomSnapshot(slug);
+    } catch (error) {
+      app.log.warn({ slug, error }, "Unable to schedule run-it-twice resolution.");
+      return;
+    }
+
+    clearRunItTwiceResolutionTimer(slug);
+
+    if (!shouldScheduleRunItTwiceResolution(snapshot)) {
+      return;
+    }
+
+    runItTwiceResolutionTimers.set(slug, setTimeout(() => {
+      runItTwiceResolutionTimers.delete(slug);
+      void executeRunItTwiceResolution(slug);
+    }, RUN_IT_TWICE_RESOLUTION_DELAY_MS));
+  };
+
   registry = new PrismaRoomRegistry(async (slug) => {
     await broadcastRoom(slug);
     await scheduleRoomBustCleanup(slug);
     await scheduleRoomAutoStart(slug);
     await scheduleRoomExpiration(slug);
+    await scheduleRunItTwiceResolution(slug);
     await scheduleRoomTurnTimeout(slug);
   }, async (slugs) => {
     await handleDeletedRooms(slugs);
@@ -566,6 +754,10 @@ export function buildGameServer() {
       clearTimeout(timer);
     }
 
+    for (const timer of runItTwiceResolutionTimers.values()) {
+      clearTimeout(timer);
+    }
+
     for (const timer of turnTimeoutTimers.values()) {
       clearTimeout(timer);
     }
@@ -573,6 +765,7 @@ export function buildGameServer() {
     autoStartTimers.clear();
     bustCleanupTimers.clear();
     roomExpirationTimers.clear();
+    runItTwiceResolutionTimers.clear();
     turnTimeoutTimers.clear();
     clearRoomExpirationBootstrapRetryTimer();
     await disconnectPrisma();
@@ -817,4 +1010,8 @@ function chooseBotTurnAction(
   }
 
   return null;
+}
+
+function chooseBotRunItTwiceDecision(): boolean {
+  return Math.random() < 0.62;
 }

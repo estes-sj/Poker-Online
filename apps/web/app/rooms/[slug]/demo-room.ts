@@ -272,6 +272,7 @@ export function buildDemoRoomPreset(slug: string): DemoRoomPreset | null {
                 timeBankSeconds: 90,
                 timeBankRefillHands: 8,
                 revealAllShowdownHands: true,
+                runItTwiceEnabled: false,
             },
             nextHandStartsAt: null,
             handCount: 48,

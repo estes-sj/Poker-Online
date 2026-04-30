@@ -297,6 +297,7 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
         timeBankSeconds: requireNullableNumber(body.timeBankSeconds, "timeBankSeconds"),
         timeBankRefillHands: requireNullableNumber(body.timeBankRefillHands, "timeBankRefillHands"),
         revealAllShowdownHands: requireBoolean(body.revealAllShowdownHands, "revealAllShowdownHands"),
+        runItTwiceEnabled: requireBoolean(body.runItTwiceEnabled, "runItTwiceEnabled"),
       });
 
       return reply.send(snapshot);
@@ -417,6 +418,23 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
         accountId: requireString(body.accountId, "accountId"),
         actionType: requireActionType(body.actionType),
         amount: optionalNumber(body.amount),
+      });
+
+      return reply.send(snapshot);
+    } catch (error) {
+      return reply.code(400).send({ error: getErrorMessage(error) });
+    }
+  });
+
+  app.post("/v1/rooms/:slug/run-it-twice", async (request, reply) => {
+    const params = request.params as Record<string, unknown>;
+    const body = request.body as Record<string, unknown>;
+
+    try {
+      const snapshot = await registry.submitRunItTwiceDecision({
+        slug: requireString(params.slug, "slug"),
+        accountId: requireString(body.accountId, "accountId"),
+        willing: requireBoolean(body.willing, "willing"),
       });
 
       return reply.send(snapshot);

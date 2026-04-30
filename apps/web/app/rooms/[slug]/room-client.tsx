@@ -171,7 +171,7 @@ type EquityTrend = "steady" | "up" | "down";
 
 interface AllInRunoutView {
     isActive: boolean;
-    visibleBoard: Card[];
+    visibleBoards: Card[][];
     revealedAccountIds: string[];
 }
 
@@ -202,6 +202,7 @@ interface TableSeatView {
     markers: Array<{ label: string; tone: "dealer" | "blind" | "admin" }>;
     actionBubble: string | null;
     contributionLabel: string | null;
+    runItTwiceResponse: "yes" | "no" | null;
     cardCount: number;
     revealedCards: [Card | null, Card | null] | null;
     liveHoleCards: [Card, Card] | null;
@@ -268,6 +269,7 @@ interface AdminOptionsDraft {
     timeBankSeconds: string;
     timeBankRefillHands: string;
     revealAllShowdownHands: boolean;
+    runItTwiceEnabled: boolean;
 }
 
 interface ActionPadOffset {
@@ -720,7 +722,16 @@ export function RoomClient({
     const currentHand = snapshot?.currentHand ?? null;
     const heroPlayer = accountId ? snapshot?.players.find((player) => player.accountId === accountId) ?? null : null;
     const heroActionState = currentHand?.heroActionState ?? null;
+    const runItTwicePrompt = currentHand?.runItTwicePrompt ?? null;
     const heroInHand = Boolean(heroPlayer && currentHand?.playerCardCounts[heroPlayer.accountId]);
+    const heroRunItTwiceResponse = heroPlayer && runItTwicePrompt
+        ? runItTwicePrompt.responsesByAccountId[heroPlayer.accountId] ?? null
+        : null;
+    const heroCanRespondToRunItTwice = Boolean(
+        heroPlayer
+        && runItTwicePrompt?.eligibleAccountIds.includes(heroPlayer.accountId)
+        && !heroRunItTwiceResponse,
+    );
     const viewerHasRoomAccess = Boolean(snapshot && (!snapshot.passwordProtected || snapshot.viewerHasRoomAccess));
     const isProtectedRoomLocked = Boolean(!demoMode && snapshot?.passwordProtected && !viewerHasRoomAccess);
     const canJoinProtectedRoom = Boolean(snapshot && snapshot.passwordProtected && accountId && !viewerHasRoomAccess);
@@ -794,15 +805,24 @@ export function RoomClient({
         runoutEquityLeaderAccountIds: runoutEquityState.leaderAccountIds,
         runoutEquityTrendByAccount: runoutEquityState.trendByAccount,
     });
-    const displayedBoard = currentHand?.board ?? allInRunoutView?.visibleBoard ?? latestCompletedHand?.board ?? [];
+    const displayedBoards = currentHand
+        ? [currentHand.board]
+        : allInRunoutView?.visibleBoards ?? getCompletedHandBoards(latestCompletedHand);
+    const displayedBoard = displayedBoards[0] ?? [];
+    const displayedAdditionalBoards = displayedBoards.slice(1);
+    const displayedBoardCount = displayedBoards.reduce((totalCards, board) => totalCards + board.length, 0);
     const displayedPot = currentHand?.pot ?? latestCompletedHand?.totalPot ?? 0;
-    const centerStatus = isAllInRunoutAnimating ? "All-in showdown. Running board..." : buildCenterStatus(snapshot, nextHandCountdown);
+    const centerStatus = isAllInRunoutAnimating
+        ? displayedAdditionalBoards.length > 0
+            ? "All-in showdown. Running it twice..."
+            : "All-in showdown. Running board..."
+        : buildCenterStatus(snapshot, nextHandCountdown);
     const heroDisplayedStack = heroPlayer ? getDisplayedPlayerStack(heroPlayer, pendingRunoutWinners) ?? heroPlayer.stack : 0;
     const heroLastCompletedRevealedCards = heroPlayer && snapshot?.lastCompletedHand
         ? snapshot.lastCompletedHand.revealedHoleCards[heroPlayer.accountId] ?? [null, null]
         : null;
     const blindScheduleValidation = validateBlindScheduleDraft(adminOptionsDraft);
-    const runoutEquityBoardKey = buildCardListKey(allInRunoutView?.visibleBoard ?? []);
+    const runoutEquityBoardKey = buildBoardCollectionKey(allInRunoutView?.visibleBoards ?? []);
     const runoutEquityAccountIdsKey = buildAccountListKey(allInRunoutView?.revealedAccountIds ?? latestCompletedHand?.allInRunout?.revealedAccountIds ?? []);
 
     useTableSoundEffects({
@@ -810,7 +830,7 @@ export function RoomClient({
         accountId,
         isAdmin,
         viewerHasRoomAccess,
-        displayedBoardCount: displayedBoard.length,
+        displayedBoardCount,
         isAllInRunoutActive: isAllInRunoutAnimating,
         turnActorAccountId: currentHand?.actorAccountId ?? null,
         turnStartedAt: snapshot?.turnState.currentTurnStartedAt ?? null,
@@ -887,7 +907,9 @@ export function RoomClient({
     const selectedCompletedHandRunout = selectedCompletedHand && latestCompletedHand && allInRunoutView && selectedCompletedHand.handId === latestCompletedHand.handId
         ? allInRunoutView
         : null;
-    const selectedCompletedHandBoard = selectedCompletedHandRunout ? selectedCompletedHandRunout.visibleBoard : selectedCompletedHand?.board ?? [];
+    const selectedCompletedHandBoards = selectedCompletedHandRunout ? selectedCompletedHandRunout.visibleBoards : getCompletedHandBoards(selectedCompletedHand);
+    const selectedCompletedHandAdditionalBoards = selectedCompletedHandBoards.slice(1);
+    const selectedCompletedHandRunoutResults = getCompletedHandRunoutResults(selectedCompletedHand);
     const selectedCompletedHandReveals = selectedCompletedHand && selectedCompletedHandRunout
         ? runoutRevealedHoleCards ?? selectedCompletedHand.revealedHoleCards
         : selectedCompletedHand?.revealedHoleCards ?? {};
@@ -974,7 +996,27 @@ export function RoomClient({
                     ) : null}
                 </div>
 
-                {heroActionState?.canAct ? (
+                {heroCanRespondToRunItTwice ? (
+                    <>
+                        <div className="table-action-panel__vote-block">
+                            <div className="table-action-panel__vote-header">
+                                <span className="table-action-panel__eyebrow">Run it twice?</span>
+                                <strong>Everyone in the showdown has to agree.</strong>
+                            </div>
+
+                            <div className="table-action-panel__grid table-action-panel__grid--vote">
+                                <button className="table-action-panel__button table-action-panel__button--yes" type="button" onClick={() => void handleRunItTwiceDecision(true)} disabled={isMutating}>
+                                    Yes
+                                </button>
+                                <button className="table-action-panel__button table-action-panel__button--no" type="button" onClick={() => void handleRunItTwiceDecision(false)} disabled={isMutating}>
+                                    No
+                                </button>
+                            </div>
+
+                            <p className="muted-copy table-action-panel__vote-copy">Your vote stays visible on your seat until the decision is complete.</p>
+                        </div>
+                    </>
+                ) : heroActionState?.canAct ? (
                     <>
                         <div className="table-action-panel__grid">
                             {heroActionState.allowedActions.includes("check") ? (
@@ -1032,9 +1074,9 @@ export function RoomClient({
                     </>
                 ) : (
                     <>
-                        <p className="muted-copy table-action-panel__waiting-copy">{describeHeroState(heroActionState, heroPlayer)}</p>
+                        <p className="muted-copy table-action-panel__waiting-copy">{runItTwicePrompt ? describeRunItTwiceVoteState(runItTwicePrompt, heroPlayer) : describeHeroState(heroActionState, heroPlayer)}</p>
 
-                        {heroInHand && !heroActionState?.hasFolded && !heroActionState?.isAllIn ? (
+                        {!runItTwicePrompt && heroInHand && !heroActionState?.hasFolded && !heroActionState?.isAllIn ? (
                             <div className="table-action-panel__queue-row">
                                 <button
                                     className={[
@@ -1052,7 +1094,7 @@ export function RoomClient({
                             </div>
                         ) : null}
 
-                        {activeLastCompletedHandRevealState ? (
+                        {!runItTwicePrompt && activeLastCompletedHandRevealState ? (
                             <div className="table-action-panel__reveal-block">
                                 <div className="table-action-panel__reveal-header">
                                     <span className="table-action-panel__eyebrow">Show cards</span>
@@ -1345,6 +1387,17 @@ export function RoomClient({
         await submitRoomMutation(`/v1/rooms/${slug}/action`, payload);
     }
 
+    async function handleRunItTwiceDecision(willing: boolean) {
+        if (!accountId) {
+            return;
+        }
+
+        await submitRoomMutation(`/v1/rooms/${slug}/run-it-twice`, {
+            accountId,
+            willing,
+        });
+    }
+
     async function handleSendChatMessage() {
         if (!accountId || !canChat) {
             setActionError("Join the room and sign in before chatting.");
@@ -1514,6 +1567,7 @@ export function RoomClient({
                 timeBankSeconds: parseOptionalWholeNumber(adminOptionsDraft.timeBankSeconds, "Time bank length"),
                 timeBankRefillHands: parseOptionalWholeNumber(adminOptionsDraft.timeBankRefillHands, "Time bank refill hands"),
                 revealAllShowdownHands: adminOptionsDraft.revealAllShowdownHands,
+                runItTwiceEnabled: adminOptionsDraft.runItTwiceEnabled,
             });
         } catch (error) {
             setActionError(error instanceof Error ? error.message : "Unable to save table options.");
@@ -1665,6 +1719,10 @@ export function RoomClient({
                 return;
             }
 
+            if (currentHand?.runItTwicePrompt) {
+                return;
+            }
+
             if (key === "q" && heroInHand && !heroActionState?.hasFolded && !heroActionState?.isAllIn) {
                 event.preventDefault();
 
@@ -1709,7 +1767,7 @@ export function RoomClient({
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [demoMode, heroActionState, heroInHand, isAdmin, media, preselectedHeroAction, snapshot?.status]);
+    }, [currentHand?.runItTwicePrompt?.createdAt, demoMode, heroActionState, heroInHand, isAdmin, media, preselectedHeroAction, snapshot?.status]);
 
     if (isProtectedRoomLocked) {
         return (
@@ -2112,6 +2170,10 @@ export function RoomClient({
                                                             <input type="checkbox" checked={adminOptionsDraft.revealAllShowdownHands} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, revealAllShowdownHands: event.target.checked }))} />
                                                             <span>Reveal all hands when no more action is possible</span>
                                                         </label>
+                                                        <label className="table-admin-field table-admin-field--toggle">
+                                                            <input type="checkbox" checked={adminOptionsDraft.runItTwiceEnabled} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, runItTwiceEnabled: event.target.checked }))} />
+                                                            <span>Run it twice on all-in showdowns before the river</span>
+                                                        </label>
                                                     </div>
 
                                                     {adminOptionsDraft.useBlindSchedule ? (
@@ -2308,8 +2370,9 @@ export function RoomClient({
                             {snapshot?.status === "paused" ? <span className="chip-pill">Paused</span> : null}
                             <span className="chip-pill">Hand {currentHand?.handNumber ?? snapshot?.lastCompletedHand?.handNumber ?? snapshot?.handCount ?? 0}</span>
                             {snapshot?.blindState.nextLevel && blindCountdownMs !== null ? <span className="chip-pill chip-pill--timer">Next {formatBlindLevelCompact(snapshot.blindState.nextLevel)} in {formatClockCountdown(blindCountdownMs)}</span> : null}
-                            {turnMetrics ? <span className="chip-pill chip-pill--timer">Turn {formatTurnSeconds(turnMetrics.mainSecondsRemaining)}</span> : null}
+                            {turnMetrics ? <span className="chip-pill chip-pill--timer">{turnMetrics.kind === "run-it-twice" ? "Vote" : "Turn"} {formatTurnSeconds(turnMetrics.mainSecondsRemaining)}</span> : null}
                             {turnMetrics && currentActor ? <span className="chip-pill">Action {currentActor.displayName}</span> : null}
+                            {turnMetrics?.kind === "run-it-twice" ? <span className="chip-pill">Run it twice vote</span> : null}
                             {isAdmin ? (
                                 <>
                                     <button className="table-status-rack__control" type="button" onClick={() => void handlePauseToggle()} disabled={isMutating}>
@@ -2330,13 +2393,32 @@ export function RoomClient({
                                     <PokerCard key={`board-${index}`} card={slot.card} isFaceUp={slot.isFaceUp} size="board" backLabel={slot.backLabel} />
                                 ))}
                             </div>
-                            {turnMetrics && currentActor ? (
+                            {displayedAdditionalBoards.length ? (
+                                <div className="table-center__runout-boards">
+                                    {displayedAdditionalBoards.map((board, boardIndex) => (
+                                        <div key={`table-center-runout-${boardIndex + 2}`} className="table-center__runout-board">
+                                            <span className="table-center__runout-label">Run {boardIndex + 2}</span>
+                                            <div className="table-board table-board--compact table-center__runout-cards">
+                                                {buildBoardSlots(board).map((slot, index) => (
+                                                    <PokerCard key={`table-center-runout-${boardIndex + 2}-${index}`} card={slot.card} isFaceUp={slot.isFaceUp} size="compact" backLabel={slot.backLabel} />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : null}
+                            {turnMetrics && (currentActor || turnMetrics.kind === "run-it-twice") ? (
                                 <div className={[
                                     "table-center__turn-clock",
                                     turnMetrics.isUsingTimeBank ? "table-center__turn-clock--timebank" : "",
                                 ].filter(Boolean).join(" ")}>
-                                    <strong>{currentActor.displayName}</strong>
-                                    <span>{turnMetrics.isUsingTimeBank ? `Time bank ${formatTurnSeconds(turnMetrics.timeBankSecondsRemaining)}` : `${formatTurnSeconds(turnMetrics.mainSecondsRemaining)} to act`}</span>
+                                    <strong>{turnMetrics.kind === "run-it-twice" ? "Run it twice" : currentActor?.displayName}</strong>
+                                    <span>{turnMetrics.kind === "run-it-twice"
+                                        ? `${formatTurnSeconds(turnMetrics.mainSecondsRemaining)} to vote`
+                                        : turnMetrics.isUsingTimeBank
+                                            ? `Time bank ${formatTurnSeconds(turnMetrics.timeBankSecondsRemaining)}`
+                                            : `${formatTurnSeconds(turnMetrics.mainSecondsRemaining)} to act`}
+                                    </span>
                                 </div>
                             ) : null}
                             <p className="table-center__status">{centerStatus}</p>
@@ -2639,6 +2721,20 @@ export function RoomClient({
                                                     ))}
                                                 </div>
                                             ) : null}
+
+                                            {seat.runItTwiceResponse ? (
+                                                <div
+                                                    className={[
+                                                        "table-seat__run-it-twice-vote",
+                                                        `table-seat__run-it-twice-vote--${seat.runItTwiceResponse}`,
+                                                    ].join(" ")}
+                                                    aria-label={seat.runItTwiceResponse === "yes"
+                                                        ? `${seat.name} voted yes to run it twice`
+                                                        : `${seat.name} voted no to run it twice`}
+                                                >
+                                                    {seat.runItTwiceResponse === "yes" ? "✓" : "×"}
+                                                </div>
+                                            ) : null}
                                         </div>
                                     )}
                                 </article>
@@ -2719,14 +2815,30 @@ export function RoomClient({
                                 <div className="table-ledger-panel__recap">
                                     <div className="table-ledger-panel__recap-header">
                                         <strong>Hand {selectedCompletedHand.handNumber}</strong>
-                                        <span>{selectedCompletedHandRunout?.isActive ? "Running board" : selectedCompletedHand.winningReason === "showdown" ? "Showdown" : "Won before showdown"}</span>
+                                        <span>{selectedCompletedHandRunout?.isActive ? selectedCompletedHandAdditionalBoards.length > 0 ? "Running it twice" : "Running board" : selectedCompletedHand.winningReason === "showdown" ? "Showdown" : "Won before showdown"}</span>
                                     </div>
 
-                                    <div className="table-board table-board--compact table-ledger-panel__board">
-                                        {buildBoardSlots(selectedCompletedHandBoard).map((slot, index) => (
-                                            <PokerCard key={`history-hand-${selectedCompletedHand.handId}-${index}`} card={slot.card} isFaceUp={slot.isFaceUp} size="compact" backLabel={slot.backLabel} />
-                                        ))}
-                                    </div>
+                                    {selectedCompletedHandBoards.map((board, boardIndex) => (
+                                        <div key={`history-hand-${selectedCompletedHand.handId}-board-${boardIndex}`} className="table-ledger-panel__runout-block">
+                                            {selectedCompletedHandBoards.length > 1 ? <span className="table-ledger-panel__section-label">Run {boardIndex + 1}</span> : null}
+                                            <div className="table-board table-board--compact table-ledger-panel__board">
+                                                {buildBoardSlots(board).map((slot, index) => (
+                                                    <PokerCard key={`history-hand-${selectedCompletedHand.handId}-${boardIndex}-${index}`} card={slot.card} isFaceUp={slot.isFaceUp} size="compact" backLabel={slot.backLabel} />
+                                                ))}
+                                            </div>
+
+                                            {!selectedCompletedHandRunout?.isActive && selectedCompletedHandRunoutResults.length > 1 && selectedCompletedHandRunoutResults[boardIndex]?.winners.length ? (
+                                                <ul className="winner-list table-ledger-panel__runout-winners">
+                                                    {selectedCompletedHandRunoutResults[boardIndex]!.winners.map((winner) => (
+                                                        <li key={`${selectedCompletedHand.handId}-${boardIndex}-${winner.accountId}`}>
+                                                            🏆 {snapshot?.players.find((player) => player.accountId === winner.accountId)?.displayName ?? winner.accountId} won {formatNumber(winner.amountWon)}
+                                                            {winner.handLabel ? ` with ${winner.handLabel}` : ""}
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            ) : null}
+                                        </div>
+                                    ))}
 
                                     {selectedCompletedHand.actions.length ? (
                                         <ul className="action-log table-ledger-panel__action-log">
@@ -2758,14 +2870,17 @@ export function RoomClient({
                                     {selectedCompletedHandRunout?.isActive ? (
                                         <p className="muted-copy">Board is still running before the showdown result locks in.</p>
                                     ) : (
-                                        <ul className="winner-list">
-                                            {selectedCompletedHandWinners.map((winner) => (
-                                                <li key={`${selectedCompletedHand.handId}-${winner.accountId}`}>
-                                                    🏆 {snapshot?.players.find((player) => player.accountId === winner.accountId)?.displayName ?? winner.accountId} won {formatNumber(winner.amountWon)}
-                                                    {winner.handLabel ? ` with ${winner.handLabel}` : ""}
-                                                </li>
-                                            ))}
-                                        </ul>
+                                        <>
+                                            {selectedCompletedHandRunoutResults.length > 1 ? <span className="table-ledger-panel__section-label">Overall payout</span> : null}
+                                            <ul className="winner-list">
+                                                {selectedCompletedHandWinners.map((winner) => (
+                                                    <li key={`${selectedCompletedHand.handId}-${winner.accountId}`}>
+                                                        🏆 {snapshot?.players.find((player) => player.accountId === winner.accountId)?.displayName ?? winner.accountId} won {formatNumber(winner.amountWon)}
+                                                        {winner.handLabel ? ` with ${winner.handLabel}` : ""}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </>
                                     )}
                                 </div>
                             ) : currentHand?.actions.length ? null : (
@@ -3206,7 +3321,7 @@ function buildTableSeats(
         const cardAdjustment = getSeatCardAdjustment(position);
         const isHero = Boolean(player && accountId && player.accountId === accountId);
         const isFolded = Boolean(player && currentHand?.foldedAccountIds.includes(player.accountId));
-        const isActive = Boolean(player && currentHand?.actorAccountId === player.accountId);
+        const isActive = Boolean(player && currentHand?.actorAccountId === player.accountId && !currentHand?.runItTwicePrompt);
         const pendingSeatRequest = !player && accountId
             ? snapshot?.pendingSeatRequests.find((request) => request.accountId === accountId && request.seatIndex === seatIndex) ?? null
             : null;
@@ -3279,6 +3394,9 @@ function buildTableSeats(
                     : null,
             contributionLabel: player && currentHand && (currentHand.streetContributions[player.accountId] ?? 0) > 0
                 ? formatNumber(currentHand.streetContributions[player.accountId] ?? 0)
+                : null,
+            runItTwiceResponse: player && currentHand?.runItTwicePrompt
+                ? currentHand.runItTwicePrompt.responsesByAccountId[player.accountId] ?? null
                 : null,
             cardCount: revealedCards ? 2 : (player && currentHand ? currentHand.playerCardCounts[player.accountId] ?? 0 : 0),
             revealedCards,
@@ -3451,15 +3569,22 @@ function buildSeatCardSlots(seat: TableSeatView): CardSlot[] {
 
 function buildAllInRunoutView(lastCompletedHand: LastHandResult | null, nowMs: number): AllInRunoutView | null {
     const allInRunout = lastCompletedHand?.allInRunout;
+    const finalBoards = getCompletedHandBoards(lastCompletedHand);
 
-    if (!lastCompletedHand || !allInRunout || allInRunout.startBoardCount >= lastCompletedHand.board.length) {
+    if (!lastCompletedHand || !allInRunout || finalBoards.length === 0) {
+        return null;
+    }
+
+    const totalRevealSteps = finalBoards.reduce((totalCards, board) => totalCards + Math.max(0, board.length - Math.min(allInRunout.startBoardCount, board.length)), 0);
+
+    if (totalRevealSteps === 0) {
         return null;
     }
 
     if (allInRunout.revealIntervalMs <= 0) {
         return {
             isActive: false,
-            visibleBoard: lastCompletedHand.board,
+            visibleBoards: finalBoards,
             revealedAccountIds: allInRunout.revealedAccountIds,
         };
     }
@@ -3469,19 +3594,25 @@ function buildAllInRunoutView(lastCompletedHand: LastHandResult | null, nowMs: n
     if (Number.isNaN(concludedAtMs)) {
         return {
             isActive: false,
-            visibleBoard: lastCompletedHand.board,
+            visibleBoards: finalBoards,
             revealedAccountIds: allInRunout.revealedAccountIds,
         };
     }
 
-    const revealedCount = Math.min(
-        lastCompletedHand.board.length,
-        allInRunout.startBoardCount + Math.floor(Math.max(0, nowMs - concludedAtMs) / allInRunout.revealIntervalMs),
-    );
+    const revealedSteps = Math.floor(Math.max(0, nowMs - concludedAtMs) / allInRunout.revealIntervalMs);
+    let remainingSteps = revealedSteps;
+    const visibleBoards = finalBoards.map((board) => {
+        const startingCount = Math.min(allInRunout.startBoardCount, board.length);
+        const missingCount = Math.max(0, board.length - startingCount);
+        const revealedForBoard = Math.min(missingCount, remainingSteps);
+        remainingSteps = Math.max(0, remainingSteps - missingCount);
+
+        return board.slice(0, startingCount + revealedForBoard);
+    });
 
     return {
-        isActive: revealedCount < lastCompletedHand.board.length,
-        visibleBoard: lastCompletedHand.board.slice(0, revealedCount),
+        isActive: revealedSteps < totalRevealSteps,
+        visibleBoards,
         revealedAccountIds: allInRunout.revealedAccountIds,
     };
 }
@@ -3511,9 +3642,11 @@ function buildRunoutEquitySnapshot(
     lastCompletedHand: LastHandResult | null,
     allInRunoutView: AllInRunoutView | null,
 ): RunoutEquitySnapshot | null {
-    if (!lastCompletedHand?.allInRunout || !allInRunoutView) {
+    if (!lastCompletedHand?.allInRunout || !allInRunoutView || allInRunoutView.visibleBoards.length !== 1) {
         return null;
     }
+
+    const visibleBoard = allInRunoutView.visibleBoards[0] ?? [];
 
     const participants = allInRunoutView.revealedAccountIds
         .map((accountId) => {
@@ -3529,7 +3662,7 @@ function buildRunoutEquitySnapshot(
         return null;
     }
 
-    const cardsToDraw = 5 - allInRunoutView.visibleBoard.length;
+    const cardsToDraw = 5 - visibleBoard.length;
 
     if (cardsToDraw < 0) {
         return null;
@@ -3537,7 +3670,7 @@ function buildRunoutEquitySnapshot(
 
     const knownCardKeys = new Set<string>();
 
-    for (const card of allInRunoutView.visibleBoard) {
+    for (const card of visibleBoard) {
         const cardKey = buildCardIdentity(card);
 
         if (knownCardKeys.has(cardKey)) {
@@ -3565,7 +3698,7 @@ function buildRunoutEquitySnapshot(
         cardsToDraw,
         [
             lastCompletedHand.handId,
-            buildCardListKey(allInRunoutView.visibleBoard),
+            buildCardListKey(visibleBoard),
             buildAccountListKey(participants.map((participant) => participant.accountId)),
         ].join(":"),
     );
@@ -3577,7 +3710,7 @@ function buildRunoutEquitySnapshot(
     const totalShares = new Map(participants.map((participant) => [participant.accountId, 0]));
 
     for (const completion of boardCompletions) {
-        const fullBoard = [...allInRunoutView.visibleBoard, ...completion];
+        const fullBoard = [...visibleBoard, ...completion];
         let bestHand = evaluateHoldemHand([...participants[0]!.holeCards, ...fullBoard]);
         let winningAccountIds = [participants[0]!.accountId];
 
@@ -3620,6 +3753,23 @@ function buildRunoutEquitySnapshot(
                 .map(([accountId]) => accountId),
         ),
     };
+}
+
+function getCompletedHandBoards(lastCompletedHand: LastHandResult | null): Card[][] {
+    if (!lastCompletedHand) {
+        return [];
+    }
+
+    const runoutBoards = lastCompletedHand.allInRunout?.runouts?.map((runout) => runout.board) ?? [];
+    return runoutBoards.length ? runoutBoards : [lastCompletedHand.board];
+}
+
+function getCompletedHandRunoutResults(lastCompletedHand: LastHandResult | null): NonNullable<NonNullable<LastHandResult["allInRunout"]>["runouts"]> {
+    return lastCompletedHand?.allInRunout?.runouts ?? [];
+}
+
+function buildBoardCollectionKey(boards: Card[][]): string {
+    return boards.map((board) => buildCardListKey(board)).join("/");
 }
 
 function hasCompleteHoleCards(cards: [Card | null, Card | null] | undefined): cards is [Card, Card] {
@@ -3802,6 +3952,7 @@ function createEmptyAdminOptionsDraft(): AdminOptionsDraft {
         timeBankSeconds: "",
         timeBankRefillHands: "",
         revealAllShowdownHands: false,
+        runItTwiceEnabled: false,
     };
 }
 
@@ -3823,6 +3974,7 @@ function buildAdminOptionsDraft(snapshot: RoomSnapshot): AdminOptionsDraft {
         timeBankSeconds: snapshot.adminOptions.timeBankSeconds === null ? "" : String(snapshot.adminOptions.timeBankSeconds),
         timeBankRefillHands: snapshot.adminOptions.timeBankRefillHands === null ? "" : String(snapshot.adminOptions.timeBankRefillHands),
         revealAllShowdownHands: snapshot.adminOptions.revealAllShowdownHands,
+        runItTwiceEnabled: snapshot.adminOptions.runItTwiceEnabled,
     };
 }
 
@@ -4058,14 +4210,36 @@ function formatSessionLedgerHandle(accountId: string): string {
     return `@${accountId.slice(0, 12)}`;
 }
 
-function buildTurnMetrics(snapshot: RoomSnapshot | null, nowMs: number) {
-    if (!snapshot?.currentHand?.actorAccountId || !snapshot.turnState.currentTurnStartedAt || snapshot.turnState.turnSeconds === null) {
+function buildTurnMetrics(snapshot: RoomSnapshot | null, nowMs: number): null | {
+    actorAccountId: string | null;
+    kind: "turn" | "run-it-twice";
+    isUsingTimeBank: boolean;
+    mainSecondsRemaining: number;
+    timeBankSecondsRemaining: number;
+} {
+    if (!snapshot?.currentHand || !snapshot.turnState.currentTurnStartedAt || snapshot.turnState.turnSeconds === null) {
         return null;
     }
 
     const startedAtMs = Date.parse(snapshot.turnState.currentTurnStartedAt);
 
     if (Number.isNaN(startedAtMs)) {
+        return null;
+    }
+
+    if (snapshot.currentHand.runItTwicePrompt) {
+        const mainRemainingMs = Math.max(0, (snapshot.turnState.turnSeconds * 1000) - Math.max(0, nowMs - startedAtMs));
+
+        return {
+            actorAccountId: null,
+            kind: "run-it-twice",
+            isUsingTimeBank: false,
+            mainSecondsRemaining: Math.max(0, Math.ceil(mainRemainingMs / 1000)),
+            timeBankSecondsRemaining: 0,
+        };
+    }
+
+    if (!snapshot.currentHand.actorAccountId) {
         return null;
     }
 
@@ -4080,6 +4254,7 @@ function buildTurnMetrics(snapshot: RoomSnapshot | null, nowMs: number) {
 
     return {
         actorAccountId: snapshot.currentHand.actorAccountId,
+        kind: "turn",
         isUsingTimeBank: mainRemainingMs === 0 && timeBankRemainingMs < actorTimeBankMs,
         mainSecondsRemaining: Math.max(0, Math.ceil(mainRemainingMs / 1000)),
         timeBankSecondsRemaining: Math.max(0, Math.ceil(timeBankRemainingMs / 1000)),
@@ -4342,6 +4517,47 @@ function describeHeroState(heroActionState: HeroActionState | null, heroPlayer: 
     return "Waiting on another player to act.";
 }
 
+function describeRunItTwiceVoteState(
+    prompt: NonNullable<RoomSnapshot["currentHand"]>["runItTwicePrompt"],
+    heroPlayer: RoomPlayer | null,
+): string {
+    if (!prompt) {
+        return "Waiting for the next action window.";
+    }
+
+    const unansweredCount = prompt.eligibleAccountIds.filter((accountId) => !prompt.responsesByAccountId[accountId]).length;
+    const hasNoVote = Object.values(prompt.responsesByAccountId).includes("no");
+    const everyoneAgreed = prompt.eligibleAccountIds.every((accountId) => prompt.responsesByAccountId[accountId] === "yes");
+
+    if (hasNoVote) {
+        return "A player declined. Dealing a single board.";
+    }
+
+    if (everyoneAgreed) {
+        return "Everyone agreed. Running it twice.";
+    }
+
+    if (!heroPlayer || !prompt.eligibleAccountIds.includes(heroPlayer.accountId)) {
+        return unansweredCount > 0
+            ? `Run it twice vote underway. Waiting on ${unansweredCount} player${unansweredCount === 1 ? "" : "s"}.`
+            : "Run it twice vote in progress.";
+    }
+
+    const response = prompt.responsesByAccountId[heroPlayer.accountId];
+
+    if (response === "yes") {
+        return unansweredCount > 0
+            ? `You voted yes. Waiting on ${unansweredCount} more player${unansweredCount === 1 ? "" : "s"}.`
+            : "You voted yes. Waiting for the board to run twice.";
+    }
+
+    if (response === "no") {
+        return "You voted no. The hand will continue with a single board.";
+    }
+
+    return "Run it twice is available here. Everyone in the showdown has to agree.";
+}
+
 function buildCenterStatus(snapshot: RoomSnapshot | null, nextHandCountdown: string | null): string {
     if (!snapshot) {
         return "Loading table state.";
@@ -4349,6 +4565,20 @@ function buildCenterStatus(snapshot: RoomSnapshot | null, nextHandCountdown: str
 
     if (snapshot.status === "paused") {
         return "Table paused by admin.";
+    }
+
+    if (snapshot.currentHand?.runItTwicePrompt) {
+        const prompt = snapshot.currentHand.runItTwicePrompt;
+
+        if (Object.values(prompt.responsesByAccountId).includes("no")) {
+            return "Run it twice declined. Dealing one board.";
+        }
+
+        if (prompt.eligibleAccountIds.every((accountId) => prompt.responsesByAccountId[accountId] === "yes")) {
+            return "Run it twice agreed. Dealing two boards.";
+        }
+
+        return "Run it twice vote in progress.";
     }
 
     if (snapshot.currentHand?.actorAccountId) {

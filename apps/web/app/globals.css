@@ -1104,6 +1104,32 @@ button {
   z-index: 1;
 }
 
+.table-center__runout-boards {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+}
+
+.table-center__runout-board {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+}
+
+.table-center__runout-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(245, 240, 223, 0.64);
+}
+
+.table-center__runout-cards {
+  padding: 8px 12px;
+  border-radius: 18px;
+  background: rgba(10, 41, 29, 0.48);
+  border: 1px solid rgba(245, 240, 223, 0.08);
+}
+
 .table-center__status {
   max-width: 48ch;
   color: rgba(245, 240, 223, 0.9);
@@ -1189,6 +1215,34 @@ button {
   right: 18px;
   display: flex;
   gap: 6px;
+}
+
+.table-seat__run-it-twice-vote {
+  position: absolute;
+  top: 50%;
+  right: -14px;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  font-size: 1rem;
+  font-weight: 900;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
+}
+
+.table-seat__run-it-twice-vote--yes {
+  background: rgba(31, 92, 61, 0.96);
+  border: 1px solid rgba(118, 238, 165, 0.34);
+  color: #dbffe9;
+}
+
+.table-seat__run-it-twice-vote--no {
+  background: rgba(117, 36, 36, 0.96);
+  border: 1px solid rgba(255, 126, 106, 0.34);
+  color: #ffd6cc;
 }
 
 .table-seat__card-back {
@@ -3098,6 +3152,15 @@ button {
   align-items: flex-start;
 }
 
+.table-ledger-panel__runout-block {
+  display: grid;
+  gap: 8px;
+}
+
+.table-ledger-panel__runout-winners {
+  margin-top: -2px;
+}
+
 .table-ledger-panel__section-label {
   font-size: 0.72rem;
   letter-spacing: 0.14em;
@@ -3474,10 +3537,40 @@ button {
   color: #dbffe9;
 }
 
+.table-action-panel__button--yes {
+  border-color: rgba(118, 238, 165, 0.28);
+  background: rgba(31, 92, 61, 0.28);
+  color: #dbffe9;
+}
+
+.table-action-panel__button--no {
+  border-color: rgba(255, 126, 106, 0.28);
+  background: rgba(117, 36, 36, 0.2);
+  color: #ffd6cc;
+}
+
 .table-action-panel__button--ghost {
   display: grid;
   place-items: center;
   opacity: 0.56;
+}
+
+.table-action-panel__vote-block {
+  display: grid;
+  gap: 10px;
+}
+
+.table-action-panel__vote-header {
+  display: grid;
+  gap: 4px;
+}
+
+.table-action-panel__grid--vote {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.table-action-panel__vote-copy {
+  margin: 0;
 }
 
 .table-action-panel__waiting-copy {

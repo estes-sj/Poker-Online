@@ -6,6 +6,7 @@ import type {
   LastHandResult,
   PlayerActionState,
   PlayerActionType,
+  RunItTwiceResponse,
   TableState,
 } from "@poker/domain";
 
@@ -134,6 +135,7 @@ export interface UpdateRoomAdminOptionsRequest {
   timeBankSeconds: number | null;
   timeBankRefillHands: number | null;
   revealAllShowdownHands: boolean;
+  runItTwiceEnabled: boolean;
 }
 
 export interface RoomManagementAdmin {
@@ -208,6 +210,12 @@ export interface RoomActionRequest {
   amount?: number;
 }
 
+export interface RoomRunItTwiceDecisionRequest {
+  slug: string;
+  accountId: string;
+  willing: boolean;
+}
+
 export interface RoomSnapshot {
   roomId: string;
   slug: string;
@@ -257,6 +265,11 @@ export interface RoomSnapshot {
     actions: HandActionRecord[];
     heroHoleCards: [Card, Card] | null;
     heroActionState: PlayerActionState | null;
+    runItTwicePrompt: null | {
+      eligibleAccountIds: string[];
+      responsesByAccountId: Record<string, RunItTwiceResponse>;
+      createdAt: string;
+    };
     playerCardCounts: Record<string, number>;
     remainingDeckCount: number;
   };
@@ -299,6 +312,7 @@ export interface RoomAdminOptionsState {
   timeBankSeconds: number | null;
   timeBankRefillHands: number | null;
   revealAllShowdownHands: boolean;
+  runItTwiceEnabled: boolean;
 }
 
 export interface RoomSeatReaction {
@@ -371,6 +385,9 @@ export interface RoomRegistry {
   cleanupBustedPlayers(slug: string): Promise<RoomSnapshot>;
   startHand(input: StartHandRequest): Promise<RoomSnapshot>;
   actOnHand(input: RoomActionRequest): Promise<RoomSnapshot>;
+  submitRunItTwiceDecision(input: RoomRunItTwiceDecisionRequest): Promise<RoomSnapshot>;
+  expirePendingRunItTwiceDecision(slug: string): Promise<RoomSnapshot>;
+  resolvePendingRunItTwiceDecision(slug: string): Promise<RoomSnapshot>;
   getRoomSnapshot(slug: string, accountId?: string): Promise<RoomSnapshot>;
   getViewerRoomSnapshot(slug: string, accountId?: string): Promise<RoomSnapshot>;
   assertManagementAdmin(sessionToken?: string): Promise<RoomManagementAdmin>;
