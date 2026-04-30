@@ -19,6 +19,7 @@ const MOBILE_LAYOUT_RECOMMENDATION_STORAGE_KEY = "river-club-mobile-layout-recom
 const ACTION_PAD_VIEWPORT_MARGIN = 16;
 const ACTION_PAD_TOP_MARGIN = 96;
 const QUICK_REACTIONS = ["👏", "🔥", "😂", "😮", "💀"] as const;
+const BOT_ACCOUNT_ID_PREFIX = "bot_";
 const EmojiPicker = dynamic(() => import("@emoji-mart/react"), { ssr: false });
 const ENGINE_EXPLAINER_SECTIONS = [
     {
@@ -314,6 +315,7 @@ export function RoomClient({
     const [isMobileActionMenuOpen, setIsMobileActionMenuOpen] = useState(false);
     const [gestureInput, setGestureInput] = useState("");
     const [seatRequestStack, setSeatRequestStack] = useState("");
+    const [botDisplayName, setBotDisplayName] = useState("");
     const [rebuyAmount, setRebuyAmount] = useState("");
     const [preselectedHeroAction, setPreselectedHeroAction] = useState<null | "check_or_fold">(null);
     const [seatRequestPrompt, setSeatRequestPrompt] = useState<SeatRequestPromptState | null>(null);
@@ -757,6 +759,8 @@ export function RoomClient({
     const activeAdminRebuyRequest = activeAdminApproval?.kind === "rebuy"
         ? snapshot?.pendingRebuyRequests.find((request) => request.id === activeAdminApproval.requestId) ?? null
         : null;
+    const availableBotSeatIndices = snapshot ? getAvailableBotSeatIndices(snapshot) : [];
+    const defaultBotDisplayName = snapshot ? getNextBotDisplayName(snapshot) : "Bot 1";
     const currentActor = snapshot?.currentHand?.actorAccountId
         ? snapshot.players.find((player) => player.accountId === snapshot.currentHand?.actorAccountId) ?? null
         : null;
@@ -1242,6 +1246,35 @@ export function RoomClient({
         }
 
         await handleSeat(seatRequestPrompt.seatIndex, seatRequestPrompt.requestedStack, true);
+    }
+
+    async function handleSeatBot(seatIndex: number) {
+        if (!accountId || !snapshot || !isAdmin) {
+            setActionError("Only the room admin can seat bots.");
+            return;
+        }
+
+        let requestedStack = 0;
+
+        try {
+            requestedStack = parseRequiredWholeNumber(seatRequestStack || String(snapshot.startingStack), "Bot stack");
+        } catch (error) {
+            setActionError(error instanceof Error ? error.message : "Enter a valid bot stack before seating a bot.");
+            return;
+        }
+
+        try {
+            await submitRoomMutation(`/v1/rooms/${slug}/admin/seat-bot`, {
+                accountId,
+                displayName: botDisplayName.trim() || getNextBotDisplayName(snapshot),
+                seatIndex,
+                requestedStack,
+            });
+            setSeatRequestStack(String(requestedStack));
+            setBotDisplayName("");
+        } catch {
+            return;
+        }
     }
 
     async function handleReadyToggle() {
@@ -1995,6 +2028,47 @@ export function RoomClient({
                                                     {currentHand ? <p className="muted-copy">Stop becomes available once the current hand is finished.</p> : null}
                                                 </section>
 
+                                                <section className="table-admin-card">
+                                                    <strong>Bots</strong>
+                                                    <p className="muted-copy">Fill open seats with ready bots so you can start a game before taking a seat yourself.</p>
+                                                    <input
+                                                        className="control-input"
+                                                        type="text"
+                                                        value={botDisplayName}
+                                                        onChange={(event) => setBotDisplayName(event.target.value)}
+                                                        placeholder={defaultBotDisplayName}
+                                                    />
+                                                    <input
+                                                        className="control-input"
+                                                        type="number"
+                                                        min={1}
+                                                        step={1}
+                                                        value={seatRequestStack}
+                                                        onChange={(event) => setSeatRequestStack(event.target.value)}
+                                                        placeholder="bot stack"
+                                                    />
+
+                                                    {availableBotSeatIndices.length ? (
+                                                        <div className="table-admin-list">
+                                                            {availableBotSeatIndices.map((seatIndex) => (
+                                                                <article key={`bot-seat-${seatIndex}`} className="table-admin-list__item">
+                                                                    <div>
+                                                                        <strong>Seat {seatIndex + 1}</strong>
+                                                                        <span>{botDisplayName.trim() || defaultBotDisplayName} joins ready</span>
+                                                                    </div>
+                                                                    <button className="button button--primary" type="button" onClick={() => void handleSeatBot(seatIndex)} disabled={isMutating}>
+                                                                        Add bot
+                                                                    </button>
+                                                                </article>
+                                                            ))}
+                                                        </div>
+                                                    ) : snapshot.pendingSeatRequests.length ? (
+                                                        <p className="muted-copy">No open bot seats are available while seat requests are pending.</p>
+                                                    ) : (
+                                                        <p className="muted-copy">No open seats are available for bots right now.</p>
+                                                    )}
+                                                </section>
+
                                                 <section className="table-admin-card table-admin-card--wide">
                                                     <strong>Table options</strong>
                                                     <div className="table-admin-form-grid">
@@ -2204,19 +2278,23 @@ export function RoomClient({
                                                 <section className="table-admin-card table-admin-card--wide">
                                                     <strong>Players</strong>
                                                     <div className="table-admin-list">
-                                                        {snapshot.players.map((player) => (
-                                                            <article key={player.accountId} className="table-admin-list__item">
-                                                                <div>
-                                                                    <strong>{player.displayName}</strong>
-                                                                    <span>Seat {player.seatIndex + 1} · Stack {formatNumber(player.stack)}</span>
-                                                                </div>
-                                                                {player.accountId !== snapshot.adminAccountId ? (
-                                                                    <button className="button button--danger" type="button" onClick={() => void handleRemovePlayer(player.accountId)} disabled={isMutating || Boolean(currentHand?.playerCardCounts[player.accountId])}>
-                                                                        Remove
-                                                                    </button>
-                                                                ) : <span className="chip-pill">Admin</span>}
-                                                            </article>
-                                                        ))}
+                                                        {snapshot.players.map((player) => {
+                                                            const isBotPlayer = isBotAccountId(player.accountId);
+
+                                                            return (
+                                                                <article key={player.accountId} className="table-admin-list__item">
+                                                                    <div>
+                                                                        <strong>{player.displayName}</strong>
+                                                                        <span>Seat {player.seatIndex + 1} · Stack {formatNumber(player.stack)}{isBotPlayer ? " · Bot" : ""}</span>
+                                                                    </div>
+                                                                    {player.accountId !== snapshot.adminAccountId ? (
+                                                                        <button className="button button--danger" type="button" onClick={() => void handleRemovePlayer(player.accountId)} disabled={isMutating || Boolean(currentHand?.playerCardCounts[player.accountId])}>
+                                                                            {isBotPlayer ? "Remove bot" : "Remove"}
+                                                                        </button>
+                                                                    ) : <span className="chip-pill">Admin</span>}
+                                                                </article>
+                                                            );
+                                                        })}
                                                     </div>
                                                 </section>
                                             </div>
@@ -3267,7 +3345,21 @@ function getDisplayedHandsWonCount(
 
 function buildSeatMarkers(snapshot: RoomSnapshot | null, player: RoomPlayer | null): Array<{ label: string; tone: "dealer" | "blind" | "admin" }> {
     if (!snapshot?.currentHand || !player) {
-        return player?.accountId === snapshot?.adminAccountId ? [{ label: "Admin", tone: "admin" }] : [];
+        if (!player) {
+            return [];
+        }
+
+        const markers: Array<{ label: string; tone: "dealer" | "blind" | "admin" }> = [];
+
+        if (isBotAccountId(player.accountId)) {
+            markers.push({ label: "Bot", tone: "admin" });
+        }
+
+        if (player.accountId === snapshot?.adminAccountId) {
+            markers.push({ label: "Admin", tone: "admin" });
+        }
+
+        return markers;
     }
 
     const markers: Array<{ label: string; tone: "dealer" | "blind" | "admin" }> = [];
@@ -3284,11 +3376,31 @@ function buildSeatMarkers(snapshot: RoomSnapshot | null, player: RoomPlayer | nu
         markers.push({ label: "BB", tone: "blind" });
     }
 
+    if (isBotAccountId(player.accountId)) {
+        markers.push({ label: "Bot", tone: "admin" });
+    }
+
     if (player.accountId === snapshot.adminAccountId) {
         markers.push({ label: "Admin", tone: "admin" });
     }
 
     return markers;
+}
+
+function isBotAccountId(accountId: string): boolean {
+    return accountId.startsWith(BOT_ACCOUNT_ID_PREFIX);
+}
+
+function getAvailableBotSeatIndices(snapshot: RoomSnapshot): number[] {
+    const occupiedSeats = new Set(snapshot.players.map((player) => player.seatIndex));
+    const pendingSeats = new Set(snapshot.pendingSeatRequests.map((request) => request.seatIndex));
+
+    return Array.from({ length: snapshot.maxPlayers }, (_, seatIndex) => seatIndex)
+        .filter((seatIndex) => !occupiedSeats.has(seatIndex) && !pendingSeats.has(seatIndex));
+}
+
+function getNextBotDisplayName(snapshot: RoomSnapshot): string {
+    return `Bot ${snapshot.players.filter((player) => isBotAccountId(player.accountId)).length + 1}`;
 }
 
 interface CardSlot {

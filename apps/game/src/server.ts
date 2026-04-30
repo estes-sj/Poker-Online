@@ -7,6 +7,9 @@ import { registerRoutes } from "./http/routes.js";
 import { PrismaRoomRegistry } from "./runtime/prisma-room-registry.js";
 import type { AutoExpiringRoom, RoomRegistry, RoomSnapshot } from "./runtime/room-service.js";
 
+const BOT_ACCOUNT_ID_PREFIX = "bot_";
+const BOT_ACTION_DELAY_MS = 900;
+
 interface ClientMessage {
   type: "subscribe_room" | "seat_player" | "set_ready" | "admin_start_hand";
   slug: string;
@@ -420,6 +423,42 @@ export function buildGameServer() {
     return Math.max(0, totalBudgetMs - (Date.now() - turnStartedAt));
   };
 
+  const executeBotTurn = async (slug: string) => {
+    let snapshot: RoomSnapshot;
+
+    try {
+      snapshot = await registry.getRoomSnapshot(slug);
+    } catch (error) {
+      app.log.warn({ slug, error }, "Unable to read room before scheduled bot action.");
+      return;
+    }
+
+    const actorAccountId = snapshot.currentHand?.actorAccountId;
+
+    if (!actorAccountId || !isBotAccountId(actorAccountId) || snapshot.status !== "active") {
+      return;
+    }
+
+    try {
+      const actorSnapshot = await registry.getRoomSnapshot(slug, actorAccountId);
+      const botAction = chooseBotTurnAction(actorSnapshot.currentHand?.heroActionState ?? null);
+
+      if (!botAction) {
+        await scheduleRoomTurnTimeout(slug);
+        return;
+      }
+
+      await registry.actOnHand({
+        slug,
+        accountId: actorAccountId,
+        actionType: botAction.actionType,
+        amount: botAction.amount,
+      });
+    } catch (error) {
+      app.log.debug({ slug, error }, "Bot auto-action did not resolve cleanly.");
+    }
+  };
+
   const executeTurnTimeout = async (slug: string) => {
     let snapshot: RoomSnapshot;
 
@@ -476,6 +515,14 @@ export function buildGameServer() {
       snapshot = await registry.getRoomSnapshot(slug);
     } catch (error) {
       app.log.warn({ slug, error }, "Unable to schedule room turn timeout.");
+      return;
+    }
+
+    if (snapshot.currentHand?.actorAccountId && isBotAccountId(snapshot.currentHand.actorAccountId) && snapshot.status === "active") {
+      turnTimeoutTimers.set(slug, setTimeout(() => {
+        turnTimeoutTimers.delete(slug);
+        void executeBotTurn(slug);
+      }, BOT_ACTION_DELAY_MS));
       return;
     }
 
@@ -716,4 +763,58 @@ function getErrorMessage(error: unknown): string {
   }
 
   return "Unexpected error.";
+}
+
+function isBotAccountId(accountId: string): boolean {
+  return accountId.startsWith(BOT_ACCOUNT_ID_PREFIX);
+}
+
+function chooseBotTurnAction(
+  actionState: NonNullable<NonNullable<RoomSnapshot["currentHand"]>["heroActionState"]> | null,
+): { actionType: "fold" | "check" | "call" | "bet" | "raise" | "all_in"; amount?: number } | null {
+  if (!actionState?.canAct) {
+    return null;
+  }
+
+  const aggressiveAction = actionState.allowedActions.includes("raise")
+    ? "raise"
+    : actionState.allowedActions.includes("bet")
+      ? "bet"
+      : null;
+
+  if (actionState.allowedActions.includes("check")) {
+    if (aggressiveAction && actionState.minRaiseTo !== null && Math.random() < 0.24) {
+      return {
+        actionType: aggressiveAction,
+        amount: actionState.minRaiseTo,
+      };
+    }
+
+    return { actionType: "check" };
+  }
+
+  if (actionState.allowedActions.includes("call")) {
+    const callPressure = actionState.callAmount / Math.max(actionState.maxRaiseTo, 1);
+
+    if (aggressiveAction && actionState.minRaiseTo !== null && callPressure <= 0.12 && Math.random() < 0.18) {
+      return {
+        actionType: aggressiveAction,
+        amount: actionState.minRaiseTo,
+      };
+    }
+
+    if (callPressure <= 0.3 || Math.random() < 0.2) {
+      return { actionType: "call" };
+    }
+  }
+
+  if (actionState.allowedActions.includes("all_in") && actionState.maxRaiseTo > 0 && Math.random() < 0.08) {
+    return { actionType: "all_in" };
+  }
+
+  if (actionState.allowedActions.includes("fold")) {
+    return { actionType: "fold" };
+  }
+
+  return null;
 }

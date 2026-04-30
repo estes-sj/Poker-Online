@@ -33,6 +33,14 @@ export interface SeatPlayerRequest {
   requestedStack?: number;
 }
 
+export interface SeatBotRequest {
+  slug: string;
+  accountId: string;
+  displayName?: string;
+  seatIndex: number;
+  requestedStack?: number;
+}
+
 export interface PlayerReadyRequest {
   slug: string;
   accountId: string;
@@ -344,6 +352,7 @@ export interface RoomRegistry {
   createRoom(input: CreateRoomRequest): Promise<RoomSnapshot>;
   joinRoom(input: JoinRoomRequest): Promise<RoomSnapshot>;
   seatPlayer(input: SeatPlayerRequest): Promise<RoomSnapshot>;
+  seatBot(input: SeatBotRequest): Promise<RoomSnapshot>;
   setReady(input: PlayerReadyRequest): Promise<RoomSnapshot>;
   setSittingOut(input: PlayerSitOutRequest): Promise<RoomSnapshot>;
   leaveSeat(input: LeaveSeatRequest): Promise<RoomSnapshot>;

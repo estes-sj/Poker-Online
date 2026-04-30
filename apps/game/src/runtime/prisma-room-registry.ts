@@ -63,6 +63,7 @@ import type {
   RoomSnapshot,
   RoomTurnState,
   RoomManagementAdmin,
+  SeatBotRequest,
   SeatPlayerRequest,
   StartHandRequest,
   StopRoomRequest,
@@ -84,6 +85,7 @@ const MAX_SEAT_GESTURES = 12;
 const MAX_RECENT_COMPLETED_HANDS = 12;
 const REACTION_DURATION_MS = 4_000;
 const MAX_AUTO_EXPIRE_HOURS = 24 * 365;
+const BOT_ACCOUNT_ID_PREFIX = "bot_";
 
 type PrismaClientLike = PrismaClient;
 
@@ -496,6 +498,63 @@ export class PrismaRoomRegistry implements RoomRegistry {
           roomId: room.id,
           userId: input.accountId,
           displayName: input.displayName,
+          seatIndex: input.seatIndex,
+          buyInTotal: requestedStack,
+        },
+      });
+
+      await transaction.room.update({
+        where: { id: room.id },
+        data: this.roomUpdatePayload(nextRuntimeState),
+      });
+    });
+
+    await this.onRoomUpdated?.(input.slug);
+    return this.toSnapshot(nextRuntimeState, input.accountId);
+  }
+
+  async seatBot(input: SeatBotRequest): Promise<RoomSnapshot> {
+    const room = await this.requireRoom(input.slug);
+    const runtimeState = this.requireRuntimeState(room);
+    this.assertViewerHasRoomAccess(runtimeState, input.accountId);
+
+    if (runtimeState.table.adminAccountId !== input.accountId) {
+      throw new Error("Only the room admin can seat bots.");
+    }
+
+    const requestedStack = normalizeRequestedStack(input.requestedStack, runtimeState.table.startingStack);
+    const displayName = normalizeBotDisplayName(input.displayName, runtimeState.table);
+    const botAccountId = `${BOT_ACCOUNT_ID_PREFIX}${crypto.randomUUID()}`;
+    const botUsername = buildBotUsername(room.slug, botAccountId);
+    const botEmail = `${botUsername}@bots.local`;
+    const botPasswordSecret = `bot:${botAccountId}:${crypto.randomUUID()}`;
+    const seatAccounting = buildSeatApprovalAccounting(runtimeState, botAccountId, requestedStack, null);
+    const approvedSeat = applyApprovedSeat(runtimeState, {
+      accountId: botAccountId,
+      displayName,
+      seatIndex: input.seatIndex,
+      requestedStack,
+    }, seatAccounting);
+    const readyTable = setPlayerReady(approvedSeat.table, botAccountId, true);
+    const nextRuntimeState = syncRuntimeState(approvedSeat.nextRuntimeState, readyTable, {
+      ensurePlayerAccountId: botAccountId,
+    });
+
+    await this.database.$transaction(async (transaction) => {
+      await transaction.user.create({
+        data: {
+          id: botAccountId,
+          email: botEmail,
+          username: botUsername,
+          passwordHash: hashSecret(botPasswordSecret),
+        },
+      });
+
+      await transaction.tableParticipant.create({
+        data: {
+          roomId: room.id,
+          userId: botAccountId,
+          displayName,
           seatIndex: input.seatIndex,
           buyInTotal: requestedStack,
         },
@@ -2560,6 +2619,26 @@ function buildSeatApprovalAccounting(
     nextBuyInTotal: countsAsRebuy ? previousBuyInTotal + requestedStack : requestedStack,
     countsAsRebuy,
   };
+}
+
+function normalizeBotDisplayName(displayName: string | undefined, table: TableState): string {
+  const trimmed = displayName?.trim();
+
+  if (trimmed) {
+    return trimmed;
+  }
+
+  return `Bot ${table.players.filter((player) => isBotAccountId(player.accountId)).length + 1}`;
+}
+
+function buildBotUsername(slug: string, accountId: string): string {
+  const slugPart = slug.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "room";
+  const suffix = accountId.slice(BOT_ACCOUNT_ID_PREFIX.length, BOT_ACCOUNT_ID_PREFIX.length + 12).replace(/[^a-z0-9]+/g, "");
+  return `bot_${slugPart}_${suffix}`;
+}
+
+function isBotAccountId(accountId: string): boolean {
+  return accountId.startsWith(BOT_ACCOUNT_ID_PREFIX);
 }
 
 function applyApprovedRebuy(

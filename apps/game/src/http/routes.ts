@@ -355,6 +355,25 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
     }
   });
 
+  app.post("/v1/rooms/:slug/admin/seat-bot", async (request, reply) => {
+    const params = request.params as Record<string, unknown>;
+    const body = request.body as Record<string, unknown>;
+
+    try {
+      const snapshot = await registry.seatBot({
+        slug: requireString(params.slug, "slug"),
+        accountId: requireString(body.accountId, "accountId"),
+        displayName: optionalString(body.displayName),
+        seatIndex: requireNumber(body.seatIndex, "seatIndex"),
+        requestedStack: optionalNumber(body.requestedStack),
+      });
+
+      return reply.send(snapshot);
+    } catch (error) {
+      return reply.code(400).send({ error: getErrorMessage(error) });
+    }
+  });
+
   app.post("/v1/rooms/:slug/reveal-cards", async (request, reply) => {
     const params = request.params as Record<string, unknown>;
     const body = request.body as Record<string, unknown>;
