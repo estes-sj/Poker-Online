@@ -169,24 +169,29 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
     const roomCreationNotice = roomCreationPolicy.adminOnly
         ? sessionUsername
             ? isConfiguredRoomCreationAdmin(sessionUsername, roomCreationPolicy.adminUsername)
-                ? `Only ${roomCreationPolicy.adminUsername ?? "the configured admin"} can create rooms here, and you are signed in as that account.`
-                : `Only ${roomCreationPolicy.adminUsername ?? "the configured admin"} can create rooms here. You are signed in as ${sessionUsername}.`
-            : `Only ${roomCreationPolicy.adminUsername ?? "the configured admin"} can create rooms here. Sign in with that account to open a new table.`
+                ? `Room creation is limited to ${roomCreationPolicy.adminUsername ?? "the configured admin"}, and you are signed in with that host account.`
+                : `Room creation is limited to ${roomCreationPolicy.adminUsername ?? "the configured admin"}. You are signed in as ${sessionUsername}.`
+            : `Room creation is limited to ${roomCreationPolicy.adminUsername ?? "the configured admin"}. Sign in with that host account to open a table.`
         : null;
 
     return (
-        <div className="control-desk" id="host-a-game">
-            <section className="ui-panel hero__panel">
+        <div className="control-desk control-desk--landing" id="host-a-game">
+            <section className="ui-panel hero__panel control-desk__panel">
                 <header className="ui-panel__header">
-                    <span className="ui-panel__eyebrow">Identity</span>
-                    <h3 className="ui-panel__title">{session ? `Signed in as ${session.account.username}` : "Create your table host account"}</h3>
+                    <span className="ui-panel__eyebrow">Account access</span>
+                    <h3 className="ui-panel__title">{session ? `Signed in as ${session.account.username}` : "Create an account or sign in"}</h3>
                 </header>
-                <div className="ui-panel__body">
+                <div className="ui-panel__body control-desk__body">
                     {session ? (
-                        <div className="status-card">
-                            <p>Account ID</p>
-                            <strong>{session.account.id}</strong>
+                        <div className="status-card control-desk__status">
+                            <span className="control-desk__kicker">Signed in</span>
+                            <strong>{session.account.username}</strong>
                             <p>{session.account.email}</p>
+                            <p className="muted-copy">
+                                {canManageRooms
+                                    ? "This account can open and manage rooms on this deployment."
+                                    : "Use this account to join rooms now and return to previous sessions later."}
+                            </p>
                             <div className="status-card__actions">
                                 <Link className="button button--secondary" href="/rooms">
                                     Browse rooms
@@ -202,37 +207,50 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                             </div>
                         </div>
                     ) : (
-                        <div className="form-stack">
-                            <form className="control-form" action={handleRegister}>
-                                <input className="control-input" type="email" name="email" placeholder="email" required />
-                                <input className="control-input" type="text" name="username" placeholder="username" required />
-                                <input className="control-input" type="password" name="password" placeholder="password" required minLength={8} />
-                                <button className="button button--primary" type="submit" disabled={isRegistering}>
-                                    {isRegistering ? "Creating account..." : "Create account"}
-                                </button>
-                                {registerError ? <p className="form-error">{registerError}</p> : null}
-                            </form>
+                        <div className="control-desk__auth-stack">
+                            <section className="control-desk__form-block">
+                                <div className="control-desk__form-copy">
+                                    <strong>New account</strong>
+                                    <p>Create an account to join rooms now and open tables later if you are hosting.</p>
+                                </div>
+                                <form className="control-form" action={handleRegister}>
+                                    <input className="control-input" type="email" name="email" placeholder="email" required />
+                                    <input className="control-input" type="text" name="username" placeholder="username" required />
+                                    <input className="control-input" type="password" name="password" placeholder="password" required minLength={8} />
+                                    <button className="button button--primary" type="submit" disabled={isRegistering}>
+                                        {isRegistering ? "Creating account..." : "Create account"}
+                                    </button>
+                                    {registerError ? <p className="form-error">{registerError}</p> : null}
+                                </form>
+                            </section>
 
-                            <form className="control-form" action={handleLogin}>
-                                <input className="control-input" type="text" name="identifier" placeholder="email or username" required />
-                                <input className="control-input" type="password" name="password" placeholder="password" required />
-                                <button className="button button--secondary" type="submit" disabled={isLoggingIn}>
-                                    {isLoggingIn ? "Signing in..." : "Login"}
-                                </button>
-                                {loginError ? <p className="form-error">{loginError}</p> : null}
-                            </form>
+                            <section className="control-desk__form-block">
+                                <div className="control-desk__form-copy">
+                                    <strong>Sign in</strong>
+                                    <p>Come back to live rooms, archived sessions, or the table you manage.</p>
+                                </div>
+                                <form className="control-form" action={handleLogin}>
+                                    <input className="control-input" type="text" name="identifier" placeholder="email or username" required />
+                                    <input className="control-input" type="password" name="password" placeholder="password" required />
+                                    <button className="button button--secondary" type="submit" disabled={isLoggingIn}>
+                                        {isLoggingIn ? "Signing in..." : "Sign in"}
+                                    </button>
+                                    {loginError ? <p className="form-error">{loginError}</p> : null}
+                                </form>
+                            </section>
                         </div>
                     )}
                 </div>
             </section>
 
-            <section className="ui-panel hero__panel">
+            <section className="ui-panel hero__panel control-desk__panel">
                 <header className="ui-panel__header">
-                    <span className="ui-panel__eyebrow">Room setup</span>
-                    <h3 className="ui-panel__title">Create a private table</h3>
+                    <span className="ui-panel__eyebrow">Open a room</span>
+                    <h3 className="ui-panel__title">Set the table before anyone joins</h3>
                 </header>
-                <div className="ui-panel__body">
-                    {roomCreationNotice ? <p className="muted-copy">{roomCreationNotice}</p> : null}
+                <div className="ui-panel__body control-desk__body">
+                    <p className="control-desk__intro">Choose the room name, seat count, starting stack, and between-hand pace. Live table controls stay available after the room opens.</p>
+                    {roomCreationNotice ? <p className="muted-copy control-desk__notice">{roomCreationNotice}</p> : null}
                     <form className="control-form" action={handleCreateRoom}>
                         <ControlField
                             htmlFor="room-name"
@@ -284,12 +302,12 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                             </ControlField>
                         </div>
                         <button className="button button--primary" type="submit" disabled={isCreatingRoom || !canCreateRooms}>
-                            {isCreatingRoom ? "Creating room..." : "Create room"}
+                            {isCreatingRoom ? "Opening room..." : "Open room"}
                         </button>
                         {roomError ? <p className="form-error">{roomError}</p> : null}
                         {roomLink ? (
-                            <a className="room-link" href={roomLink}>
-                                Open {roomLink}
+                            <a className="room-link control-desk__room-link" href={roomLink}>
+                                Enter {roomLink}
                             </a>
                         ) : null}
                     </form>

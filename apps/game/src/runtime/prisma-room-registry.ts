@@ -1127,7 +1127,10 @@ export class PrismaRoomRegistry implements RoomRegistry {
       status: "waiting",
       sessionStartedAt: null,
       nextHandStartsAt: null,
-      players: runtimeState.table.players.map((player) => ({ ...player, isReady: false })),
+      players: runtimeState.table.players.map((player) => ({
+        ...player,
+        isReady: isBotAccountId(player.accountId),
+      })),
       updatedAt: now.toISOString(),
     };
     const nextRuntimeState: PersistedRoomRuntimeState = {

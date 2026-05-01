@@ -259,8 +259,15 @@ export function useTableSoundEffects({
         }
 
         if (previousRevealState.contextId === nextRevealState.contextId && nextRevealState.boardCount > previousRevealState.boardCount) {
-            if (previousRevealState.boardCount < 3 && nextRevealState.boardCount >= 3) {
+            const revealedCardCount = nextRevealState.boardCount - previousRevealState.boardCount;
+            const crossedFlopThreshold = previousRevealState.boardCount < 3 && nextRevealState.boardCount >= 3;
+
+            if (!isAllInRunoutActive && crossedFlopThreshold && revealedCardCount >= 3) {
                 playTableSound(soundBankRef, "flopReveal");
+
+                for (let index = Math.max(previousRevealState.boardCount, 3); index < nextRevealState.boardCount; index += 1) {
+                    playTableSound(soundBankRef, "cardReveal");
+                }
             } else {
                 for (let index = previousRevealState.boardCount; index < nextRevealState.boardCount; index += 1) {
                     playTableSound(soundBankRef, "cardReveal");
