@@ -3,7 +3,7 @@ import { Card, buildDeck, dealHoleCards, shuffleDeck } from "./cards.js";
 import { compareEvaluatedHands, evaluateHoldemHand } from "./hand-evaluator.js";
 
 export type RoomVisibility = "private" | "club";
-export type TableStatus = "waiting" | "active" | "paused";
+export type TableStatus = "waiting" | "active" | "paused" | "archived";
 export type Street = "preflop" | "flop" | "turn" | "river" | "showdown";
 export type HandActionType = "post_ante" | "post_small_blind" | "post_big_blind" | "fold" | "check" | "call" | "bet" | "raise" | "all_in";
 export type PlayerActionType = "fold" | "check" | "call" | "bet" | "raise" | "all_in";
@@ -470,6 +470,10 @@ export function finishHand(table: TableState, options: FinishHandOptions = {}): 
 export function startHand(table: TableState, options: StartHandOptions = {}): TableState {
   const now = options.now ?? new Date();
   const random = options.random ?? Math.random;
+
+  if (table.status === "archived") {
+    throw new Error("Table is archived.");
+  }
 
   if (table.status === "paused") {
     throw new Error("Table is paused.");

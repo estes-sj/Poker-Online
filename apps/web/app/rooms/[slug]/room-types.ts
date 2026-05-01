@@ -79,6 +79,39 @@ export interface LastHandResult {
   };
 }
 
+export interface ArchivedHandParticipant {
+  accountId: string;
+  displayName: string;
+  seatIndex: number;
+  finalStack: number;
+  wasDealtIn: boolean;
+}
+
+export interface ArchivedHandRecord {
+  handId: string;
+  handNumber: number;
+  blindLevel: {
+    level: number;
+    smallBlind: number;
+    bigBlind: number;
+    ante?: number;
+    durationMinutes: number;
+  } | null;
+  dealerSeat: number | null;
+  smallBlindSeat: number | null;
+  bigBlindSeat: number | null;
+  startedAt: string | null;
+  concludedAt: string;
+  board: Card[];
+  totalPot: number;
+  winningReason: "fold" | "showdown";
+  actions: HandActionRecord[];
+  winners: LastHandWinner[];
+  revealedHoleCards: Record<string, [Card | null, Card | null]>;
+  allInRunout: LastHandResult["allInRunout"];
+  participants: ArchivedHandParticipant[];
+}
+
 export type RevealMode = "none" | "first" | "second" | "both";
 
 export interface RoomChatMessage {
@@ -244,6 +277,11 @@ export interface RoomSnapshot {
   };
   lastCompletedHand: LastHandResult | null;
   recentCompletedHands: LastHandResult[];
+  archive: null | {
+    archivedAt: string;
+    archivedByAccountId: string;
+    hands: ArchivedHandRecord[];
+  };
   lastCompletedHandRevealState: null | {
     forced: boolean;
     currentMode: RevealMode;

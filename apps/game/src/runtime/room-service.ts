@@ -162,6 +162,23 @@ export interface ManagedRoomSummary {
   lastActivityAt: string;
   autoExpireAfterHours: number | null;
   expiresAt: string | null;
+  archivedAt: string | null;
+}
+
+export interface PublicRoomSummary {
+  roomId: string;
+  slug: string;
+  name: string;
+  adminUsername: string;
+  visibility: TableState["visibility"];
+  status: TableState["status"];
+  passwordProtected: boolean;
+  maxPlayers: number;
+  seatedPlayerCount: number;
+  handCount: number;
+  createdAt: string;
+  lastActivityAt: string;
+  archivedAt: string | null;
 }
 
 export interface AutoExpiringRoom {
@@ -184,6 +201,38 @@ export interface DeleteManagedRoomsRequest {
 export interface DeleteManagedRoomsResult {
   deletedRoomIds: string[];
   deletedSlugs: string[];
+}
+
+export interface ArchiveRoomRequest {
+  slug: string;
+  accountId: string;
+}
+
+export interface ArchivedHandParticipant {
+  accountId: string;
+  displayName: string;
+  seatIndex: number;
+  finalStack: number;
+  wasDealtIn: boolean;
+}
+
+export interface ArchivedHandRecord {
+  handId: string;
+  handNumber: number;
+  blindLevel: BlindLevel | null;
+  dealerSeat: number | null;
+  smallBlindSeat: number | null;
+  bigBlindSeat: number | null;
+  startedAt: string | null;
+  concludedAt: string;
+  board: Card[];
+  totalPot: number;
+  winningReason: LastHandResult["winningReason"];
+  actions: HandActionRecord[];
+  winners: LastHandResult["winners"];
+  revealedHoleCards: LastHandResult["revealedHoleCards"];
+  allInRunout: LastHandResult["allInRunout"];
+  participants: ArchivedHandParticipant[];
 }
 
 export interface SetRoomPausedRequest {
@@ -275,6 +324,11 @@ export interface RoomSnapshot {
   };
   lastCompletedHand: LastHandResult | null;
   recentCompletedHands: LastHandResult[];
+  archive: null | {
+    archivedAt: string;
+    archivedByAccountId: string;
+    hands: ArchivedHandRecord[];
+  };
   lastCompletedHandRevealState: null | {
     forced: boolean;
     currentMode: RevealMode;
@@ -365,6 +419,7 @@ export interface RoomPendingRebuyRequest {
 export interface RoomRegistry {
   createRoom(input: CreateRoomRequest): Promise<RoomSnapshot>;
   joinRoom(input: JoinRoomRequest): Promise<RoomSnapshot>;
+  listPublicRooms(): Promise<PublicRoomSummary[]>;
   seatPlayer(input: SeatPlayerRequest): Promise<RoomSnapshot>;
   seatBot(input: SeatBotRequest): Promise<RoomSnapshot>;
   setReady(input: PlayerReadyRequest): Promise<RoomSnapshot>;
@@ -379,6 +434,7 @@ export interface RoomRegistry {
   updateAdminOptions(input: UpdateRoomAdminOptionsRequest): Promise<RoomSnapshot>;
   setRoomPaused(input: SetRoomPausedRequest): Promise<RoomSnapshot>;
   stopRoom(input: StopRoomRequest): Promise<RoomSnapshot>;
+  archiveRoom(input: ArchiveRoomRequest): Promise<RoomSnapshot>;
   removePlayer(input: RemovePlayerRequest): Promise<RoomSnapshot>;
   revealCards(input: RoomRevealCardsRequest): Promise<RoomSnapshot>;
   setPlayerConnection(input: PlayerConnectionRequest): Promise<RoomSnapshot>;

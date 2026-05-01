@@ -188,6 +188,9 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                             <strong>{session.account.id}</strong>
                             <p>{session.account.email}</p>
                             <div className="status-card__actions">
+                                <Link className="button button--secondary" href="/rooms">
+                                    Browse rooms
+                                </Link>
                                 {canManageRooms ? (
                                     <Link className="button button--secondary" href="/admin/rooms">
                                         Manage rooms

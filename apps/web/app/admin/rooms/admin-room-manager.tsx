@@ -27,6 +27,7 @@ interface ManagedRoomSummary {
     pendingRebuyRequestCount: number;
     createdAt: string;
     lastActivityAt: string;
+    archivedAt: string | null;
     autoExpireAfterHours: number | null;
     expiresAt: string | null;
 }
@@ -59,8 +60,10 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
         session
         && isConfiguredRoomCreationAdmin(session.account.username, roomCreationPolicy.adminUsername),
     );
+    const liveRooms = rooms.filter((room) => room.status !== "archived");
+    const archivedRooms = rooms.filter((room) => room.status === "archived");
     const selectedCount = selectedRoomIds.length;
-    const allSelected = rooms.length > 0 && selectedCount === rooms.length;
+    const allSelected = liveRooms.length > 0 && selectedCount === liveRooms.length;
 
     useEffect(() => {
         const storedSession = readStoredBrowserSession();
@@ -98,8 +101,10 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                 throw new Error((payload as { error?: string }).error ?? "Unable to load rooms.");
             }
 
+            const liveRoomIds = new Set(payload.filter((room) => room.status !== "archived").map((room) => room.roomId));
+
             setRooms(payload);
-            setSelectedRoomIds((currentSelection) => currentSelection.filter((roomId) => payload.some((room) => room.roomId === roomId)));
+            setSelectedRoomIds((currentSelection) => currentSelection.filter((roomId) => liveRoomIds.has(roomId)));
         } catch (loadError) {
             setError(loadError instanceof Error ? loadError.message : "Unable to load rooms.");
         } finally {
@@ -117,7 +122,7 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
     }
 
     function handleToggleAllRooms() {
-        setSelectedRoomIds(allSelected ? [] : rooms.map((room) => room.roomId));
+        setSelectedRoomIds(allSelected ? [] : liveRooms.map((room) => room.roomId));
     }
 
     async function handleApplyExpiration(clearExpiration: boolean) {
@@ -263,7 +268,7 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
             <section className="ui-panel admin-room-manager__panel">
                 <header className="ui-panel__header admin-room-manager__header">
                     <div>
-                        <span className="ui-panel__eyebrow">Open rooms</span>
+                        <span className="ui-panel__eyebrow">Live rooms</span>
                         <h2 className="ui-panel__title">Manage live tables</h2>
                     </div>
                     <button className="button button--secondary" type="button" onClick={() => void loadRooms(session.token)} disabled={isLoading || isRefreshing}>
@@ -275,10 +280,10 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                     <div className="admin-room-manager__toolbar">
                         <div className="admin-room-manager__toolbar-copy">
                             <p>Signed in as {session.account.username}.</p>
-                            <p>{selectedCount} room{selectedCount === 1 ? "" : "s"} selected.</p>
+                            <p>{selectedCount} live room{selectedCount === 1 ? "" : "s"} selected.</p>
                         </div>
                         <div className="action-row admin-room-manager__toolbar-actions">
-                            <button className="button button--secondary" type="button" onClick={handleToggleAllRooms} disabled={rooms.length === 0 || isLoading}>
+                            <button className="button button--secondary" type="button" onClick={handleToggleAllRooms} disabled={liveRooms.length === 0 || isLoading}>
                                 {allSelected ? "Clear selection" : "Select all"}
                             </button>
                         </div>
@@ -320,9 +325,9 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                         <div className="admin-room-manager__empty-state">
                             <p>Loading room inventory...</p>
                         </div>
-                    ) : rooms.length === 0 ? (
+                    ) : liveRooms.length === 0 ? (
                         <div className="admin-room-manager__empty-state">
-                            <p>No open rooms are currently stored.</p>
+                            <p>No live tables are currently stored.</p>
                         </div>
                     ) : (
                         <div className="admin-room-manager__table-wrap">
@@ -340,7 +345,7 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {rooms.map((room) => {
+                                    {liveRooms.map((room) => {
                                         const selected = selectedRoomIds.includes(room.roomId);
 
                                         return (
@@ -389,6 +394,88 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                                                     <div className="admin-room-table__metric">
                                                         <strong>{room.autoExpireAfterHours ? `${room.autoExpireAfterHours}h` : "Off"}</strong>
                                                         <span>{room.expiresAt ? `Deletes ${formatRelativeTime(room.expiresAt)}` : "No idle deletion"}</span>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            </section>
+
+            <section className="ui-panel admin-room-manager__panel">
+                <header className="ui-panel__header admin-room-manager__header">
+                    <div>
+                        <span className="ui-panel__eyebrow">Archive</span>
+                        <h2 className="ui-panel__title">Archived tables</h2>
+                    </div>
+                </header>
+
+                <div className="ui-panel__body admin-room-manager__content">
+                    {isLoading ? (
+                        <div className="admin-room-manager__empty-state">
+                            <p>Loading archived tables...</p>
+                        </div>
+                    ) : archivedRooms.length === 0 ? (
+                        <div className="admin-room-manager__empty-state">
+                            <p>No archived tables are currently stored.</p>
+                        </div>
+                    ) : (
+                        <div className="admin-room-manager__table-wrap">
+                            <table className="admin-room-table">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Room</th>
+                                        <th scope="col">Seats</th>
+                                        <th scope="col">Hands</th>
+                                        <th scope="col">Archived</th>
+                                        <th scope="col">Last activity</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {archivedRooms.map((room) => {
+                                        const archivedAt = room.archivedAt ?? room.lastActivityAt;
+
+                                        return (
+                                            <tr key={room.roomId} className="admin-room-table__row">
+                                                <td>
+                                                    <div className="admin-room-table__room-cell">
+                                                        <Link className="admin-room-table__room-link" href={`/rooms/${room.slug}`}>
+                                                            {room.name}
+                                                        </Link>
+                                                        <div className="admin-room-table__room-meta">
+                                                            <span>Archived</span>
+                                                            <span>{room.visibility === "club" ? "Club" : "Private"}</span>
+                                                            {room.passwordProtected ? <span>Password</span> : null}
+                                                            <span>Admin: {room.adminUsername}</span>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td>
+                                                    <div className="admin-room-table__metric">
+                                                        <strong>{room.seatedPlayerCount}/{room.maxPlayers}</strong>
+                                                        <span>{room.connectedPlayerCount} connected at archive</span>
+                                                    </div>
+                                                </td>
+                                                <td>
+                                                    <div className="admin-room-table__metric">
+                                                        <strong>{room.handCount}</strong>
+                                                        <span>{room.handCount === 1 ? "Completed hand" : "Completed hands"}</span>
+                                                    </div>
+                                                </td>
+                                                <td>
+                                                    <div className="admin-room-table__metric">
+                                                        <strong>{formatRelativeTime(archivedAt)}</strong>
+                                                        <span>{formatTimestamp(archivedAt)}</span>
+                                                    </div>
+                                                </td>
+                                                <td>
+                                                    <div className="admin-room-table__metric">
+                                                        <strong>{formatRelativeTime(room.lastActivityAt)}</strong>
+                                                        <span>{formatTimestamp(room.lastActivityAt)}</span>
                                                     </div>
                                                 </td>
                                             </tr>

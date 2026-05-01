@@ -51,6 +51,7 @@ export default function HomePage() {
                         <Link className="button button--primary" href="#host-a-game">
                             Create a table
                         </Link>
+                        <Link className="button button--secondary" href="/rooms">Browse rooms</Link>
                         <Link className="button button--secondary" href="#why-poker">See what players get</Link>
                         <Link className="button button--secondary" href="/rooms/sample-table">View sample table</Link>
                     </div>

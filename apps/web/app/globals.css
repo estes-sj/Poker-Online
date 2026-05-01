@@ -274,6 +274,158 @@ button {
   z-index: 5;
 }
 
+.rooms-page {
+  display: grid;
+  gap: 24px;
+}
+
+.rooms-page__header,
+.rooms-page__section {
+  border-radius: 28px;
+}
+
+.rooms-page__section {
+  border: 1px solid var(--surface-border);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+  padding: 28px;
+}
+
+.rooms-page__section-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.rooms-page__section-header h2 {
+  margin-top: 8px;
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+}
+
+.rooms-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.room-card {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border-radius: 24px;
+  border: 1px solid rgba(245, 240, 223, 0.1);
+  background: rgba(4, 12, 10, 0.42);
+}
+
+.room-card--archived {
+  background: rgba(21, 18, 8, 0.48);
+  border-color: rgba(215, 179, 92, 0.22);
+}
+
+.room-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.room-card__header strong {
+  display: block;
+  color: var(--text);
+  font-size: 1.15rem;
+}
+
+.room-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--text-soft);
+  font-size: 0.92rem;
+}
+
+.room-card__timestamp {
+  font-size: 0.92rem;
+}
+
+.room-card__actions {
+  display: flex;
+  gap: 12px;
+}
+
+.rooms-archive-table-wrap {
+  overflow-x: auto;
+  border-radius: 24px;
+  border: 1px solid rgba(245, 240, 223, 0.1);
+  background: rgba(4, 12, 10, 0.32);
+}
+
+.rooms-archive-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+}
+
+.rooms-archive-table th,
+.rooms-archive-table td {
+  padding: 16px 18px;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid rgba(245, 240, 223, 0.08);
+}
+
+.rooms-archive-table thead th {
+  color: var(--accent);
+  font-size: 0.76rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: rgba(7, 16, 13, 0.84);
+}
+
+.rooms-archive-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.rooms-archive-table__room {
+  display: grid;
+  gap: 4px;
+}
+
+.rooms-archive-table__room strong {
+  color: var(--text);
+}
+
+.rooms-archive-table__room span {
+  color: var(--text-soft);
+  font-size: 0.88rem;
+}
+
+.rooms-archive-table__action-cell {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.rooms-page__empty {
+  padding: 18px 0 6px;
+}
+
+@media (max-width: 720px) {
+  .rooms-page__section,
+  .rooms-page__header {
+    padding: 22px;
+  }
+
+  .room-card {
+    padding: 18px;
+  }
+
+  .room-card__header {
+    flex-direction: column;
+  }
+}
+
 .control-tooltip__bubble::before {
   content: "";
   position: absolute;
@@ -629,6 +781,10 @@ button {
   color: #8fd5ff;
 }
 
+.connection-pill--archived {
+  color: var(--accent);
+}
+
 .board-cards {
   display: flex;
   flex-wrap: wrap;
@@ -960,6 +1116,7 @@ button {
   border: 1px solid rgba(245, 240, 223, 0.1);
   background: rgba(245, 240, 223, 0.06);
   color: var(--text-soft);
+  white-space: nowrap;
 }
 
 .room-toolbar__pill-button {
@@ -1028,6 +1185,34 @@ button {
   box-shadow: var(--shadow);
   padding: 14px;
   overflow: hidden;
+}
+
+.table-arena,
+.table-command-deck,
+.table-ledger-panel,
+.table-log-panel,
+.table-dialog__panel {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.table-arena input,
+.table-arena textarea,
+.table-arena select,
+.table-command-deck input,
+.table-command-deck textarea,
+.table-command-deck select,
+.table-ledger-panel input,
+.table-ledger-panel textarea,
+.table-ledger-panel select,
+.table-log-panel input,
+.table-log-panel textarea,
+.table-log-panel select,
+.table-dialog__panel input,
+.table-dialog__panel textarea,
+.table-dialog__panel select {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .table-felt {
@@ -1177,6 +1362,14 @@ button {
 
 .table-seat--folded {
   opacity: 0.58;
+}
+
+.table-seat--inactive {
+  opacity: 0.58;
+}
+
+.table-seat--focusable {
+  cursor: pointer;
 }
 
 .table-seat--open {
@@ -3105,6 +3298,10 @@ button {
 
 .table-command-deck__action-wrap--dragging {
   z-index: 6;
+}
+
+.table-command-deck__action-wrap--archive {
+  pointer-events: auto;
 }
 
 .table-command-deck__action-wrap:hover,

@@ -9,6 +9,14 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
     timestamp: new Date().toISOString(),
   }));
 
+  app.get("/v1/rooms", async (_request, reply) => {
+    try {
+      return reply.send(await registry.listPublicRooms());
+    } catch (error) {
+      return reply.code(500).send({ error: getErrorMessage(error) });
+    }
+  });
+
   app.post("/v1/rooms", async (request, reply) => {
     const body = request.body as Record<string, unknown>;
 
@@ -329,6 +337,22 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
 
     try {
       const snapshot = await registry.stopRoom({
+        slug: requireString(params.slug, "slug"),
+        accountId: requireString(body.accountId, "accountId"),
+      });
+
+      return reply.send(snapshot);
+    } catch (error) {
+      return reply.code(400).send({ error: getErrorMessage(error) });
+    }
+  });
+
+  app.post("/v1/rooms/:slug/admin/archive", async (request, reply) => {
+    const params = request.params as Record<string, unknown>;
+    const body = request.body as Record<string, unknown>;
+
+    try {
+      const snapshot = await registry.archiveRoom({
         slug: requireString(params.slug, "slug"),
         accountId: requireString(body.accountId, "accountId"),
       });

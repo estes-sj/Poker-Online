@@ -20,8 +20,8 @@ export default function AdminRoomsPage() {
                         </span>
                     </Link>
                     <span className="eyebrow">Admin</span>
-                    <h1>Manage open rooms</h1>
-                    <p>Review active tables, bulk delete rooms, and configure optional idle cleanup when a room has been inactive for a set number of hours.</p>
+                    <h1>Manage live and archived rooms</h1>
+                    <p>Review live tables, browse archived sessions, bulk delete active rooms, and configure optional idle cleanup when a table has been inactive for a set number of hours.</p>
                 </div>
 
                 <div className="admin-rooms-page__actions">

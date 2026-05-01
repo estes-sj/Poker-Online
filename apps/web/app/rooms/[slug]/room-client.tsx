@@ -3,7 +3,7 @@
 import emojiData from "@emoji-mart/data";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
 import { HOUSE_RULES_CONFIG } from "../../lib/house-rules-config";
 import { buildBrowserHttpUrl, buildBrowserWsUrl, getBrowserGameHttpBaseUrl, getBrowserGameWsBaseUrl } from "../../lib/public-service-urls";
@@ -11,7 +11,7 @@ import { compareEvaluatedHands, evaluateHoldemHand, getCurrentHeroHandLabel } fr
 import type { MediaParticipantState } from "./media-types";
 import { useTableSoundEffects } from "./table-sound-effects";
 import { MediaAudioRack, ParticipantCameraSurface, useTableMedia } from "./table-media";
-import type { Card, HandActionRecord, HeroActionState, LastHandResult, RevealMode, RoomPlayer, RoomSnapshot, SessionState } from "./room-types";
+import type { ArchivedHandRecord, Card, HandActionRecord, HeroActionState, LastHandResult, RevealMode, RoomPlayer, RoomSnapshot, SessionState } from "./room-types";
 
 const STORAGE_KEY = "river-club-session";
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
@@ -59,6 +59,7 @@ const RUNOUT_EQUITY_EXACT_COMBINATION_LIMIT = 20_000;
 const RUNOUT_EQUITY_SAMPLE_COUNT = 5_000;
 const RUNOUT_EQUITY_DECK_RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"] as const;
 const RUNOUT_EQUITY_DECK_SUITS: Card["suit"][] = ["clubs", "diamonds", "hearts", "spades"];
+const ARCHIVED_REPLAY_ACTION_INTERVAL_MS = 750;
 
 const TABLE_LAYOUTS: Record<number, ReadonlyArray<{ left: number; top: number }>> = {
     2: [
@@ -166,13 +167,25 @@ interface RoomClientProps {
     demoMediaParticipants?: MediaParticipantState[];
 }
 
-type ConnectionState = "connecting" | "live" | "disconnected" | "reconnecting" | "demo";
+type ConnectionState = "connecting" | "live" | "disconnected" | "reconnecting" | "demo" | "archived";
 type EquityTrend = "steady" | "up" | "down";
 
 interface AllInRunoutView {
     isActive: boolean;
     visibleBoards: Card[][];
     revealedAccountIds: string[];
+}
+
+interface ArchivedReplayActionState {
+    isComplete: boolean;
+    street: NonNullable<RoomSnapshot["currentHand"]>["street"];
+    board: Card[];
+    pot: number;
+    currentBet: number;
+    contributions: Record<string, number>;
+    streetContributions: Record<string, number>;
+    foldedAccountIds: string[];
+    actions: HandActionRecord[];
 }
 
 interface RunoutEquitySnapshot {
@@ -193,6 +206,7 @@ interface TableSeatView {
     isOpen: boolean;
     isActive: boolean;
     isFolded: boolean;
+    isInactive: boolean;
     isWinner: boolean;
     name: string;
     stackLabel: string;
@@ -226,6 +240,12 @@ interface SessionLedgerRow {
     wins: number;
     rebuys: number;
     net: number;
+}
+
+function resolveRoomDisplayName(snapshot: RoomSnapshot | null | undefined, accountId: string): string {
+    return snapshot?.ledgerState.displayNameByAccount[accountId]
+        ?? snapshot?.players.find((player) => player.accountId === accountId)?.displayName
+        ?? accountId;
 }
 
 interface BlindLevelDraft {
@@ -301,7 +321,13 @@ export function RoomClient({
     const [displayName, setDisplayName] = useState("");
     const [roomPassword, setRoomPassword] = useState("");
     const [raiseTarget, setRaiseTarget] = useState("");
-    const [connectionState, setConnectionState] = useState<ConnectionState>(demoMode ? "demo" : "connecting");
+    const [connectionState, setConnectionState] = useState<ConnectionState>(() => {
+        if (demoMode) {
+            return "demo";
+        }
+
+        return initialSnapshot?.status === "archived" ? "archived" : "connecting";
+    });
     const [actionError, setActionError] = useState<string | null>(null);
     const [inviteFeedback, setInviteFeedback] = useState<string | null>(null);
     const [isMutating, setIsMutating] = useState(false);
@@ -327,7 +353,9 @@ export function RoomClient({
     const [adminApprovalQueue, setAdminApprovalQueue] = useState<AdminApprovalQueueEntry[]>([]);
     const [adminOptionsDraft, setAdminOptionsDraft] = useState<AdminOptionsDraft>(createEmptyAdminOptionsDraft);
     const [selectedLedgerHandId, setSelectedLedgerHandId] = useState<string | null>(null);
+    const [tablePovSeatIndex, setTablePovSeatIndex] = useState<number | null>(() => initialSnapshot?.players.find((player) => player.accountId === initialAccountId)?.seatIndex ?? null);
     const [turnClockNow, setTurnClockNow] = useState(() => getSnapshotClockMs(initialSnapshot));
+    const [archivedReplayStartedAt, setArchivedReplayStartedAt] = useState<number | null>(null);
     const [runoutEquityState, setRunoutEquityState] = useState<RunoutEquityViewState>(createEmptyRunoutEquityViewState);
     const [actionPadOffset, setActionPadOffset] = useState<ActionPadOffset>(DEFAULT_ACTION_PAD_OFFSET);
     const [isActionPadDragging, setIsActionPadDragging] = useState(false);
@@ -340,7 +368,14 @@ export function RoomClient({
     const adminApprovalSeenRef = useRef<Set<string>>(new Set());
     const runoutEquitySnapshotRef = useRef<RunoutEquitySnapshot | null>(null);
     const runoutEquityTrendResetTimerRef = useRef<number | null>(null);
-    const isAdmin = Boolean(!demoMode && snapshot && accountId === snapshot.adminAccountId);
+    const archivedHands = snapshot?.archive?.hands ?? [];
+    const isArchivedRoom = Boolean(snapshot?.status === "archived" && snapshot?.archive);
+    const selectedArchivedHand = archivedHands.find((hand) => hand.handId === selectedLedgerHandId) ?? archivedHands[0] ?? null;
+    const archivedReplaySnapshot = isArchivedRoom && snapshot && selectedArchivedHand && archivedReplayStartedAt !== null
+        ? buildArchivedReplayRoomSnapshot(snapshot, selectedArchivedHand, accountId, turnClockNow, archivedReplayStartedAt)
+        : null;
+    const tableSnapshot = archivedReplaySnapshot ?? snapshot;
+    const isAdmin = Boolean(!demoMode && !isArchivedRoom && snapshot && accountId === snapshot.adminAccountId);
 
     function stopActionPadDrag(pointerId?: number) {
         const dragState = actionPadDragStateRef.current;
@@ -515,8 +550,21 @@ export function RoomClient({
     ]);
 
     useEffect(() => {
+        if (!isArchivedRoom || !selectedArchivedHand) {
+            return;
+        }
+
+        restartArchivedReplay();
+    }, [isArchivedRoom, selectedArchivedHand?.handId]);
+
+    useEffect(() => {
         if (demoMode) {
             setConnectionState("demo");
+            return;
+        }
+
+        if (isArchivedRoom) {
+            setConnectionState("archived");
             return;
         }
 
@@ -598,7 +646,7 @@ export function RoomClient({
             socketRef.current = null;
             activeSocket?.close();
         };
-    }, [slug, accountId, demoMode]);
+    }, [slug, accountId, demoMode, isArchivedRoom]);
 
     useEffect(() => {
         if (!snapshot?.nextHandStartsAt || snapshot.currentHand) {
@@ -626,8 +674,9 @@ export function RoomClient({
         const hasBlindCountdown = Boolean(blindState && blindState.nextLevelInMs !== null && !blindState.pausedAt);
         const hasTurnClock = Boolean(snapshot?.currentHand && snapshot.turnState.currentTurnStartedAt);
         const hasAllInRunout = Boolean(snapshot?.lastCompletedHand && isAllInRunoutActive(snapshot.lastCompletedHand, Date.now()));
+        const hasArchivedReplay = Boolean(isArchivedRoom && selectedArchivedHand && archivedReplaySnapshot?.currentHand);
 
-        if (!hasTurnClock && !hasActiveReactions && !hasBlindCountdown && !hasAllInRunout) {
+        if (!hasTurnClock && !hasActiveReactions && !hasBlindCountdown && !hasAllInRunout && !hasArchivedReplay) {
             return;
         }
 
@@ -639,7 +688,7 @@ export function RoomClient({
         return () => {
             window.clearInterval(intervalId);
         };
-    }, [snapshot?.currentHand?.handNumber, snapshot?.currentHand?.actorAccountId, snapshot?.currentHand?.street, snapshot?.turnState.currentTurnStartedAt, snapshot?.seatReactions, snapshot?.blindState.nextLevelInMs, snapshot?.blindState.pausedAt, snapshot?.lastCompletedHand?.handId, snapshot?.lastCompletedHand?.concludedAt]);
+    }, [snapshot?.currentHand?.handNumber, snapshot?.currentHand?.actorAccountId, snapshot?.currentHand?.street, snapshot?.turnState.currentTurnStartedAt, snapshot?.seatReactions, snapshot?.blindState.nextLevelInMs, snapshot?.blindState.pausedAt, snapshot?.lastCompletedHand?.handId, snapshot?.lastCompletedHand?.concludedAt, isArchivedRoom, selectedArchivedHand?.handId, archivedReplaySnapshot?.currentHand?.id]);
 
     useEffect(() => {
         if (!snapshot) {
@@ -719,8 +768,8 @@ export function RoomClient({
         }
     }, [snapshot?.currentHand?.id]);
 
-    const currentHand = snapshot?.currentHand ?? null;
-    const heroPlayer = accountId ? snapshot?.players.find((player) => player.accountId === accountId) ?? null : null;
+    const currentHand = tableSnapshot?.currentHand ?? null;
+    const heroPlayer = accountId ? tableSnapshot?.players.find((player) => player.accountId === accountId) ?? null : null;
     const heroActionState = currentHand?.heroActionState ?? null;
     const runItTwicePrompt = currentHand?.runItTwicePrompt ?? null;
     const heroInHand = Boolean(heroPlayer && currentHand?.playerCardCounts[heroPlayer.accountId]);
@@ -735,8 +784,8 @@ export function RoomClient({
     const viewerHasRoomAccess = Boolean(snapshot && (!snapshot.passwordProtected || snapshot.viewerHasRoomAccess));
     const isProtectedRoomLocked = Boolean(!demoMode && snapshot?.passwordProtected && !viewerHasRoomAccess);
     const canJoinProtectedRoom = Boolean(snapshot && snapshot.passwordProtected && accountId && !viewerHasRoomAccess);
-    const canChat = Boolean(snapshot && accountId && session && viewerHasRoomAccess && !demoMode);
-    const canConnectMedia = Boolean(session && snapshot && viewerHasRoomAccess && !demoMode);
+    const canChat = Boolean(snapshot && accountId && session && viewerHasRoomAccess && !demoMode && !isArchivedRoom);
+    const canConnectMedia = Boolean(session && snapshot && viewerHasRoomAccess && !demoMode && !isArchivedRoom);
     const media = useTableMedia({
         slug,
         session,
@@ -761,8 +810,14 @@ export function RoomClient({
     const heroPendingRebuyRequest = accountId ? snapshot?.pendingRebuyRequests.find((request) => request.accountId === accountId) ?? null : null;
     const canShowRebuyMenu = Boolean(heroPlayer && (heroPlayer.stack <= 0 || heroPendingRebuyRequest));
     const isSpectating = heroPlayer === null;
-    const showCenterReadyButton = Boolean(heroPlayer && !heroPlayer.isReady && !heroPlayer.isSittingOut);
+    const showCenterReadyButton = Boolean(!isArchivedRoom && heroPlayer && !heroPlayer.isReady && !heroPlayer.isSittingOut);
     const showCenterStartHand = Boolean(canAdminStartHand && snapshot?.status !== "paused");
+    const canArchiveStoppedTable = Boolean(
+        isAdmin
+        && !currentHand
+        && snapshot?.status === "waiting"
+        && (snapshot?.handCount ?? 0) > 0,
+    );
     const activeAdminApproval = adminApprovalQueue[0] ?? null;
     const activeAdminSeatRequest = activeAdminApproval?.kind === "seat"
         ? snapshot?.pendingSeatRequests.find((request) => request.id === activeAdminApproval.requestId) ?? null
@@ -772,8 +827,8 @@ export function RoomClient({
         : null;
     const availableBotSeatIndices = snapshot ? getAvailableBotSeatIndices(snapshot) : [];
     const defaultBotDisplayName = snapshot ? getNextBotDisplayName(snapshot) : "Bot 1";
-    const currentActor = snapshot?.currentHand?.actorAccountId
-        ? snapshot.players.find((player) => player.accountId === snapshot.currentHand?.actorAccountId) ?? null
+    const currentActor = tableSnapshot?.currentHand?.actorAccountId
+        ? tableSnapshot.players.find((player) => player.accountId === tableSnapshot.currentHand?.actorAccountId) ?? null
         : null;
     const heroTimeBankMs = heroPlayer && snapshot
         ? snapshot.turnState.timeBankSeconds === null
@@ -786,20 +841,23 @@ export function RoomClient({
     const heroHandLabel = getCurrentHeroHandLabel(currentHand?.heroHoleCards ?? null, currentHand?.board ?? []);
     const heroRebuyCount = heroPlayer && snapshot ? snapshot.playerStats.rebuyCountByAccount[heroPlayer.accountId] ?? 0 : 0;
     const heroGesture = accountId ? seatGesturesByAccountId.get(accountId) ?? null : null;
-    const lastCompletedHandRevealState = snapshot?.lastCompletedHandRevealState ?? null;
-    const latestCompletedHand = snapshot?.lastCompletedHand ?? null;
+    const lastCompletedHandRevealState = isArchivedRoom ? null : snapshot?.lastCompletedHandRevealState ?? null;
+    const latestCompletedHand = tableSnapshot?.lastCompletedHand ?? null;
     const allInRunoutView = buildAllInRunoutView(latestCompletedHand, turnClockNow);
     const isAllInRunoutAnimating = Boolean(allInRunoutView?.isActive);
     const pendingRunoutWinners = buildPendingRunoutWinners(latestCompletedHand, isAllInRunoutAnimating);
+    const archivedReplayRevealedCards = isArchivedRoom && archivedReplayStartedAt !== null
+        ? selectedArchivedHand?.revealedHoleCards ?? null
+        : null;
     const heroHandsWonCount = heroPlayer && snapshot
         ? getDisplayedHandsWonCount(heroPlayer.accountId, snapshot.playerStats.handsWonByAccount[heroPlayer.accountId] ?? 0, pendingRunoutWinners)
         : 0;
     const runoutRevealedHoleCards = latestCompletedHand && allInRunoutView?.isActive
         ? filterRevealedHoleCards(latestCompletedHand.revealedHoleCards, new Set(allInRunoutView.revealedAccountIds))
         : null;
-    const tableSeats = buildTableSeats(snapshot, heroPlayer?.seatIndex, accountId, Boolean(heroPlayer), {
+    const tableSeats = buildTableSeats(tableSnapshot, tablePovSeatIndex ?? heroPlayer?.seatIndex, accountId, Boolean(heroPlayer), {
         suppressWinnerHighlights: isAllInRunoutAnimating,
-        completedHandReveals: runoutRevealedHoleCards,
+        completedHandReveals: archivedReplayRevealedCards ?? runoutRevealedHoleCards,
         pendingRunoutWinners,
         runoutWinPercentByAccount: runoutEquityState.percentByAccount,
         runoutEquityLeaderAccountIds: runoutEquityState.leaderAccountIds,
@@ -812,11 +870,13 @@ export function RoomClient({
     const displayedAdditionalBoards = displayedBoards.slice(1);
     const displayedBoardCount = displayedBoards.reduce((totalCards, board) => totalCards + board.length, 0);
     const displayedPot = currentHand?.pot ?? latestCompletedHand?.totalPot ?? 0;
-    const centerStatus = isAllInRunoutAnimating
-        ? displayedAdditionalBoards.length > 0
-            ? "All-in showdown. Running it twice..."
-            : "All-in showdown. Running board..."
-        : buildCenterStatus(snapshot, nextHandCountdown);
+    const centerStatus = isArchivedRoom
+        ? buildArchivedCenterStatus(selectedArchivedHand, currentHand)
+        : isAllInRunoutAnimating
+            ? displayedAdditionalBoards.length > 0
+                ? "All-in showdown. Running it twice..."
+                : "All-in showdown. Running board..."
+            : buildCenterStatus(snapshot, nextHandCountdown);
     const heroDisplayedStack = heroPlayer ? getDisplayedPlayerStack(heroPlayer, pendingRunoutWinners) ?? heroPlayer.stack : 0;
     const heroLastCompletedRevealedCards = heroPlayer && snapshot?.lastCompletedHand
         ? snapshot.lastCompletedHand.revealedHoleCards[heroPlayer.accountId] ?? [null, null]
@@ -836,7 +896,7 @@ export function RoomClient({
         turnStartedAt: snapshot?.turnState.currentTurnStartedAt ?? null,
         turnMainSecondsRemaining: turnMetrics?.mainSecondsRemaining ?? null,
         isUsingTimeBank: turnMetrics?.isUsingTimeBank ?? false,
-        demoMode,
+        demoMode: demoMode || isArchivedRoom,
     });
 
     useEffect(() => {
@@ -898,12 +958,16 @@ export function RoomClient({
         }
     }, [canShowRebuyMenu, openMenuPanel]);
 
-    const recentCompletedHands = snapshot?.recentCompletedHands.length
-        ? snapshot.recentCompletedHands
-        : snapshot?.lastCompletedHand
-            ? [snapshot.lastCompletedHand]
-            : [];
-    const selectedCompletedHand = recentCompletedHands.find((hand) => hand.handId === selectedLedgerHandId) ?? recentCompletedHands[0] ?? null;
+    const recentCompletedHands = isArchivedRoom
+        ? archivedHands
+        : snapshot?.recentCompletedHands.length
+            ? snapshot.recentCompletedHands
+            : snapshot?.lastCompletedHand
+                ? [snapshot.lastCompletedHand]
+                : [];
+    const selectedCompletedHand = isArchivedRoom
+        ? selectedArchivedHand
+        : recentCompletedHands.find((hand) => hand.handId === selectedLedgerHandId) ?? recentCompletedHands[0] ?? null;
     const selectedCompletedHandRunout = selectedCompletedHand && latestCompletedHand && allInRunoutView && selectedCompletedHand.handId === latestCompletedHand.handId
         ? allInRunoutView
         : null;
@@ -1166,6 +1230,12 @@ export function RoomClient({
     async function submitRoomMutation(path: string, body: Record<string, unknown>) {
         if (demoMode) {
             const error = new Error("Sample table is read-only.");
+            setActionError(error.message);
+            throw error;
+        }
+
+        if (isArchivedRoom && !path.endsWith("/join")) {
+            const error = new Error("Archived rooms are read-only.");
             setActionError(error.message);
             throw error;
         }
@@ -1595,6 +1665,37 @@ export function RoomClient({
         });
     }
 
+    async function handleArchiveTable() {
+        if (!accountId) {
+            return;
+        }
+
+        await submitRoomMutation(`/v1/rooms/${slug}/admin/archive`, {
+            accountId,
+        });
+    }
+
+    function restartArchivedReplay() {
+        const now = Date.now();
+
+        setTurnClockNow(now);
+        setArchivedReplayStartedAt(now);
+    }
+
+    function handleSeatPerspectiveClick(event: ReactMouseEvent<HTMLElement>, seat: TableSeatView) {
+        if (!seat.player) {
+            return;
+        }
+
+        const target = event.target as HTMLElement | null;
+
+        if (target?.closest("button, a, input, textarea, select, label")) {
+            return;
+        }
+
+        setTablePovSeatIndex(seat.seatIndex);
+    }
+
     async function handleRemovePlayer(targetAccountId: string) {
         if (!accountId) {
             return;
@@ -1632,6 +1733,14 @@ export function RoomClient({
             setInviteFeedback("Invite link copied.");
         } catch (error) {
             setInviteFeedback(error instanceof Error ? error.message : "Unable to copy the invite link.");
+        }
+    }
+
+    function handleSelectHistoryHand(handId: string) {
+        setSelectedLedgerHandId(handId);
+
+        if (isArchivedRoom) {
+            restartArchivedReplay();
         }
     }
 
@@ -1834,8 +1943,9 @@ export function RoomClient({
                 <div className="room-toolbar__meta">
                     <span className="room-toolbar__pill">{currentHand ? `NLHE · ${formatNumber(currentHand.blindLevel.smallBlind)} / ${formatNumber(currentHand.blindLevel.bigBlind)}` : "NLHE · Waiting"}</span>
                     <span className="room-toolbar__pill">Owner {adminName}</span>
-                    <span className="room-toolbar__pill">{snapshot?.players.length ?? 0}/{snapshot?.maxPlayers ?? 0} seated</span>
+                    <span className="room-toolbar__pill">{tableSnapshot?.players.length ?? 0}/{snapshot?.maxPlayers ?? 0} seated</span>
                     <span className="room-toolbar__pill">{demoMode ? "Sample table" : snapshot?.visibility === "club" ? "Club table" : "Private table"}</span>
+                    {isArchivedRoom ? <span className="room-toolbar__pill">Archived</span> : null}
                     <span className={`connection-pill connection-pill--${connectionState}`}>{connectionState}</span>
                     <button className="room-toolbar__pill room-toolbar__pill-button" type="button" onClick={() => setIsEngineInfoOpen(true)}>
                         Info
@@ -1866,27 +1976,31 @@ export function RoomClient({
                                 Ledger
                             </button>
 
-                            {([
-                                { id: "seat", label: "Seat" },
-                                ...(canShowRebuyMenu ? [{ id: "rebuy", label: "Rebuy" } as const] : []),
-                                { id: "invite", label: "Invite" },
-                                { id: "media", label: "Media" },
-                                ...(isAdmin ? [{ id: "admin", label: "Admin" } as const] : []),
-                            ] as const).map((item) => (
-                                <button
-                                    key={item.id}
-                                    className={[
-                                        "table-menu-cluster__button",
-                                        openMenuPanel === item.id ? "table-menu-cluster__button--active" : "",
-                                    ].filter(Boolean).join(" ")}
-                                    type="button"
-                                    onClick={() => setOpenMenuPanel((current) => current === item.id ? null : item.id)}
-                                >
-                                    {item.label}
-                                </button>
-                            ))}
+                            {!isArchivedRoom ? (
+                                <>
+                                    {([
+                                        { id: "seat", label: "Seat" },
+                                        ...(canShowRebuyMenu ? [{ id: "rebuy", label: "Rebuy" } as const] : []),
+                                        { id: "invite", label: "Invite" },
+                                        { id: "media", label: "Media" },
+                                        ...(isAdmin ? [{ id: "admin", label: "Admin" } as const] : []),
+                                    ] as const).map((item) => (
+                                        <button
+                                            key={item.id}
+                                            className={[
+                                                "table-menu-cluster__button",
+                                                openMenuPanel === item.id ? "table-menu-cluster__button--active" : "",
+                                            ].filter(Boolean).join(" ")}
+                                            type="button"
+                                            onClick={() => setOpenMenuPanel((current) => current === item.id ? null : item.id)}
+                                        >
+                                            {item.label}
+                                        </button>
+                                    ))}
+                                </>
+                            ) : null}
 
-                            {openMenuPanel ? (
+                            {!isArchivedRoom && openMenuPanel ? (
                                 <div className="table-menu-drawer">
                                     {openMenuPanel === "invite" ? (
                                         <div className="table-menu-drawer__section">
@@ -2082,8 +2196,11 @@ export function RoomClient({
                                                         <button className="button button--danger table-menu-drawer__button" type="button" onClick={() => void handleStopTable()} disabled={isMutating || Boolean(currentHand)}>
                                                             Stop table
                                                         </button>
+                                                        <button className="button button--primary table-menu-drawer__button" type="button" onClick={() => void handleArchiveTable()} disabled={isMutating || Boolean(currentHand) || (snapshot?.handCount ?? 0) < 1}>
+                                                            Archive table
+                                                        </button>
                                                     </div>
-                                                    {currentHand ? <p className="muted-copy">Stop becomes available once the current hand is finished.</p> : null}
+                                                    {currentHand ? <p className="muted-copy">Stop and archive become available once the current hand is finished.</p> : null}
                                                 </section>
 
                                                 <section className="table-admin-card">
@@ -2368,8 +2485,9 @@ export function RoomClient({
 
                         <div className="table-status-rack">
                             {snapshot?.status === "paused" ? <span className="chip-pill">Paused</span> : null}
-                            <span className="chip-pill">Hand {currentHand?.handNumber ?? snapshot?.lastCompletedHand?.handNumber ?? snapshot?.handCount ?? 0}</span>
-                            {snapshot?.blindState.nextLevel && blindCountdownMs !== null ? <span className="chip-pill chip-pill--timer">Next {formatBlindLevelCompact(snapshot.blindState.nextLevel)} in {formatClockCountdown(blindCountdownMs)}</span> : null}
+                            {isArchivedRoom ? <span className="chip-pill">Archived replay</span> : null}
+                            <span className="chip-pill">Hand {currentHand?.handNumber ?? latestCompletedHand?.handNumber ?? snapshot?.handCount ?? 0}</span>
+                            {!isArchivedRoom && snapshot?.blindState.nextLevel && blindCountdownMs !== null ? <span className="chip-pill chip-pill--timer">Next {formatBlindLevelCompact(snapshot.blindState.nextLevel)} in {formatClockCountdown(blindCountdownMs)}</span> : null}
                             {turnMetrics ? <span className="chip-pill chip-pill--timer">{turnMetrics.kind === "run-it-twice" ? "Vote" : "Turn"} {formatTurnSeconds(turnMetrics.mainSecondsRemaining)}</span> : null}
                             {turnMetrics && currentActor ? <span className="chip-pill">Action {currentActor.displayName}</span> : null}
                             {turnMetrics?.kind === "run-it-twice" ? <span className="chip-pill">Run it twice vote</span> : null}
@@ -2381,12 +2499,17 @@ export function RoomClient({
                                     <button className="table-status-rack__control table-status-rack__control--danger" type="button" onClick={() => void handleStopTable()} disabled={isMutating || Boolean(currentHand)}>
                                         Stop
                                     </button>
+                                    {canArchiveStoppedTable ? (
+                                        <button className="table-status-rack__control" type="button" onClick={() => void handleArchiveTable()} disabled={isMutating}>
+                                            Archive
+                                        </button>
+                                    ) : null}
                                 </>
                             ) : null}
                         </div>
 
                         <div className="table-center">
-                            <span className="table-center__label">{currentHand ? `Hand ${currentHand.handNumber} · ${formatStreet(currentHand.street)}` : snapshot?.lastCompletedHand ? "" : "Waiting for players"}</span>
+                            <span className="table-center__label">{currentHand ? `Hand ${currentHand.handNumber} · ${formatStreet(currentHand.street)}` : latestCompletedHand ? "" : isArchivedRoom ? "Archived table" : "Waiting for players"}</span>
                             <div className="table-center__pot">Pot {formatNumber(displayedPot)}</div>
                             <div className="table-board table-center__board">
                                 {buildBoardSlots(displayedBoard).map((slot, index) => (
@@ -2458,17 +2581,19 @@ export function RoomClient({
                             const seatGesture = seat.player ? seatGesturesByAccountId.get(seat.player.accountId) ?? null : null;
                             const showSeatMediaTile = seat.isHero ? true : Boolean(mediaParticipant) && (!isPhoneViewport || isSpectating);
                             const hasVisibleRevealedCard = Boolean(seat.revealedCards?.some((card) => card !== null));
-                            const showHeroNotReadyNotice = Boolean(seat.isHero && heroPlayer && !heroPlayer.isReady && !heroPlayer.isSittingOut);
+                            const showHeroNotReadyNotice = Boolean(!isArchivedRoom && seat.isHero && heroPlayer && !heroPlayer.isReady && !heroPlayer.isSittingOut);
 
                             return (
                                 <article
                                     key={seat.seatIndex}
                                     className={[
                                         "table-seat",
+                                        seat.player ? "table-seat--focusable" : "",
                                         seat.isHero ? "table-seat--hero" : "",
                                         seat.isHero && isReactionMenuOpen ? "table-seat--emoji-open" : "",
                                         seat.isActive ? "table-seat--active" : "",
                                         seat.isFolded ? "table-seat--folded" : "",
+                                        seat.isInactive ? "table-seat--inactive" : "",
                                         seat.isOpen ? "table-seat--open" : "",
                                         seat.isWinner ? "table-seat--winner" : "",
                                         hasVisibleRevealedCard ? "table-seat--revealed" : "",
@@ -2479,6 +2604,7 @@ export function RoomClient({
                                         `table-seat--media-${seat.mediaPlacement}`,
                                     ].filter(Boolean).join(" ")}
                                     style={seat.style}
+                                    onClick={seat.player ? (event) => handleSeatPerspectiveClick(event, seat) : undefined}
                                 >
                                     {showHeroNotReadyNotice ? <div className="table-seat__notice table-seat__notice--warning">Not ready</div> : null}
                                     {seat.runoutWinPercent !== null ? (
@@ -2516,7 +2642,7 @@ export function RoomClient({
                                             </div>
 
                                             <div className="table-seat__footer">
-                                                <span className={`table-seat__state table-seat__state--${seat.stateTone}`}>{seat.statusLabel}</span>
+                                                {seat.statusLabel ? <span className={`table-seat__state table-seat__state--${seat.stateTone}`}>{seat.statusLabel}</span> : null}
                                                 <span className="table-seat__seat-label">Seat {seat.seatIndex + 1}</span>
                                             </div>
 
@@ -2706,7 +2832,7 @@ export function RoomClient({
                                                 </div>
 
                                                 <div className="table-seat__footer">
-                                                    <span className={`table-seat__state table-seat__state--${seat.stateTone}`}>{seat.statusLabel}</span>
+                                                    {seat.statusLabel ? <span className={`table-seat__state table-seat__state--${seat.stateTone}`}>{seat.statusLabel}</span> : null}
                                                     <span className="table-seat__seat-label">Seat {seat.seatIndex + 1}</span>
                                                 </div>
                                             </div>
@@ -2742,22 +2868,33 @@ export function RoomClient({
                         })}
 
                         <div className="table-command-deck">
-                            <div className={[
-                                "table-command-deck__action-wrap",
-                                isActionPadDragging ? "table-command-deck__action-wrap--dragging" : "",
-                            ].filter(Boolean).join(" ")}>
-                                {renderActionPanel("inline")}
-                                <button className="button button--primary table-mobile-actions__toggle" type="button" onClick={() => setIsMobileActionMenuOpen(true)}>
-                                    {heroActionState?.canAct ? "Open actions" : "Table actions"}
-                                </button>
-                            </div>
+                            {isArchivedRoom ? (
+                                <div className="table-command-deck__action-wrap table-command-deck__action-wrap--archive">
+                                    <button className="button button--primary" type="button" onClick={restartArchivedReplay} disabled={!selectedArchivedHand}>
+                                        Replay selected hand
+                                    </button>
+                                    <Link className="button button--secondary" href="/rooms">
+                                        Rooms
+                                    </Link>
+                                </div>
+                            ) : (
+                                <div className={[
+                                    "table-command-deck__action-wrap",
+                                    isActionPadDragging ? "table-command-deck__action-wrap--dragging" : "",
+                                ].filter(Boolean).join(" ")}>
+                                    {renderActionPanel("inline")}
+                                    <button className="button button--primary table-mobile-actions__toggle" type="button" onClick={() => setIsMobileActionMenuOpen(true)}>
+                                        {heroActionState?.canAct ? "Open actions" : "Table actions"}
+                                    </button>
+                                </div>
+                            )}
 
                             <section className={["table-hero-stats-bar", heroPlayer ? "" : "table-hero-stats-bar--empty"].filter(Boolean).join(" ")}>
                                 {heroPlayer ? (
                                     <>
                                         <div className="table-hero-stats-bar__item"><strong>Stack</strong><span>{formatNumber(heroDisplayedStack)}</span></div>
                                         <div className="table-hero-stats-bar__item"><strong>Committed</strong><span>{formatNumber(heroContribution)}</span></div>
-                                        <div className="table-hero-stats-bar__item"><strong>Bank</strong><span>{snapshot?.turnState.timeBankSeconds === null ? "Off" : formatTurnSeconds(Math.ceil(heroTimeBankMs / 1000))}</span></div>
+                                        <div className="table-hero-stats-bar__item"><strong>Bank</strong><span>{tableSnapshot?.turnState.timeBankSeconds === null ? "Off" : formatTurnSeconds(Math.ceil(heroTimeBankMs / 1000))}</span></div>
                                         <div className="table-hero-stats-bar__item"><strong>Bought in</strong><span>{formatNumber(heroBuyInTotal)}</span></div>
                                         <div className="table-hero-stats-bar__item"><strong>Won</strong><span>{formatNumber(heroHandsWonCount)}</span></div>
                                         <div className="table-hero-stats-bar__item"><strong>Rebuys</strong><span>{formatNumber(heroRebuyCount)}</span></div>
@@ -2784,7 +2921,7 @@ export function RoomClient({
                                     <ul className="action-log">
                                         {currentHand.actions.slice(-12).reverse().map((action) => (
                                             <li key={`${action.orderIndex}-${action.createdAt}`} className="action-log__item">
-                                                <strong>{snapshot?.players.find((player) => player.accountId === action.actorAccountId)?.displayName ?? action.actorAccountId}</strong>
+                                                <strong>{resolveRoomDisplayName(snapshot, action.actorAccountId)}</strong>
                                                 <span>{formatActionSummary(action)}</span>
                                                 <span>{formatStreet(action.street)}</span>
                                             </li>
@@ -2803,7 +2940,7 @@ export function RoomClient({
                                                 selectedCompletedHand?.handId === hand.handId ? "table-ledger-panel__history-button--active" : "",
                                             ].filter(Boolean).join(" ")}
                                             type="button"
-                                            onClick={() => setSelectedLedgerHandId(hand.handId)}
+                                            onClick={() => handleSelectHistoryHand(hand.handId)}
                                         >
                                             Hand {hand.handNumber}
                                         </button>
@@ -2831,7 +2968,7 @@ export function RoomClient({
                                                 <ul className="winner-list table-ledger-panel__runout-winners">
                                                     {selectedCompletedHandRunoutResults[boardIndex]!.winners.map((winner) => (
                                                         <li key={`${selectedCompletedHand.handId}-${boardIndex}-${winner.accountId}`}>
-                                                            🏆 {snapshot?.players.find((player) => player.accountId === winner.accountId)?.displayName ?? winner.accountId} won {formatNumber(winner.amountWon)}
+                                                            🏆 {resolveRoomDisplayName(snapshot, winner.accountId)} won {formatNumber(winner.amountWon)}
                                                             {winner.handLabel ? ` with ${winner.handLabel}` : ""}
                                                         </li>
                                                     ))}
@@ -2844,7 +2981,7 @@ export function RoomClient({
                                         <ul className="action-log table-ledger-panel__action-log">
                                             {selectedCompletedHand.actions.map((action) => (
                                                 <li key={`${selectedCompletedHand.handId}-${action.orderIndex}`} className="action-log__item">
-                                                    <strong>{snapshot?.players.find((player) => player.accountId === action.actorAccountId)?.displayName ?? action.actorAccountId}</strong>
+                                                    <strong>{resolveRoomDisplayName(snapshot, action.actorAccountId)}</strong>
                                                     <span>{formatActionSummary(action)}</span>
                                                     <span>{formatStreet(action.street)}</span>
                                                 </li>
@@ -2856,7 +2993,7 @@ export function RoomClient({
                                         <div className="table-ledger-panel__reveals">
                                             {selectedCompletedHandRevealEntries.map(([accountId, cards]) => (
                                                 <article key={`${selectedCompletedHand.handId}-${accountId}`} className="table-ledger-panel__reveal">
-                                                    <strong>{snapshot?.players.find((player) => player.accountId === accountId)?.displayName ?? accountId}</strong>
+                                                    <strong>{resolveRoomDisplayName(snapshot, accountId)}</strong>
                                                     <div className="table-ledger-panel__reveal-cards">
                                                         {cards.filter((card): card is Card => card !== null).map((card, index) => (
                                                             <PokerCard key={`${selectedCompletedHand.handId}-${accountId}-${index}`} card={card} isFaceUp size="compact" backLabel="Reveal" />
@@ -2875,7 +3012,7 @@ export function RoomClient({
                                             <ul className="winner-list">
                                                 {selectedCompletedHandWinners.map((winner) => (
                                                     <li key={`${selectedCompletedHand.handId}-${winner.accountId}`}>
-                                                        🏆 {snapshot?.players.find((player) => player.accountId === winner.accountId)?.displayName ?? winner.accountId} won {formatNumber(winner.amountWon)}
+                                                        🏆 {resolveRoomDisplayName(snapshot, winner.accountId)} won {formatNumber(winner.amountWon)}
                                                         {winner.handLabel ? ` with ${winner.handLabel}` : ""}
                                                     </li>
                                                 ))}
@@ -3307,6 +3444,7 @@ function buildTableSeats(
     const layout = TABLE_LAYOUTS[totalSeats]!;
     const anchorSeat = typeof heroSeatIndex === "number" ? heroSeatIndex : 0;
     const seatOrder = Array.from({ length: totalSeats }, (_, index) => (anchorSeat + index) % totalSeats);
+    const isArchivedSnapshot = snapshot?.status === "archived";
     const currentHand = snapshot?.currentHand ?? null;
     const completedHandReveals = options?.completedHandReveals ?? snapshot?.lastCompletedHand?.revealedHoleCards ?? null;
     const suppressWinnerHighlights = options?.suppressWinnerHighlights ?? false;
@@ -3321,6 +3459,7 @@ function buildTableSeats(
         const cardAdjustment = getSeatCardAdjustment(position);
         const isHero = Boolean(player && accountId && player.accountId === accountId);
         const isFolded = Boolean(player && currentHand?.foldedAccountIds.includes(player.accountId));
+        const isInHand = Boolean(player && currentHand?.playerCardCounts[player.accountId]);
         const isActive = Boolean(player && currentHand?.actorAccountId === player.accountId && !currentHand?.runItTwicePrompt);
         const pendingSeatRequest = !player && accountId
             ? snapshot?.pendingSeatRequests.find((request) => request.accountId === accountId && request.seatIndex === seatIndex) ?? null
@@ -3330,26 +3469,36 @@ function buildTableSeats(
             : null;
         const displayedStack = player ? getDisplayedPlayerStack(player, pendingRunoutWinners) : null;
         const totalHandsWon = player ? snapshot?.playerStats.handsWonByAccount[player.accountId] ?? 0 : 0;
-        const revealedCards = !currentHand && player
+        const revealedCards = player && (isArchivedSnapshot || !currentHand)
             ? completedHandReveals?.[player.accountId] ?? null
             : null;
+        const isInactive = Boolean(player && (isArchivedSnapshot
+            ? (currentHand ? (isFolded || !isInHand) : false)
+            : (
+                isFolded
+                || player.isSittingOut
+                || !player.isConnected
+                || (currentHand ? !isInHand : !player.isReady)
+            )));
         const statusLabel = !player
             ? pendingSeatRequest
                 ? "Pending"
                 : "Open seat"
             : winningEntry
                 ? winningEntry.handLabel ?? "Winner"
-                : player.isSittingOut
-                    ? "Sitting out"
-                    : !player.isConnected
-                        ? "Disconnected"
-                        : isFolded
-                            ? "Folded"
-                            : isActive
-                                ? "Action"
-                                : player.isReady
-                                    ? "Ready"
-                                    : "Seated";
+                : isFolded
+                    ? "Folded"
+                    : isActive
+                        ? "Action"
+                        : isArchivedSnapshot
+                            ? ""
+                            : player.isSittingOut
+                                ? "Sitting out"
+                                : !player.isConnected
+                                    ? "Disconnected"
+                                    : player.isReady
+                                        ? "Ready"
+                                        : "Seated";
 
         return {
             seatIndex,
@@ -3368,6 +3517,7 @@ function buildTableSeats(
             isOpen: player === null,
             isActive,
             isFolded,
+            isInactive,
             isWinner: Boolean(winningEntry),
             name: player?.displayName ?? "Open",
             stackLabel: player ? formatNumber(displayedStack ?? player.stack) : "Waiting",
@@ -3380,9 +3530,9 @@ function buildTableSeats(
                     ? "winner"
                     : isActive
                         ? "active"
-                        : player.isSittingOut || !player.isConnected || isFolded
+                        : isFolded || (!isArchivedSnapshot && (player.isSittingOut || !player.isConnected))
                             ? "warning"
-                            : player.isReady
+                            : !isArchivedSnapshot && player.isReady
                                 ? "ready"
                                 : "waiting",
             avatarLabel: player ? getAvatarLabel(player.displayName) : pendingSeatRequest ? getAvatarLabel(pendingSeatRequest.displayName) : "+",
@@ -3766,6 +3916,188 @@ function getCompletedHandBoards(lastCompletedHand: LastHandResult | null): Card[
 
 function getCompletedHandRunoutResults(lastCompletedHand: LastHandResult | null): NonNullable<NonNullable<LastHandResult["allInRunout"]>["runouts"]> {
     return lastCompletedHand?.allInRunout?.runouts ?? [];
+}
+
+function buildArchivedReplayRoomSnapshot(
+    baseSnapshot: RoomSnapshot,
+    archivedHand: ArchivedHandRecord,
+    accountId: string | undefined,
+    nowMs: number,
+    replayStartedAtMs: number,
+): RoomSnapshot {
+    const replayState = buildArchivedReplayActionState(archivedHand, nowMs, replayStartedAtMs);
+    const players: RoomPlayer[] = archivedHand.participants.map((participant) => ({
+        accountId: participant.accountId,
+        displayName: participant.displayName,
+        seatIndex: participant.seatIndex,
+        stack: participant.finalStack,
+        isReady: false,
+        isConnected: false,
+        isSittingOut: false,
+    }));
+    const blindLevel = archivedHand.blindLevel ?? baseSnapshot.blindState.currentLevel ?? {
+        level: 1,
+        smallBlind: 100,
+        bigBlind: 200,
+        durationMinutes: 20,
+    };
+    const heroCards = accountId ? archivedHand.revealedHoleCards[accountId] : undefined;
+    const currentHand = replayState.isComplete
+        ? null
+        : {
+            id: archivedHand.handId,
+            handNumber: archivedHand.handNumber,
+            blindLevel,
+            dealerSeat: archivedHand.dealerSeat ?? archivedHand.smallBlindSeat ?? archivedHand.bigBlindSeat ?? players[0]?.seatIndex ?? 0,
+            smallBlindSeat: archivedHand.smallBlindSeat ?? players[0]?.seatIndex ?? 0,
+            bigBlindSeat: archivedHand.bigBlindSeat ?? players[0]?.seatIndex ?? 0,
+            actorSeat: archivedHand.dealerSeat ?? archivedHand.smallBlindSeat ?? archivedHand.bigBlindSeat ?? players[0]?.seatIndex ?? 0,
+            actorAccountId: null,
+            street: replayState.street,
+            board: replayState.board,
+            pot: replayState.pot,
+            currentBet: replayState.currentBet,
+            contributions: replayState.contributions,
+            streetContributions: replayState.streetContributions,
+            foldedAccountIds: replayState.foldedAccountIds,
+            playersToAct: [],
+            startedAt: archivedHand.startedAt ?? archivedHand.concludedAt,
+            actions: replayState.actions,
+            heroHoleCards: hasCompleteHoleCards(heroCards) ? heroCards : null,
+            heroActionState: null,
+            runItTwicePrompt: null,
+            playerCardCounts: Object.fromEntries(
+                archivedHand.participants
+                    .filter((participant) => participant.wasDealtIn)
+                    .map((participant) => [participant.accountId, 2]),
+            ),
+            remainingDeckCount: Math.max(0, 52 - replayState.board.length - archivedHand.participants.filter((participant) => participant.wasDealtIn).length * 2),
+        };
+
+    return {
+        ...baseSnapshot,
+        status: "archived",
+        players,
+        chatMessages: [],
+        seatReactions: [],
+        seatGestures: [],
+        nextHandStartsAt: null,
+        pendingSeatRequests: [],
+        pendingRebuyRequests: [],
+        turnState: {
+            turnSeconds: null,
+            timeBankSeconds: null,
+            currentTurnStartedAt: null,
+            timeBankMsByAccount: {},
+        },
+        currentHand,
+        lastCompletedHand: replayState.isComplete ? archivedHandToCompletedHand(archivedHand) : null,
+        lastCompletedHandRevealState: null,
+    };
+}
+
+function buildArchivedReplayActionState(
+    archivedHand: ArchivedHandRecord,
+    nowMs: number,
+    replayStartedAtMs: number,
+): ArchivedReplayActionState {
+    const elapsedMs = Math.max(0, nowMs - replayStartedAtMs);
+    const visibleActionCount = Math.min(archivedHand.actions.length, Math.floor(elapsedMs / ARCHIVED_REPLAY_ACTION_INTERVAL_MS));
+    const actions = archivedHand.actions.slice(0, visibleActionCount);
+    let street: ArchivedReplayActionState["street"] = "preflop";
+    let currentBet = 0;
+    let streetContributions: Record<string, number> = {};
+    const contributions: Record<string, number> = {};
+    const foldedAccountIds = new Set<string>();
+
+    for (const action of actions) {
+        if (action.street !== street) {
+            street = action.street;
+            currentBet = 0;
+            streetContributions = {};
+        }
+
+        if (action.type === "fold") {
+            foldedAccountIds.add(action.actorAccountId);
+        }
+
+        if (action.amount > 0) {
+            contributions[action.actorAccountId] = (contributions[action.actorAccountId] ?? 0) + action.amount;
+            streetContributions[action.actorAccountId] = (streetContributions[action.actorAccountId] ?? 0) + action.amount;
+        }
+
+        currentBet = Math.max(currentBet, action.betTo);
+    }
+
+    return {
+        isComplete: visibleActionCount >= archivedHand.actions.length,
+        street,
+        board: buildArchivedReplayBoard(archivedHand, street, visibleActionCount >= archivedHand.actions.length),
+        pot: Object.values(contributions).reduce((total, amount) => total + amount, 0),
+        currentBet,
+        contributions,
+        streetContributions,
+        foldedAccountIds: Array.from(foldedAccountIds),
+        actions,
+    };
+}
+
+function buildArchivedReplayBoard(
+    archivedHand: ArchivedHandRecord,
+    street: ArchivedReplayActionState["street"],
+    isComplete: boolean,
+): Card[] {
+    if (isComplete) {
+        return archivedHand.board;
+    }
+
+    switch (street) {
+        case "flop":
+            return archivedHand.board.slice(0, 3);
+        case "turn":
+            return archivedHand.board.slice(0, 4);
+        case "river":
+        case "showdown":
+            return archivedHand.board.slice(0, 5);
+        default:
+            return [];
+    }
+}
+
+function archivedHandToCompletedHand(archivedHand: ArchivedHandRecord): LastHandResult {
+    return {
+        handId: archivedHand.handId,
+        handNumber: archivedHand.handNumber,
+        board: archivedHand.board,
+        totalPot: archivedHand.totalPot,
+        winningReason: archivedHand.winningReason,
+        concludedAt: archivedHand.concludedAt,
+        actions: archivedHand.actions,
+        winners: archivedHand.winners,
+        revealedHoleCards: archivedHand.revealedHoleCards,
+        allInRunout: archivedHand.allInRunout,
+    };
+}
+
+function buildArchivedCenterStatus(
+    archivedHand: ArchivedHandRecord | null,
+    currentHand: RoomSnapshot["currentHand"],
+): string {
+    if (!archivedHand) {
+        return "Archived table replay unavailable.";
+    }
+
+    if (currentHand) {
+        return `Replaying archived hand ${archivedHand.handNumber}.`;
+    }
+
+    const winnerNames = archivedHand.winners
+        .map((winner) => archivedHand.participants.find((participant) => participant.accountId === winner.accountId)?.displayName ?? winner.accountId)
+        .join(", ");
+
+    return winnerNames
+        ? `${winnerNames} won the archived pot.`
+        : `Archived hand ${archivedHand.handNumber} replay complete.`;
 }
 
 function buildBoardCollectionKey(boards: Card[][]): string {

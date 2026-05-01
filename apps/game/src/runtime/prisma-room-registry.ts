@@ -32,6 +32,8 @@ import {
 
 import { hashSecret, verifySecret } from "./passwords.js";
 import type {
+  ArchiveRoomRequest,
+  ArchivedHandRecord,
   AutoExpiringRoom,
   CreateRoomRequest,
   DeleteManagedRoomsRequest,
@@ -39,6 +41,7 @@ import type {
   JoinRoomRequest,
   LeaveSeatRequest,
   ManagedRoomSummary,
+  PublicRoomSummary,
   RemovePlayerRequest,
   RevealMode,
   RoomAdminOptionsState,
@@ -138,8 +141,11 @@ interface PersistedRoomRuntimeState {
     pausedAt: string | null;
     totalPausedMs: number;
   };
+  handHistory: ArchivedHandRecord[];
   recentCompletedHands: LastHandResult[];
   lastCompletedHandHoleCards: Record<string, [Card, Card]> | null;
+  archivedAt: string | null;
+  archivedByAccountId: string | null;
 }
 
 export class PrismaRoomRegistry implements RoomRegistry {
@@ -260,6 +266,41 @@ export class PrismaRoomRegistry implements RoomRegistry {
     });
 
     return rooms.map((room) => buildManagedRoomSummary(room, this.requireRuntimeState(room)));
+  }
+
+  async listPublicRooms(): Promise<PublicRoomSummary[]> {
+    const rooms = await this.database.room.findMany({
+      orderBy: [
+        { lastActivityAt: "desc" },
+      ],
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        adminId: true,
+        clubId: true,
+        visibility: true,
+        status: true,
+        passwordHash: true,
+        maxPlayers: true,
+        startingStack: true,
+        autoStartNextHand: true,
+        autoStartDelaySeconds: true,
+        autoExpireAfterHours: true,
+        blindSchedule: true,
+        runtimeState: true,
+        createdAt: true,
+        lastActivityAt: true,
+        updatedAt: true,
+        admin: {
+          select: {
+            username: true,
+          },
+        },
+      },
+    });
+
+    return rooms.map((room) => buildPublicRoomSummary(room, this.requireRuntimeState(room)));
   }
 
   async listAutoExpiringRooms(): Promise<AutoExpiringRoom[]> {
@@ -439,6 +480,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async seatPlayer(input: SeatPlayerRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
     const requestedStack = normalizeRequestedStack(input.requestedStack, runtimeState.table.startingStack);
 
@@ -522,6 +564,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async seatBot(input: SeatBotRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
 
     if (runtimeState.table.adminAccountId !== input.accountId) {
@@ -579,6 +622,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async setReady(input: PlayerReadyRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
     const table = setPlayerReady(runtimeState.table, input.accountId, input.isReady);
     const nextRuntimeState = syncRuntimeState(runtimeState, table);
@@ -595,6 +639,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async setSittingOut(input: PlayerSitOutRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
     const table = setPlayerSittingOut(runtimeState.table, input.accountId, input.isSittingOut);
     const nextRuntimeState = syncRuntimeState(runtimeState, table);
@@ -611,6 +656,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async leaveSeat(input: LeaveSeatRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
     const departingPlayer = runtimeState.table.players.find((player) => player.accountId === input.accountId) ?? null;
     const table = leaveSeat(runtimeState.table, input.accountId);
@@ -643,6 +689,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async postReaction(input: RoomReactionRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
     const emoji = normalizeReactionEmoji(input.emoji);
     const now = new Date();
@@ -673,6 +720,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async setGesture(input: RoomGestureRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
     const now = new Date();
 
@@ -702,6 +750,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async postChatMessage(input: RoomChatRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
     const content = input.content.trim();
 
@@ -741,6 +790,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async rebuyPlayer(input: RoomRebuyRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
     const amount = normalizeRebuyAmount(input.amount, runtimeState.buyInState.minRebuyAmount, runtimeState.buyInState.maxRebuyAmount);
     const seatedPlayer = runtimeState.table.players.find((player) => player.accountId === input.accountId) ?? null;
@@ -806,6 +856,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async decideSeatRequest(input: RoomSeatRequestDecision): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
 
     if (runtimeState.table.adminAccountId !== input.accountId) {
@@ -883,6 +934,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async decideRebuyRequest(input: RoomRebuyRequestDecision): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
 
     if (runtimeState.table.adminAccountId !== input.accountId) {
@@ -942,6 +994,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async updateAdminOptions(input: UpdateRoomAdminOptionsRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
 
     if (runtimeState.table.adminAccountId !== input.accountId) {
@@ -1002,6 +1055,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async setRoomPaused(input: SetRoomPausedRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
 
     if (runtimeState.table.adminAccountId !== input.accountId) {
@@ -1056,6 +1110,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async stopRoom(input: StopRoomRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
 
     if (runtimeState.table.adminAccountId !== input.accountId) {
@@ -1098,9 +1153,93 @@ export class PrismaRoomRegistry implements RoomRegistry {
     return this.toSnapshot(nextRuntimeState, input.accountId);
   }
 
+  async archiveRoom(input: ArchiveRoomRequest): Promise<RoomSnapshot> {
+    const room = await this.requireRoom(input.slug);
+    const runtimeState = this.requireRuntimeState(room);
+    this.assertViewerHasRoomAccess(runtimeState, input.accountId);
+
+    if (runtimeState.table.adminAccountId !== input.accountId) {
+      throw new Error("Only the room admin can archive the table.");
+    }
+
+    if (runtimeState.table.status === "archived") {
+      throw new Error("Table is already archived.");
+    }
+
+    if (runtimeState.table.currentHand) {
+      throw new Error("Finish the current hand before archiving the table.");
+    }
+
+    const handHistory = getArchivedHandHistory(runtimeState);
+
+    if (handHistory.length === 0) {
+      throw new Error("Play at least one hand before archiving the table.");
+    }
+
+    const now = new Date();
+    const table: TableState = {
+      ...runtimeState.table,
+      status: "archived",
+      sessionStartedAt: null,
+      nextHandStartsAt: null,
+      players: runtimeState.table.players.map((player) => ({
+        ...player,
+        isReady: false,
+        isConnected: false,
+        isSittingOut: false,
+      })),
+      updatedAt: now.toISOString(),
+    };
+    const nextRuntimeState: PersistedRoomRuntimeState = {
+      ...runtimeState,
+      table,
+      chatMessages: [],
+      seatReactions: [],
+      seatGestures: [],
+      pauseState: {
+        pausedAt: null,
+        totalPausedMs: 0,
+      },
+      turnState: {
+        ...runtimeState.turnState,
+        currentTurnStartedAt: null,
+        timeBankMsByAccount: resetOrClampTimeBankEntries({}, table.players, runtimeState.turnState.timeBankSeconds),
+      },
+      pendingSeatRequests: [],
+      pendingRebuyRequests: [],
+      handHistory,
+      archivedAt: now.toISOString(),
+      archivedByAccountId: input.accountId,
+    };
+
+    await this.database.$transaction(async (transaction) => {
+      await transaction.tableSession.updateMany({
+        where: {
+          roomId: room.id,
+          endedAt: null,
+        },
+        data: {
+          endedAt: now,
+        },
+      });
+
+      await transaction.room.update({
+        where: { id: room.id },
+        data: {
+          ...this.roomUpdatePayload(nextRuntimeState, now),
+          autoExpireAfterHours: null,
+        },
+      });
+    });
+
+    await this.onRoomUpdated?.(input.slug);
+    return this.toSnapshot(nextRuntimeState, input.accountId);
+  }
+
   async removePlayer(input: RemovePlayerRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
 
     if (runtimeState.table.adminAccountId !== input.accountId) {
@@ -1150,6 +1289,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async revealCards(input: RoomRevealCardsRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
     const lastCompletedHand = runtimeState.table.lastCompletedHand;
     const hiddenHoleCards = runtimeState.lastCompletedHandHoleCards;
@@ -1197,6 +1337,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async setPlayerConnection(input: PlayerConnectionRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     const existingTable = runtimeState.table;
     const table = setPlayerConnection(existingTable, {
       accountId: input.accountId,
@@ -1221,6 +1362,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async cleanupBustedPlayers(slug: string): Promise<RoomSnapshot> {
     const room = await this.requireRoom(slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     const now = new Date();
     const bustedAccountIds = getBustedPlayerAccountIdsForCleanup(runtimeState.table, now.getTime());
 
@@ -1235,6 +1377,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async startHand(input: StartHandRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     let runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
     const now = new Date();
 
@@ -1326,6 +1469,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async actOnHand(input: RoomActionRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
     const existingTable = runtimeState.table;
     const now = new Date();
@@ -1424,6 +1568,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async submitRunItTwiceDecision(input: RoomRunItTwiceDecisionRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
     const now = new Date();
     const table = applyRunItTwiceDecision(runtimeState.table, {
@@ -1446,6 +1591,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async expirePendingRunItTwiceDecision(slug: string): Promise<RoomSnapshot> {
     const room = await this.requireRoom(slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
     const now = new Date();
     const table = expirePendingRunItTwiceDecision(runtimeState.table, now);
     const nextRuntimeState = syncRuntimeState(runtimeState, table, { now });
@@ -1464,6 +1610,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async resolvePendingRunItTwiceDecision(slug: string): Promise<RoomSnapshot> {
     const room = await this.requireRoom(slug);
     const runtimeState = this.requireRuntimeState(room);
+    this.assertRoomIsMutable(runtimeState);
 
     if (!isRunItTwiceVotingComplete(runtimeState.table.currentHand?.runItTwicePrompt ?? null)) {
       throw new Error("Run it twice voting is not complete.");
@@ -1627,6 +1774,12 @@ export class PrismaRoomRegistry implements RoomRegistry {
     }
 
     return createRuntimeState(parsed);
+  }
+
+  private assertRoomIsMutable(runtimeState: PersistedRoomRuntimeState): void {
+    if (runtimeState.table.status === "archived") {
+      throw new Error("Archived rooms are read-only.");
+    }
   }
 
   private assertViewerHasRoomAccess(runtimeState: PersistedRoomRuntimeState, accountId?: string): void {
@@ -1794,8 +1947,11 @@ function createRuntimeState(table: TableState): PersistedRoomRuntimeState {
       pausedAt: null,
       totalPausedMs: 0,
     },
+    handHistory: table.lastCompletedHand ? [buildFallbackArchivedHandRecord(table.lastCompletedHand, table.players)] : [],
     recentCompletedHands: table.lastCompletedHand ? [table.lastCompletedHand] : [],
     lastCompletedHandHoleCards: null,
+    archivedAt: null,
+    archivedByAccountId: null,
   };
 }
 
@@ -1803,6 +1959,8 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
   const turnSeconds = normalizeOptionalRuntimeSetting(runtimeState.turnState?.turnSeconds, DEFAULT_TURN_SECONDS);
   const timeBankSeconds = normalizeOptionalRuntimeSetting(runtimeState.turnState?.timeBankSeconds, DEFAULT_TIMEBANK_SECONDS);
   const normalizedLastCompletedHand = normalizeCompletedHand(runtimeState.table.lastCompletedHand);
+  const normalizedRecentCompletedHands = normalizeCompletedHands(runtimeState.recentCompletedHands ?? (normalizedLastCompletedHand ? [normalizedLastCompletedHand] : []));
+  const normalizedHandHistory = normalizeArchivedHandHistory(runtimeState.handHistory);
   const revealAllShowdownHands = runtimeState.adminOptions?.revealAllShowdownHands ?? runtimeState.table.revealAllShowdownHands ?? false;
   const runItTwiceEnabled = runtimeState.adminOptions?.runItTwiceEnabled ?? runtimeState.table.runItTwiceEnabled ?? false;
 
@@ -1858,8 +2016,13 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
         ? runtimeState.pauseState.totalPausedMs
         : 0,
     },
-    recentCompletedHands: normalizeCompletedHands(runtimeState.recentCompletedHands ?? (normalizedLastCompletedHand ? [normalizedLastCompletedHand] : [])),
+    handHistory: normalizedHandHistory.length > 0
+      ? normalizedHandHistory
+      : normalizedRecentCompletedHands.map((hand) => buildFallbackArchivedHandRecord(hand, runtimeState.table.players)),
+    recentCompletedHands: normalizedRecentCompletedHands,
     lastCompletedHandHoleCards: normalizeHoleCardsByAccount(runtimeState.lastCompletedHandHoleCards),
+    archivedAt: typeof runtimeState.archivedAt === "string" ? runtimeState.archivedAt : null,
+    archivedByAccountId: typeof runtimeState.archivedByAccountId === "string" ? runtimeState.archivedByAccountId : null,
   };
 }
 
@@ -1923,8 +2086,11 @@ function syncRuntimeState(
     pendingSeatRequests: runtimeState.pendingSeatRequests,
     pendingRebuyRequests: runtimeState.pendingRebuyRequests,
     pauseState: runtimeState.pauseState,
+    handHistory: syncArchivedHandHistory(runtimeState.handHistory, runtimeState.table, table),
     recentCompletedHands: syncCompletedHandHistory(runtimeState.recentCompletedHands, runtimeState.table, table),
     lastCompletedHandHoleCards: syncLastCompletedHandHoleCards(runtimeState.lastCompletedHandHoleCards, runtimeState.table, table),
+    archivedAt: runtimeState.archivedAt,
+    archivedByAccountId: runtimeState.archivedByAccountId,
   };
 }
 
@@ -2009,6 +2175,13 @@ function buildFullRoomSnapshot(
     currentHand,
     lastCompletedHand: table.lastCompletedHand,
     recentCompletedHands: runtimeState.recentCompletedHands,
+    archive: runtimeState.archivedAt && table.status === "archived"
+      ? {
+          archivedAt: runtimeState.archivedAt,
+          archivedByAccountId: runtimeState.archivedByAccountId ?? table.adminAccountId,
+          hands: getArchivedHandHistory(runtimeState),
+        }
+      : null,
     lastCompletedHandRevealState: buildLastCompletedHandRevealState(runtimeState, accountId),
   };
 }
@@ -2076,6 +2249,7 @@ function buildLockedRoomSnapshot(runtimeState: PersistedRoomRuntimeState): RoomS
     currentHand: null,
     lastCompletedHand: null,
     recentCompletedHands: [],
+    archive: null,
     lastCompletedHandRevealState: null,
   };
 }
@@ -2102,6 +2276,25 @@ function buildManagedRoomSummary(room: ManagedPersistedRoomRecord, runtimeState:
     lastActivityAt: room.lastActivityAt.toISOString(),
     autoExpireAfterHours: room.autoExpireAfterHours,
     expiresAt: expiresAt?.toISOString() ?? null,
+    archivedAt: runtimeState.archivedAt,
+  };
+}
+
+function buildPublicRoomSummary(room: ManagedPersistedRoomRecord, runtimeState: PersistedRoomRuntimeState): PublicRoomSummary {
+  return {
+    roomId: room.id,
+    slug: room.slug,
+    name: runtimeState.table.name,
+    adminUsername: room.admin.username,
+    visibility: runtimeState.table.visibility,
+    status: runtimeState.table.status,
+    passwordProtected: runtimeState.table.passwordProtected,
+    maxPlayers: runtimeState.table.maxPlayers,
+    seatedPlayerCount: runtimeState.table.players.length,
+    handCount: runtimeState.table.handCount,
+    createdAt: room.createdAt.toISOString(),
+    lastActivityAt: room.lastActivityAt.toISOString(),
+    archivedAt: runtimeState.archivedAt,
   };
 }
 
@@ -2239,6 +2432,31 @@ function syncCompletedHandHistory(
   ].slice(0, MAX_RECENT_COMPLETED_HANDS);
 }
 
+function syncArchivedHandHistory(
+  currentHistory: PersistedRoomRuntimeState["handHistory"],
+  previousTable: TableState,
+  nextTable: TableState,
+): PersistedRoomRuntimeState["handHistory"] {
+  const normalizedHistory = normalizeArchivedHandHistory(currentHistory);
+  const completedHand = nextTable.lastCompletedHand;
+  const previousCompletedHandNumber = previousTable.lastCompletedHand?.handNumber ?? null;
+
+  if (!previousTable.currentHand || !completedHand) {
+    return normalizedHistory;
+  }
+
+  if (completedHand.handNumber !== previousTable.currentHand.handNumber || completedHand.handNumber === previousCompletedHandNumber) {
+    return normalizedHistory;
+  }
+
+  const nextArchivedHand = buildArchivedHandRecord(previousTable, nextTable, completedHand);
+
+  return [
+    nextArchivedHand,
+    ...normalizedHistory.filter((entry) => entry.handId !== nextArchivedHand.handId && entry.handNumber !== nextArchivedHand.handNumber),
+  ];
+}
+
 function normalizeCompletedHands(value: PersistedRoomRuntimeState["recentCompletedHands"] | undefined): PersistedRoomRuntimeState["recentCompletedHands"] {
   if (!Array.isArray(value)) {
     return [];
@@ -2303,6 +2521,177 @@ function normalizeCompletedHand(value: LastHandResult | null | undefined): LastH
   };
 }
 
+function normalizeArchivedHandHistory(value: PersistedRoomRuntimeState["handHistory"] | undefined): PersistedRoomRuntimeState["handHistory"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<number>();
+
+  return value
+    .map((entry) => normalizeArchivedHand(entry))
+    .filter((entry): entry is ArchivedHandRecord => Boolean(entry))
+    .filter((entry) => {
+      if (seen.has(entry.handNumber)) {
+        return false;
+      }
+
+      seen.add(entry.handNumber);
+      return true;
+    });
+}
+
+function normalizeArchivedHand(value: ArchivedHandRecord | null | undefined): ArchivedHandRecord | null {
+  if (!value || typeof value.concludedAt !== "string") {
+    return null;
+  }
+
+  const normalizedCompletedHand = normalizeCompletedHand({
+    handId: value.handId,
+    handNumber: value.handNumber,
+    board: value.board,
+    totalPot: value.totalPot,
+    winningReason: value.winningReason,
+    concludedAt: value.concludedAt,
+    actions: value.actions,
+    winners: value.winners,
+    revealedHoleCards: value.revealedHoleCards,
+    allInRunout: value.allInRunout,
+  });
+
+  if (!normalizedCompletedHand) {
+    return null;
+  }
+
+  return {
+    ...normalizedCompletedHand,
+    blindLevel: value.blindLevel && typeof value.blindLevel.smallBlind === "number" && typeof value.blindLevel.bigBlind === "number" && typeof value.blindLevel.durationMinutes === "number"
+      ? { ...value.blindLevel }
+      : null,
+    dealerSeat: typeof value.dealerSeat === "number" ? value.dealerSeat : null,
+    smallBlindSeat: typeof value.smallBlindSeat === "number" ? value.smallBlindSeat : null,
+    bigBlindSeat: typeof value.bigBlindSeat === "number" ? value.bigBlindSeat : null,
+    startedAt: typeof value.startedAt === "string" ? value.startedAt : null,
+    participants: Array.isArray(value.participants)
+      ? value.participants
+        .filter((participant) => participant && typeof participant.accountId === "string" && typeof participant.displayName === "string" && typeof participant.seatIndex === "number")
+        .map((participant) => ({
+          accountId: participant.accountId,
+          displayName: participant.displayName,
+          seatIndex: participant.seatIndex,
+          finalStack: typeof participant.finalStack === "number" && Number.isFinite(participant.finalStack)
+            ? Math.max(0, Math.floor(participant.finalStack))
+            : 0,
+          wasDealtIn: participant.wasDealtIn === true,
+        }))
+      : [],
+  };
+}
+
+function buildArchivedHandRecord(previousTable: TableState, nextTable: TableState, completedHand: LastHandResult): ArchivedHandRecord {
+  const previousHand = previousTable.currentHand;
+
+  if (!previousHand) {
+    return buildFallbackArchivedHandRecord(completedHand, nextTable.players);
+  }
+
+  const normalizedCompletedHand = normalizeCompletedHand(completedHand);
+  const finalPlayerByAccountId = new Map(nextTable.players.map((player) => [player.accountId, player]));
+
+  return {
+    handId: normalizedCompletedHand?.handId ?? completedHand.handId,
+    handNumber: normalizedCompletedHand?.handNumber ?? completedHand.handNumber,
+    blindLevel: { ...previousHand.blindLevel },
+    dealerSeat: previousHand.dealerSeat,
+    smallBlindSeat: previousHand.smallBlindSeat,
+    bigBlindSeat: previousHand.bigBlindSeat,
+    startedAt: previousHand.startedAt,
+    concludedAt: normalizedCompletedHand?.concludedAt ?? completedHand.concludedAt,
+    board: normalizedCompletedHand?.board ?? [...completedHand.board],
+    totalPot: normalizedCompletedHand?.totalPot ?? completedHand.totalPot,
+    winningReason: normalizedCompletedHand?.winningReason ?? completedHand.winningReason,
+    actions: normalizedCompletedHand?.actions ?? completedHand.actions.map((action) => ({ ...action })),
+    winners: normalizedCompletedHand?.winners ?? completedHand.winners.map((winner) => ({ ...winner })),
+    revealedHoleCards: normalizedCompletedHand?.revealedHoleCards ?? {},
+    allInRunout: normalizedCompletedHand?.allInRunout ?? null,
+    participants: previousTable.players
+      .map((player) => ({
+        accountId: player.accountId,
+        displayName: player.displayName,
+        seatIndex: player.seatIndex,
+        finalStack: Math.max(0, finalPlayerByAccountId.get(player.accountId)?.stack ?? 0),
+        wasDealtIn: Object.prototype.hasOwnProperty.call(previousHand.holeCards, player.accountId),
+      }))
+      .sort((left, right) => left.seatIndex - right.seatIndex),
+  };
+}
+
+function buildFallbackArchivedHandRecord(completedHand: LastHandResult, players: TableState["players"]): ArchivedHandRecord {
+  const normalizedCompletedHand = normalizeCompletedHand(completedHand);
+  const playerByAccountId = new Map(players.map((player) => [player.accountId, player]));
+  const participantAccountIds = Array.from(new Set([
+    ...players.map((player) => player.accountId),
+    ...Object.keys(completedHand.revealedHoleCards ?? {}),
+    ...completedHand.actions.map((action) => action.actorAccountId),
+    ...completedHand.winners.map((winner) => winner.accountId),
+  ]));
+  const seatByAccountId = new Map<string, number>();
+
+  for (const action of completedHand.actions) {
+    seatByAccountId.set(action.actorAccountId, action.actorSeat);
+  }
+
+  for (const winner of completedHand.winners) {
+    seatByAccountId.set(winner.accountId, winner.seatIndex);
+  }
+
+  return {
+    handId: normalizedCompletedHand?.handId ?? completedHand.handId,
+    handNumber: normalizedCompletedHand?.handNumber ?? completedHand.handNumber,
+    blindLevel: null,
+    dealerSeat: null,
+    smallBlindSeat: null,
+    bigBlindSeat: null,
+    startedAt: null,
+    concludedAt: normalizedCompletedHand?.concludedAt ?? completedHand.concludedAt,
+    board: normalizedCompletedHand?.board ?? [...completedHand.board],
+    totalPot: normalizedCompletedHand?.totalPot ?? completedHand.totalPot,
+    winningReason: normalizedCompletedHand?.winningReason ?? completedHand.winningReason,
+    actions: normalizedCompletedHand?.actions ?? completedHand.actions.map((action) => ({ ...action })),
+    winners: normalizedCompletedHand?.winners ?? completedHand.winners.map((winner) => ({ ...winner })),
+    revealedHoleCards: normalizedCompletedHand?.revealedHoleCards ?? {},
+    allInRunout: normalizedCompletedHand?.allInRunout ?? null,
+    participants: participantAccountIds
+      .map((accountId, index) => {
+        const player = playerByAccountId.get(accountId);
+        const winner = completedHand.winners.find((entry) => entry.accountId === accountId) ?? null;
+
+        return {
+          accountId,
+          displayName: player?.displayName ?? accountId,
+          seatIndex: player?.seatIndex ?? seatByAccountId.get(accountId) ?? index,
+          finalStack: Math.max(0, player?.stack ?? winner?.finalStack ?? 0),
+          wasDealtIn: Object.prototype.hasOwnProperty.call(completedHand.revealedHoleCards, accountId)
+            || completedHand.actions.some((action) => action.actorAccountId === accountId)
+            || completedHand.winners.some((entry) => entry.accountId === accountId),
+        };
+      })
+      .sort((left, right) => left.seatIndex - right.seatIndex),
+  };
+}
+
+function getArchivedHandHistory(runtimeState: PersistedRoomRuntimeState): PersistedRoomRuntimeState["handHistory"] {
+  const normalizedHistory = normalizeArchivedHandHistory(runtimeState.handHistory);
+
+  if (normalizedHistory.length > 0) {
+    return normalizedHistory;
+  }
+
+  return normalizeArchivedHandHistory(
+    runtimeState.recentCompletedHands.map((hand) => buildFallbackArchivedHandRecord(hand, runtimeState.table.players))
+  );
+}
+
 function normalizeHoleCardsByAccount(value: PersistedRoomRuntimeState["lastCompletedHandHoleCards"] | undefined): PersistedRoomRuntimeState["lastCompletedHandHoleCards"] {
   if (!value || typeof value !== "object") {
     return null;
@@ -2318,7 +2707,7 @@ function cloneHoleCards(value: Record<string, [Card, Card]>): Record<string, [Ca
 }
 
 function buildLastCompletedHandRevealState(runtimeState: PersistedRoomRuntimeState, accountId?: string): RoomSnapshot["lastCompletedHandRevealState"] {
-  if (!accountId || runtimeState.table.currentHand || !runtimeState.table.lastCompletedHand || !runtimeState.lastCompletedHandHoleCards?.[accountId]) {
+  if (runtimeState.table.status === "archived" || !accountId || runtimeState.table.currentHand || !runtimeState.table.lastCompletedHand || !runtimeState.lastCompletedHandHoleCards?.[accountId]) {
     return null;
   }
 
@@ -2898,6 +3287,8 @@ function toPrismaStatus(status: TableState["status"]): RoomStatus {
   switch (status) {
     case "active":
       return "ACTIVE";
+    case "archived":
+      return "ARCHIVED";
     case "paused":
       return "PAUSED";
     default:

@@ -355,7 +355,8 @@ export function buildDemoRoomPreset(slug: string): DemoRoomPreset | null {
                 buildPreviousFoldHand(nowMs - 4 * 60_000),
                 buildPreviousShowdownHand(nowMs - 10 * 60_000),
             ],
-            lastCompletedHandRevealState: null,
+                archive: null,
+                lastCompletedHandRevealState: null,
         },
     };
 }
