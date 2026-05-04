@@ -48,6 +48,7 @@ import type {
   CreateSyntheticClubPlayerRequest,
   DeleteManagedRoomsRequest,
   DeleteManagedRoomsResult,
+  GetRoomArchivePreviewRequest,
   JoinRoomRequest,
   ManagedClubSummary,
   LeaveSeatRequest,
@@ -77,6 +78,9 @@ import type {
   PlayerReadyRequest,
   PlayerSitOutRequest,
   RoomActionRequest,
+  RoomArchiveLedgerRow,
+  RoomArchivePreview,
+  RoomArchiveUserOption,
   RoomRegistry,
   RoomRunItTwiceDecisionRequest,
   RoomSnapshot,
@@ -113,7 +117,28 @@ const CLUB_IMPORT_EMAIL_DOMAIN = "club-import.local";
 const MAX_CLUB_USER_SEARCH_RESULTS = 12;
 
 type PrismaClientLike = PrismaClient;
+type PrismaTransactionClient = Omit<PrismaClientLike, "$on" | "$connect" | "$disconnect" | "$use" | "$transaction" | "$extends">;
 type RankingRecalculationClient = Pick<PrismaClientLike, "clubLedgerEntry" | "userRanking">;
+type ClubLeaderboardDisplayNameTransactionDelegate = {
+  upsert(args: {
+    where: {
+      clubId_normalizedDisplayName: {
+        clubId: string;
+        normalizedDisplayName: string;
+      };
+    };
+    update: {
+      displayName: string;
+      isVisibleInLeaderboard: boolean;
+    };
+    create: {
+      clubId: string;
+      normalizedDisplayName: string;
+      displayName: string;
+      isVisibleInLeaderboard: boolean;
+    };
+  }): Promise<unknown>;
+};
 
 interface PersistedRoomRecord {
   id: string;
@@ -203,10 +228,18 @@ interface PersistedClubLedgerGameRecord {
   entries: PersistedClubLedgerEntryRecord[];
 }
 
+interface PersistedClubLeaderboardDisplayNameRecord {
+  normalizedDisplayName: string;
+  displayName: string;
+  isVisibleInLeaderboard: boolean;
+  updatedAt: Date;
+}
+
 interface ManagedPersistedClubRecord extends PersistedClubRecord {
   memberships: PersistedClubMembershipRecord[];
   rankings: PersistedClubRankingRecord[];
   ledgerGames: PersistedClubLedgerGameRecord[];
+  leaderboardDisplayNames: PersistedClubLeaderboardDisplayNameRecord[];
 }
 
 interface PersistedRoomRuntimeState {
@@ -231,6 +264,27 @@ interface PersistedRoomRuntimeState {
   lastCompletedHandHoleCards: Record<string, [Card, Card]> | null;
   archivedAt: string | null;
   archivedByAccountId: string | null;
+}
+
+interface RoomArchiveSourceLedgerRow {
+  sourceAccountId: string;
+  displayName: string;
+  totalBuyIn: number;
+  buyOut: number;
+  stack: number;
+  cashOut: number;
+  wins: number;
+  rebuys: number;
+  netResult: number;
+}
+
+interface MergedRoomArchiveLedgerEntry {
+  accountId: string;
+  displayName: string;
+  totalBuyIn: number;
+  cashOut: number;
+  netResult: number;
+  playerOrder: number;
 }
 
 export class PrismaRoomRegistry implements RoomRegistry {
@@ -260,7 +314,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
       autoStartNextHand: input.autoStartNextHand ?? true,
       autoStartDelaySeconds: input.autoStartDelaySeconds ?? 8,
       revealAllShowdownHands: input.revealAllShowdownHands ?? false,
-      runItTwiceEnabled: false,
+      runItTwiceEnabled: input.runItTwiceEnabled ?? true,
       passwordProtected: Boolean(input.password?.trim()),
     });
 
@@ -367,6 +421,24 @@ export class PrismaRoomRegistry implements RoomRegistry {
             rooms: true,
           },
         },
+        memberships: {
+          orderBy: [
+            { joinedAt: "asc" },
+          ],
+          select: {
+            role: true,
+            canManageRooms: true,
+            isVisibleInLeaderboard: true,
+            joinedAt: true,
+            user: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+              },
+            },
+          },
+        },
         rankings: {
           where: {
             scope: "CLUB",
@@ -420,6 +492,17 @@ export class PrismaRoomRegistry implements RoomRegistry {
             },
           },
         },
+        leaderboardDisplayNames: {
+          orderBy: [
+            { displayName: "asc" },
+          ],
+          select: {
+            normalizedDisplayName: true,
+            displayName: true,
+            isVisibleInLeaderboard: true,
+            updatedAt: true,
+          },
+        },
       },
     });
 
@@ -427,7 +510,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
       return null;
     }
 
-    return buildClubDetails(club, club.rankings, club.ledgerGames);
+    return buildClubDetails(club, club.rankings, club.memberships, club.ledgerGames, club.leaderboardDisplayNames);
   }
 
   async listManagedClubs(): Promise<ManagedClubSummary[]> {
@@ -522,6 +605,17 @@ export class PrismaRoomRegistry implements RoomRegistry {
                 },
               },
             },
+          },
+        },
+        leaderboardDisplayNames: {
+          orderBy: [
+            { displayName: "asc" },
+          ],
+          select: {
+            normalizedDisplayName: true,
+            displayName: true,
+            isVisibleInLeaderboard: true,
+            updatedAt: true,
           },
         },
       },
@@ -722,58 +816,140 @@ export class PrismaRoomRegistry implements RoomRegistry {
   async updateClubLeaderboardEntry(input: UpdateClubLeaderboardEntryRequest): Promise<ManagedClubSummary> {
     await this.assertClubExists(input.clubId);
 
-    const user = await this.database.user.findUnique({
-      where: { id: input.accountId },
-      select: { id: true },
+    const targetAccountIds = Array.from(new Set([input.accountId, ...(input.accountIds ?? [])]));
+    const users = await this.database.user.findMany({
+      where: {
+        id: {
+          in: targetAccountIds,
+        },
+      },
+      select: {
+        id: true,
+        username: true,
+      },
     });
 
-    if (!user) {
-      throw new Error("User does not exist.");
+    if (users.length !== targetAccountIds.length) {
+      throw new Error("One or more leaderboard users do not exist.");
     }
 
-    if (isBotAccountId(input.accountId)) {
+    if (targetAccountIds.some((accountId) => isBotAccountId(accountId))) {
       throw new Error("Bots cannot appear on club leaderboards.");
     }
 
-    const totalProfit = normalizeRankingChipValue(input.totalProfit, "totalProfit");
-    const gamesPlayed = normalizeGamesPlayed(input.gamesPlayed, "gamesPlayed");
+    const hasTotalUpdate = input.totalProfit !== undefined || input.gamesPlayed !== undefined;
+
+    if (hasTotalUpdate && (input.totalProfit === undefined || input.gamesPlayed === undefined)) {
+      throw new Error("Leaderboard updates must include both totalProfit and gamesPlayed together.");
+    }
+
+    if (!hasTotalUpdate && input.isVisibleInLeaderboard === undefined) {
+      throw new Error("Provide leaderboard totals or visibility to update.");
+    }
+
+    const leaderboardDisplayName = input.displayName?.trim() || (targetAccountIds.length === 1 ? users[0]?.username : undefined);
+    const normalizedDisplayName = leaderboardDisplayName
+      ? normalizeClubLeaderboardDisplayNameKey(leaderboardDisplayName)
+      : undefined;
+
+    if (input.isVisibleInLeaderboard !== undefined && !normalizedDisplayName) {
+      throw new Error("Leaderboard visibility updates require a display name.");
+    }
+
+    if (hasTotalUpdate && targetAccountIds.length > 1) {
+      throw new Error("Grouped leaderboard rows recalculate from recorded display names. Only visibility can be changed here.");
+    }
+
+    if (hasTotalUpdate && normalizedDisplayName) {
+      const recordedEntries = await this.database.clubLedgerEntry.findMany({
+        where: {
+          userId: input.accountId,
+          game: {
+            clubId: input.clubId,
+          },
+        },
+        select: {
+          displayName: true,
+        },
+      });
+
+      if (recordedEntries.some((entry) => normalizeClubLeaderboardDisplayNameKey(entry.displayName) === normalizedDisplayName)) {
+        throw new Error("Recorded leaderboard rows recalculate from recorded games. Only visibility can be changed here.");
+      }
+    }
+
+    const totalProfit = input.totalProfit !== undefined
+      ? normalizeRankingChipValue(input.totalProfit, "totalProfit")
+      : undefined;
+    const gamesPlayed = input.gamesPlayed !== undefined
+      ? normalizeGamesPlayed(input.gamesPlayed, "gamesPlayed")
+      : undefined;
     const scopeKey = buildClubScopeKey(input.clubId);
 
-    await this.database.clubMembership.upsert({
-      where: {
-        clubId_userId: {
-          clubId: input.clubId,
-          userId: input.accountId,
-        },
-      },
-      update: {},
-      create: {
-        clubId: input.clubId,
-        userId: input.accountId,
-      },
-    });
+    await this.database.$transaction(async (transaction: PrismaTransactionClient) => {
+      if (input.isVisibleInLeaderboard !== undefined && normalizedDisplayName && leaderboardDisplayName) {
+        const leaderboardDisplayNameDelegate = (transaction as PrismaTransactionClient & {
+          clubLeaderboardDisplayName: ClubLeaderboardDisplayNameTransactionDelegate;
+        }).clubLeaderboardDisplayName;
 
-    await this.database.userRanking.upsert({
-      where: {
-        userId_scopeKey: {
-          userId: input.accountId,
-          scopeKey,
-        },
-      },
-      update: {
-        clubId: input.clubId,
-        scope: "CLUB",
-        totalProfit: BigInt(totalProfit),
-        gamesPlayed,
-      },
-      create: {
-        userId: input.accountId,
-        clubId: input.clubId,
-        scope: "CLUB",
-        scopeKey,
-        totalProfit: BigInt(totalProfit),
-        gamesPlayed,
-      },
+        await leaderboardDisplayNameDelegate.upsert({
+          where: {
+            clubId_normalizedDisplayName: {
+              clubId: input.clubId,
+              normalizedDisplayName,
+            },
+          },
+          update: {
+            displayName: leaderboardDisplayName,
+            isVisibleInLeaderboard: input.isVisibleInLeaderboard,
+          },
+          create: {
+            clubId: input.clubId,
+            normalizedDisplayName,
+            displayName: leaderboardDisplayName,
+            isVisibleInLeaderboard: input.isVisibleInLeaderboard,
+          },
+        });
+      }
+
+      if (totalProfit !== undefined && gamesPlayed !== undefined) {
+        await transaction.clubMembership.upsert({
+          where: {
+            clubId_userId: {
+              clubId: input.clubId,
+              userId: input.accountId,
+            },
+          },
+          update: {},
+          create: {
+            clubId: input.clubId,
+            userId: input.accountId,
+          },
+        });
+
+        await transaction.userRanking.upsert({
+          where: {
+            userId_scopeKey: {
+              userId: input.accountId,
+              scopeKey,
+            },
+          },
+          update: {
+            clubId: input.clubId,
+            scope: "CLUB",
+            totalProfit: BigInt(totalProfit),
+            gamesPlayed,
+          },
+          create: {
+            userId: input.accountId,
+            clubId: input.clubId,
+            scope: "CLUB",
+            scopeKey,
+            totalProfit: BigInt(totalProfit),
+            gamesPlayed,
+          },
+        });
+      }
     });
 
     return this.getManagedClubSummaryById(input.clubId);
@@ -1784,6 +1960,88 @@ export class PrismaRoomRegistry implements RoomRegistry {
     return this.toSnapshot(nextRuntimeState, input.accountId);
   }
 
+  async getRoomArchivePreview(input: GetRoomArchivePreviewRequest): Promise<RoomArchivePreview> {
+    const room = await this.requireRoom(input.slug);
+    const runtimeState = this.requireRuntimeState(room);
+    this.assertViewerHasRoomAccess(runtimeState, input.accountId);
+
+    if (runtimeState.table.adminAccountId !== input.accountId) {
+      throw new Error("Only the room admin can archive the table.");
+    }
+
+    if (runtimeState.table.status === "archived") {
+      throw new Error("Table is already archived.");
+    }
+
+    if (runtimeState.table.currentHand) {
+      throw new Error("Finish the current hand before archiving the table.");
+    }
+
+    if (!room.clubId) {
+      throw new Error("Only club rooms can be matched before archive.");
+    }
+
+    const club = await this.database.club.findUnique({
+      where: { id: room.clubId },
+      select: {
+        id: true,
+        name: true,
+      },
+    });
+
+    if (!club) {
+      throw new Error("Club does not exist.");
+    }
+
+    const handHistory = getArchivedHandHistory(runtimeState);
+
+    if (handHistory.length === 0) {
+      throw new Error("Play at least one hand before archiving the table.");
+    }
+
+    const ledgerRows = buildRoomArchiveLedgerRows(runtimeState).filter((row) => !isBotAccountId(row.sourceAccountId));
+
+    if (ledgerRows.length === 0) {
+      throw new Error("No eligible player ledger rows are available for club archive.");
+    }
+
+    const sourceUsers = await this.database.user.findMany({
+      where: {
+        id: {
+          in: ledgerRows.map((row) => row.sourceAccountId),
+        },
+      },
+      select: {
+        id: true,
+        username: true,
+      },
+    });
+    const sourceUsernameByAccountId = new Map(sourceUsers.map((user) => [user.id, user.username]));
+
+    return {
+      roomId: room.id,
+      slug: room.slug,
+      name: room.name,
+      clubId: club.id,
+      clubName: club.name,
+      label: room.name,
+      playedAt: deriveRoomArchivePlayedAt(handHistory, runtimeState.table.updatedAt).toISOString(),
+      ledger: ledgerRows.map((row) => ({
+        sourceAccountId: row.sourceAccountId,
+        sourceUsername: sourceUsernameByAccountId.get(row.sourceAccountId) ?? row.sourceAccountId,
+        displayName: row.displayName,
+        totalBuyIn: row.totalBuyIn,
+        buyOut: row.buyOut,
+        stack: row.stack,
+        cashOut: row.cashOut,
+        wins: row.wins,
+        rebuys: row.rebuys,
+        netResult: row.netResult,
+      } satisfies RoomArchiveLedgerRow)),
+      users: await this.listRoomArchiveUserOptions(club.id),
+    };
+  }
+
   async archiveRoom(input: ArchiveRoomRequest): Promise<RoomSnapshot> {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
@@ -1806,6 +2064,10 @@ export class PrismaRoomRegistry implements RoomRegistry {
     if (handHistory.length === 0) {
       throw new Error("Play at least one hand before archiving the table.");
     }
+
+    const clubArchiveLedgerRows = room.clubId
+      ? buildRoomArchiveLedgerRows(runtimeState).filter((row) => !isBotAccountId(row.sourceAccountId))
+      : [];
 
     const now = new Date();
     const table: TableState = {
@@ -1853,6 +2115,17 @@ export class PrismaRoomRegistry implements RoomRegistry {
           endedAt: now,
         },
       });
+
+      if (room.clubId && clubArchiveLedgerRows.length > 0) {
+        await this.applyClubArchiveRecording(
+          transaction,
+          room,
+          runtimeState,
+          handHistory,
+          clubArchiveLedgerRows,
+          input.matchedLedgerAccounts,
+        );
+      }
 
       await transaction.room.update({
         where: { id: room.id },
@@ -2525,6 +2798,17 @@ export class PrismaRoomRegistry implements RoomRegistry {
             },
           },
         },
+        leaderboardDisplayNames: {
+          orderBy: [
+            { displayName: "asc" },
+          ],
+          select: {
+            normalizedDisplayName: true,
+            displayName: true,
+            isVisibleInLeaderboard: true,
+            updatedAt: true,
+          },
+        },
       },
     });
 
@@ -2729,6 +3013,287 @@ export class PrismaRoomRegistry implements RoomRegistry {
     if (!club) {
       throw new Error("Club does not exist.");
     }
+  }
+
+  private async listRoomArchiveUserOptions(clubId: string): Promise<RoomArchiveUserOption[]> {
+    const users = await this.database.user.findMany({
+      where: buildSelectableClubUserWhere(),
+      orderBy: {
+        username: "asc",
+      },
+      select: {
+        id: true,
+        username: true,
+        memberships: {
+          where: {
+            clubId,
+          },
+          select: {
+            id: true,
+          },
+        },
+      },
+    });
+
+    return users
+      .map((user) => ({
+        accountId: user.id,
+        username: user.username,
+        isClubMember: user.memberships.length > 0,
+      }))
+      .sort((left, right) => Number(right.isClubMember) - Number(left.isClubMember) || left.username.localeCompare(right.username));
+  }
+
+  private async applyClubArchiveRecording(
+    transaction: Prisma.TransactionClient,
+    room: PersistedRoomRecord,
+    runtimeState: PersistedRoomRuntimeState,
+    handHistory: ArchivedHandRecord[],
+    ledgerRows: RoomArchiveSourceLedgerRow[],
+    matchedLedgerAccounts?: ArchiveRoomRequest["matchedLedgerAccounts"],
+  ): Promise<void> {
+    if (!room.clubId || ledgerRows.length === 0) {
+      return;
+    }
+
+    const { sourceToMatchedAccountId, matchedUsernameByAccountId } = await this.resolveRoomArchiveMatchState(
+      room.clubId,
+      ledgerRows,
+      matchedLedgerAccounts,
+    );
+
+    await this.reconcileArchivedRoomClubRankings(transaction, room.clubId, room.id, sourceToMatchedAccountId);
+
+    const mergedEntries = mergeRoomArchiveLedgerRows(ledgerRows, sourceToMatchedAccountId, matchedUsernameByAccountId);
+    const label = normalizeClubLedgerGameLabel(room.name);
+    const playedAt = deriveRoomArchivePlayedAt(handHistory, runtimeState.table.updatedAt);
+
+    await transaction.clubLedgerGame.upsert({
+      where: {
+        clubId_source_sourceKey: {
+          clubId: room.clubId,
+          source: "IMPORTED_WORKBOOK",
+          sourceKey: buildArchivedRoomClubSourceKey(room.id),
+        },
+      },
+      update: {
+        label,
+        playedAt,
+        entries: {
+          deleteMany: {},
+          create: mergedEntries.map((entry, index) => ({
+            userId: entry.accountId,
+            displayName: entry.displayName,
+            hoursPlayed: null,
+            totalBuyIn: entry.totalBuyIn,
+            cashOut: entry.cashOut,
+            netResult: entry.netResult,
+            playerOrder: index,
+          })),
+        },
+      },
+      create: {
+        clubId: room.clubId,
+        source: "IMPORTED_WORKBOOK",
+        sourceKey: buildArchivedRoomClubSourceKey(room.id),
+        label,
+        playedAt,
+        entries: {
+          create: mergedEntries.map((entry, index) => ({
+            userId: entry.accountId,
+            displayName: entry.displayName,
+            hoursPlayed: null,
+            totalBuyIn: entry.totalBuyIn,
+            cashOut: entry.cashOut,
+            netResult: entry.netResult,
+            playerOrder: index,
+          })),
+        },
+      },
+    });
+  }
+
+  private async resolveRoomArchiveMatchState(
+    clubId: string,
+    ledgerRows: RoomArchiveSourceLedgerRow[],
+    matchedLedgerAccounts?: ArchiveRoomRequest["matchedLedgerAccounts"],
+  ): Promise<{
+    sourceToMatchedAccountId: Map<string, string>;
+    matchedUsernameByAccountId: Map<string, string>;
+  }> {
+    const knownSourceAccountIds = new Set(ledgerRows.map((row) => row.sourceAccountId));
+    const requestedMatchBySourceAccountId = new Map<string, string | null>();
+
+    for (const match of matchedLedgerAccounts ?? []) {
+      if (requestedMatchBySourceAccountId.has(match.sourceAccountId)) {
+        throw new Error(`Duplicate archive match provided for '${match.sourceAccountId}'.`);
+      }
+
+      if (!knownSourceAccountIds.has(match.sourceAccountId)) {
+        throw new Error(`Unknown archive ledger row '${match.sourceAccountId}'.`);
+      }
+
+      requestedMatchBySourceAccountId.set(match.sourceAccountId, match.matchedAccountId ?? null);
+    }
+
+    const matchedAccountIds = Array.from(new Set(ledgerRows.map((row) => requestedMatchBySourceAccountId.get(row.sourceAccountId) ?? row.sourceAccountId)));
+    const matchedUsers = await this.database.user.findMany({
+      where: {
+        id: {
+          in: matchedAccountIds,
+        },
+        ...buildSelectableClubUserWhere(),
+      },
+      select: {
+        id: true,
+        username: true,
+        memberships: {
+          where: {
+            clubId,
+          },
+          select: {
+            id: true,
+          },
+        },
+      },
+    });
+
+    if (matchedUsers.length !== matchedAccountIds.length) {
+      throw new Error("One or more selected archive matches are not valid user accounts.");
+    }
+
+    const matchedUsernameByAccountId = new Map(matchedUsers.map((user) => [user.id, user.username]));
+    const sourceToMatchedAccountId = new Map<string, string>();
+
+    for (const row of ledgerRows) {
+      const matchedAccountId = requestedMatchBySourceAccountId.get(row.sourceAccountId) ?? row.sourceAccountId;
+      sourceToMatchedAccountId.set(row.sourceAccountId, matchedAccountId);
+    }
+
+    return {
+      sourceToMatchedAccountId,
+      matchedUsernameByAccountId,
+    };
+  }
+
+  private async reconcileArchivedRoomClubRankings(
+    transaction: Prisma.TransactionClient,
+    clubId: string,
+    roomId: string,
+    sourceToMatchedAccountId: ReadonlyMap<string, string>,
+  ): Promise<void> {
+    const handResults = await transaction.handResult.findMany({
+      where: {
+        participant: {
+          roomId,
+        },
+      },
+      select: {
+        netChips: true,
+        participant: {
+          select: {
+            userId: true,
+          },
+        },
+      },
+    });
+
+    const sourceAdjustments = new Map<string, { totalProfit: number; gamesPlayed: number }>();
+
+    for (const result of handResults) {
+      const sourceAccountId = result.participant.userId;
+
+      if (!sourceToMatchedAccountId.has(sourceAccountId) || isBotAccountId(sourceAccountId)) {
+        continue;
+      }
+
+      const current = sourceAdjustments.get(sourceAccountId) ?? { totalProfit: 0, gamesPlayed: 0 };
+      current.totalProfit += result.netChips;
+      current.gamesPlayed += 1;
+      sourceAdjustments.set(sourceAccountId, current);
+    }
+
+    if (sourceAdjustments.size === 0) {
+      return;
+    }
+
+    const scopeKey = buildClubScopeKey(clubId);
+
+    for (const [sourceAccountId, adjustment] of sourceAdjustments) {
+      await transaction.userRanking.updateMany({
+        where: {
+          userId: sourceAccountId,
+          scopeKey,
+        },
+        data: {
+          totalProfit: {
+            decrement: BigInt(adjustment.totalProfit),
+          },
+          gamesPlayed: {
+            decrement: adjustment.gamesPlayed,
+          },
+        },
+      });
+    }
+
+    const matchedAdjustments = new Map<string, { totalProfit: number; gamesPlayed: number }>();
+
+    for (const [sourceAccountId, adjustment] of sourceAdjustments) {
+      const matchedAccountId = sourceToMatchedAccountId.get(sourceAccountId) ?? sourceAccountId;
+      const current = matchedAdjustments.get(matchedAccountId) ?? { totalProfit: 0, gamesPlayed: 0 };
+      current.totalProfit += adjustment.totalProfit;
+      current.gamesPlayed += adjustment.gamesPlayed;
+      matchedAdjustments.set(matchedAccountId, current);
+    }
+
+    await transaction.clubMembership.createMany({
+      data: Array.from(matchedAdjustments.keys()).map((accountId) => ({
+        clubId,
+        userId: accountId,
+      })),
+      skipDuplicates: true,
+    });
+
+    for (const [matchedAccountId, adjustment] of matchedAdjustments) {
+      await transaction.userRanking.upsert({
+        where: {
+          userId_scopeKey: {
+            userId: matchedAccountId,
+            scopeKey,
+          },
+        },
+        update: {
+          clubId,
+          scope: "CLUB",
+          totalProfit: {
+            increment: BigInt(adjustment.totalProfit),
+          },
+          gamesPlayed: {
+            increment: adjustment.gamesPlayed,
+          },
+        },
+        create: {
+          userId: matchedAccountId,
+          clubId,
+          scope: "CLUB",
+          scopeKey,
+          totalProfit: BigInt(adjustment.totalProfit),
+          gamesPlayed: adjustment.gamesPlayed,
+        },
+      });
+    }
+
+    await transaction.userRanking.deleteMany({
+      where: {
+        clubId,
+        scopeKey,
+        userId: {
+          in: Array.from(sourceAdjustments.keys()),
+        },
+        gamesPlayed: 0,
+        totalProfit: BigInt(0),
+      },
+    });
   }
 
   private async upsertClubRankingsForHand(
@@ -4129,6 +4694,136 @@ function applyLedgerCashOuts(
   };
 }
 
+function buildRoomArchiveLedgerRows(runtimeState: PersistedRoomRuntimeState): RoomArchiveSourceLedgerRow[] {
+  const accountIds = new Set<string>();
+
+  runtimeState.table.players.forEach((player) => accountIds.add(player.accountId));
+  Object.keys(runtimeState.buyInState.buyInTotalByAccount).forEach((accountId) => accountIds.add(accountId));
+  Object.keys(runtimeState.ledgerState.buyOutByAccount).forEach((accountId) => accountIds.add(accountId));
+  Object.keys(runtimeState.ledgerState.displayNameByAccount).forEach((accountId) => accountIds.add(accountId));
+  Object.keys(runtimeState.playerStats.handsWonByAccount).forEach((accountId) => accountIds.add(accountId));
+  Object.keys(runtimeState.playerStats.rebuyCountByAccount).forEach((accountId) => accountIds.add(accountId));
+
+  return Array.from(accountIds)
+    .map((accountId) => {
+      const player = runtimeState.table.players.find((entry) => entry.accountId === accountId) ?? null;
+      const totalBuyIn = runtimeState.buyInState.buyInTotalByAccount[accountId] ?? (player ? runtimeState.table.startingStack : 0);
+      const buyOut = runtimeState.ledgerState.buyOutByAccount[accountId] ?? 0;
+      const stack = player?.stack ?? 0;
+      const wins = runtimeState.playerStats.handsWonByAccount[accountId] ?? 0;
+      const rebuys = runtimeState.playerStats.rebuyCountByAccount[accountId] ?? 0;
+      const cashOut = buyOut + stack;
+
+      return {
+        sourceAccountId: accountId,
+        displayName: player?.displayName ?? runtimeState.ledgerState.displayNameByAccount[accountId] ?? accountId,
+        totalBuyIn,
+        buyOut,
+        stack,
+        cashOut,
+        wins,
+        rebuys,
+        netResult: cashOut - totalBuyIn,
+      } satisfies RoomArchiveSourceLedgerRow;
+    })
+    .filter((row) => row.totalBuyIn > 0 || row.buyOut > 0 || row.stack > 0 || row.wins > 0 || row.rebuys > 0)
+    .sort((left, right) => right.netResult - left.netResult || right.wins - left.wins || right.stack - left.stack || left.displayName.localeCompare(right.displayName));
+}
+
+function mergeRoomArchiveLedgerRows(
+  ledgerRows: RoomArchiveSourceLedgerRow[],
+  sourceToMatchedAccountId: ReadonlyMap<string, string>,
+  matchedUsernameByAccountId: ReadonlyMap<string, string>,
+): MergedRoomArchiveLedgerEntry[] {
+  const mergedByAccountId = new Map<string, {
+    accountId: string;
+    displayNames: Set<string>;
+    totalBuyIn: number;
+    cashOut: number;
+    playerOrder: number;
+  }>();
+
+  for (const [index, row] of ledgerRows.entries()) {
+    const matchedAccountId = sourceToMatchedAccountId.get(row.sourceAccountId) ?? row.sourceAccountId;
+    const merged = mergedByAccountId.get(matchedAccountId) ?? {
+      accountId: matchedAccountId,
+      displayNames: new Set<string>(),
+      totalBuyIn: 0,
+      cashOut: 0,
+      playerOrder: index,
+    };
+
+    merged.displayNames.add(row.displayName);
+    merged.totalBuyIn += row.totalBuyIn;
+    merged.cashOut += row.cashOut;
+    merged.playerOrder = Math.min(merged.playerOrder, index);
+    mergedByAccountId.set(matchedAccountId, merged);
+  }
+
+  return Array.from(mergedByAccountId.values())
+    .sort((left, right) => left.playerOrder - right.playerOrder)
+    .map((entry, index) => {
+      const displayNames = Array.from(entry.displayNames).filter((value) => value.trim().length > 0);
+      const displayName = displayNames.length === 1 && displayNames[0]
+        ? displayNames[0]
+        : matchedUsernameByAccountId.get(entry.accountId) ?? displayNames[0] ?? entry.accountId;
+
+      return {
+        accountId: entry.accountId,
+        displayName,
+        totalBuyIn: entry.totalBuyIn,
+        cashOut: entry.cashOut,
+        netResult: entry.cashOut - entry.totalBuyIn,
+        playerOrder: index,
+      } satisfies MergedRoomArchiveLedgerEntry;
+    });
+}
+
+function deriveRoomArchivePlayedAt(handHistory: ArchivedHandRecord[], updatedAt: string): Date {
+  let earliestTimestamp = Number.POSITIVE_INFINITY;
+
+  for (const hand of handHistory) {
+    const candidate = Date.parse(hand.startedAt ?? hand.concludedAt);
+
+    if (!Number.isNaN(candidate) && candidate < earliestTimestamp) {
+      earliestTimestamp = candidate;
+    }
+  }
+
+  if (Number.isFinite(earliestTimestamp)) {
+    return new Date(earliestTimestamp);
+  }
+
+  const fallbackTimestamp = Date.parse(updatedAt);
+  return new Date(Number.isNaN(fallbackTimestamp) ? Date.now() : fallbackTimestamp);
+}
+
+function buildArchivedRoomClubSourceKey(roomId: string): string {
+  return `archived-room:${roomId}`;
+}
+
+function buildSelectableClubUserWhere(): Prisma.UserWhereInput {
+  return {
+    NOT: [
+      {
+        id: {
+          startsWith: BOT_ACCOUNT_ID_PREFIX,
+        },
+      },
+      {
+        email: {
+          endsWith: `@${BOT_EMAIL_DOMAIN}`,
+        },
+      },
+      {
+        email: {
+          endsWith: `@${CLUB_IMPORT_EMAIL_DOMAIN}`,
+        },
+      },
+    ],
+  };
+}
+
 function ensureCounterEntries(
   current: Record<string, number>,
   players: TableState["players"],
@@ -4300,18 +4995,35 @@ function buildClubSummary(club: PersistedClubRecord): ClubSummary {
   };
 }
 
+interface AggregatedClubLeaderboardEntry {
+  entryKey: string;
+  accountId: string;
+  accountIds: Set<string>;
+  username: string;
+  displayName?: string;
+  totalProfit: bigint;
+  gamesPlayed: number;
+  updatedAt: Date;
+  isSynthetic: boolean;
+  isVisibleInLeaderboard: boolean;
+  isDerivedFromRecordedGames: boolean;
+}
+
 function buildClubLeaderboardEntry(
-  ranking: PersistedClubRankingRecord,
-  displayNameByUserId?: ReadonlyMap<string, string>,
+  ranking: AggregatedClubLeaderboardEntry,
 ): ClubLeaderboardEntry {
   return {
-    accountId: ranking.user.id,
-    username: ranking.user.username,
-    displayName: displayNameByUserId?.get(ranking.user.id),
+    entryKey: ranking.entryKey,
+    accountId: ranking.accountId,
+    accountIds: Array.from(ranking.accountIds).sort(),
+    username: ranking.username,
+    displayName: ranking.displayName,
     totalProfit: Number(ranking.totalProfit),
     gamesPlayed: ranking.gamesPlayed,
     updatedAt: ranking.updatedAt.toISOString(),
-    isSynthetic: isSyntheticClubUser(ranking.user),
+    isSynthetic: ranking.isSynthetic,
+    isVisibleInLeaderboard: ranking.isVisibleInLeaderboard,
+    isDerivedFromRecordedGames: ranking.isDerivedFromRecordedGames,
   };
 }
 
@@ -4352,44 +5064,201 @@ function buildClubMemberSummary(membership: PersistedClubMembershipRecord): Club
   };
 }
 
+function shouldIncludePublicClubLeaderboardRanking(ranking: AggregatedClubLeaderboardEntry): boolean {
+  if (!ranking.isVisibleInLeaderboard) {
+    return false;
+  }
+
+  return (ranking.displayName ?? ranking.username).trim().toLowerCase() !== "others";
+}
+
+function normalizeClubLeaderboardDisplayNameKey(displayName: string): string {
+  return displayName.trim().toLowerCase();
+}
+
+function buildClubLeaderboardVisibilityByDisplayName(
+  leaderboardDisplayNames: PersistedClubLeaderboardDisplayNameRecord[],
+): Map<string, boolean> {
+  return new Map(leaderboardDisplayNames.map((entry) => [entry.normalizedDisplayName, entry.isVisibleInLeaderboard]));
+}
+
+function buildClubLeaderboardVisibilityByUserId(
+  memberships: PersistedClubMembershipRecord[],
+): Map<string, boolean> {
+  return new Map(memberships.map((membership) => [membership.user.id, membership.isVisibleInLeaderboard]));
+}
+
+function buildClubLeaderboardEntries(
+  rankings: PersistedClubRankingRecord[],
+  memberships: PersistedClubMembershipRecord[],
+  gameHistory: PersistedClubLedgerGameRecord[],
+  leaderboardDisplayNames: PersistedClubLeaderboardDisplayNameRecord[],
+  options?: {
+    includeHidden?: boolean;
+  },
+): ClubLeaderboardEntry[] {
+  const visibilityByUserId = buildClubLeaderboardVisibilityByUserId(memberships);
+  const visibilityByDisplayName = buildClubLeaderboardVisibilityByDisplayName(leaderboardDisplayNames);
+  const aggregatedByDisplayName = new Map<string, AggregatedClubLeaderboardEntry>();
+  const recordedTotalsByUserId = new Map<string, { totalProfit: bigint; gamesPlayed: number }>();
+
+  const includeHidden = options?.includeHidden ?? false;
+
+  const collectRanking = (input: {
+    groupingLabel: string;
+    accountId: string;
+    username: string;
+    displayName?: string;
+    totalProfit: bigint;
+    gamesPlayed: number;
+    updatedAt: Date;
+    isSynthetic: boolean;
+    defaultIsVisibleInLeaderboard: boolean;
+    isDerivedFromRecordedGames: boolean;
+  }) => {
+    const groupingKey = normalizeClubLeaderboardDisplayNameKey(input.groupingLabel);
+
+    if (groupingKey.length === 0) {
+      return;
+    }
+
+    const aggregate = aggregatedByDisplayName.get(groupingKey);
+
+    if (aggregate) {
+      aggregate.accountIds.add(input.accountId);
+      aggregate.totalProfit += input.totalProfit;
+      aggregate.gamesPlayed += input.gamesPlayed;
+
+      if (input.updatedAt.getTime() > aggregate.updatedAt.getTime()) {
+        aggregate.updatedAt = input.updatedAt;
+      }
+
+      if (!aggregate.displayName && input.displayName) {
+        aggregate.displayName = input.displayName;
+      }
+
+      aggregate.isSynthetic &&= input.isSynthetic;
+      aggregate.isVisibleInLeaderboard &&= input.defaultIsVisibleInLeaderboard;
+      aggregate.isDerivedFromRecordedGames ||= input.isDerivedFromRecordedGames;
+      return;
+    }
+
+    aggregatedByDisplayName.set(groupingKey, {
+      entryKey: groupingKey,
+      accountId: input.accountId,
+      accountIds: new Set([input.accountId]),
+      username: input.username,
+      displayName: input.displayName,
+      totalProfit: input.totalProfit,
+      gamesPlayed: input.gamesPlayed,
+      updatedAt: input.updatedAt,
+      isSynthetic: input.isSynthetic,
+      isVisibleInLeaderboard: input.defaultIsVisibleInLeaderboard,
+      isDerivedFromRecordedGames: input.isDerivedFromRecordedGames,
+    });
+  };
+
+  for (const game of gameHistory) {
+    for (const entry of game.entries) {
+      const displayName = entry.displayName.trim() || entry.user.username;
+      const recordedTotals = recordedTotalsByUserId.get(entry.user.id) ?? {
+        totalProfit: BigInt(0),
+        gamesPlayed: 0,
+      };
+
+      recordedTotals.totalProfit += BigInt(entry.netResult);
+      recordedTotals.gamesPlayed += 1;
+      recordedTotalsByUserId.set(entry.user.id, recordedTotals);
+
+      collectRanking({
+        groupingLabel: displayName,
+        accountId: entry.user.id,
+        username: entry.user.username,
+        displayName: entry.displayName.trim() || undefined,
+        totalProfit: BigInt(entry.netResult),
+        gamesPlayed: 1,
+        updatedAt: game.importedAt,
+        isSynthetic: isSyntheticClubUser(entry.user),
+        defaultIsVisibleInLeaderboard: visibilityByUserId.get(entry.user.id) ?? true,
+        isDerivedFromRecordedGames: true,
+      });
+    }
+  }
+
+  for (const ranking of rankings) {
+    const recordedTotals = recordedTotalsByUserId.get(ranking.user.id);
+    const remainingTotalProfit = recordedTotals
+      ? ranking.totalProfit - recordedTotals.totalProfit
+      : ranking.totalProfit;
+    const remainingGamesPlayed = recordedTotals
+      ? ranking.gamesPlayed - recordedTotals.gamesPlayed
+      : ranking.gamesPlayed;
+
+    if (recordedTotals && remainingTotalProfit === BigInt(0) && remainingGamesPlayed === 0) {
+      continue;
+    }
+
+    collectRanking({
+      groupingLabel: ranking.user.username,
+      accountId: ranking.user.id,
+      username: ranking.user.username,
+      totalProfit: remainingTotalProfit,
+      gamesPlayed: remainingGamesPlayed,
+      updatedAt: ranking.updatedAt,
+      isSynthetic: isSyntheticClubUser(ranking.user),
+      defaultIsVisibleInLeaderboard: visibilityByUserId.get(ranking.user.id) ?? true,
+      isDerivedFromRecordedGames: false,
+    });
+  }
+
+  for (const [displayNameKey, aggregate] of aggregatedByDisplayName) {
+    const visibilityOverride = visibilityByDisplayName.get(displayNameKey);
+
+    if (visibilityOverride !== undefined) {
+      aggregate.isVisibleInLeaderboard = visibilityOverride;
+    }
+  }
+
+  return Array.from(aggregatedByDisplayName.values())
+    .filter((ranking) => includeHidden || shouldIncludePublicClubLeaderboardRanking(ranking))
+    .sort((left, right) => {
+      if (left.totalProfit !== right.totalProfit) {
+        return left.totalProfit > right.totalProfit ? -1 : 1;
+      }
+
+      if (left.updatedAt.getTime() !== right.updatedAt.getTime()) {
+        return right.updatedAt.getTime() - left.updatedAt.getTime();
+      }
+
+      return (left.displayName ?? left.username).localeCompare(right.displayName ?? right.username);
+    })
+    .map((ranking) => buildClubLeaderboardEntry(ranking));
+}
+
 function buildClubDetails(
   club: PersistedClubRecord,
   rankings: PersistedClubRankingRecord[],
+  memberships: PersistedClubMembershipRecord[],
   gameHistory: PersistedClubLedgerGameRecord[],
+  leaderboardDisplayNames: PersistedClubLeaderboardDisplayNameRecord[],
 ): ClubDetails {
-  const importedDisplayNameByUserId = buildImportedDisplayNameByUserId(gameHistory);
-
   return {
     ...buildClubSummary(club),
-    leaderboard: rankings.map((ranking) => buildClubLeaderboardEntry(ranking, importedDisplayNameByUserId)),
+    leaderboard: buildClubLeaderboardEntries(rankings, memberships, gameHistory, leaderboardDisplayNames),
     gameHistory: gameHistory.map((game) => buildClubGameLedger(game)),
   };
 }
 
 function buildManagedClubSummary(club: ManagedPersistedClubRecord): ManagedClubSummary {
-  const importedDisplayNameByUserId = buildImportedDisplayNameByUserId(club.ledgerGames);
-
   return {
     ...buildClubSummary(club),
     ownerAccountId: club.ownerId,
     members: club.memberships.map((membership) => buildClubMemberSummary(membership)),
-    leaderboard: club.rankings.map((ranking) => buildClubLeaderboardEntry(ranking, importedDisplayNameByUserId)),
+    leaderboard: buildClubLeaderboardEntries(club.rankings, club.memberships, club.ledgerGames, club.leaderboardDisplayNames, {
+      includeHidden: true,
+    }),
     gameHistory: club.ledgerGames.map((game) => buildClubGameLedger(game)),
   };
-}
-
-function buildImportedDisplayNameByUserId(gameHistory: PersistedClubLedgerGameRecord[]): Map<string, string> {
-  const importedDisplayNameByUserId = new Map<string, string>();
-
-  for (const game of gameHistory) {
-    for (const entry of game.entries) {
-      if (!importedDisplayNameByUserId.has(entry.user.id)) {
-        importedDisplayNameByUserId.set(entry.user.id, entry.displayName);
-      }
-    }
-  }
-
-  return importedDisplayNameByUserId;
 }
 
 function toPrismaVisibility(visibility: TableState["visibility"]): RoomVisibility {

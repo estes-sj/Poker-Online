@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type Mu
 
 import type { Participant, Room as LiveKitRoom, TrackPublication } from "livekit-client";
 
+import { clearStoredBrowserSession, readStoredBrowserSession } from "../../lib/browser-session";
 import { buildBrowserHttpUrl, getBrowserApiBaseUrl } from "../../lib/public-service-urls";
 import type { MediaParticipantState } from "./media-types";
 import type { SessionState } from "./room-types";
@@ -110,7 +111,9 @@ export function useTableMedia({ slug, session, canConnect, displayName }: TableM
     const cameraEnabled = isPublicationEnabled(localParticipant?.videoPublication ?? null);
 
     async function handleConnectMedia() {
-        if (!session) {
+        const activeSession = readStoredBrowserSession() ?? session;
+
+        if (!activeSession) {
             setMediaError("Sign in before connecting voice and video.");
             return;
         }
@@ -138,14 +141,19 @@ export function useTableMedia({ slug, session, canConnect, displayName }: TableM
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    Authorization: `Bearer ${session.token}`,
+                    Authorization: `Bearer ${activeSession.token}`,
                 },
                 body: JSON.stringify({
                     slug,
-                    participantName: displayName.trim() || session.account.username,
+                    participantName: displayName.trim() || activeSession.account.username,
                 }),
             });
             const tokenPayload = (await tokenResponse.json()) as Partial<MediaTokenResponse> & { error?: string };
+
+            if (tokenResponse.status === 401) {
+                clearStoredBrowserSession();
+                throw new Error("Your session expired. Sign in again before connecting media.");
+            }
 
             if (!tokenResponse.ok || !tokenPayload.token || !tokenPayload.wsUrl) {
                 throw new Error(tokenPayload.error ?? "Unable to connect media for this room.");

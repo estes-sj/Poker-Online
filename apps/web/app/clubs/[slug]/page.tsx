@@ -86,14 +86,14 @@ export default async function ClubDetailPage({
                             </thead>
                             <tbody>
                                 {club.leaderboard.map((entry, index) => (
-                                    <tr key={entry.accountId}>
+                                    <tr key={entry.entryKey}>
                                         <td>{index + 1}</td>
                                         <td>{entry.displayName ?? entry.username}</td>
                                         <td className={entry.totalProfit >= 0 ? "club-leaderboard__profit club-leaderboard__profit--positive" : "club-leaderboard__profit club-leaderboard__profit--negative"}>
                                             {formatProfit(entry.totalProfit)}
                                         </td>
                                         <td>{entry.gamesPlayed}</td>
-                                        <td>{entry.isSynthetic ? "Imported" : "Account"}</td>
+                                        <td>{entry.isDerivedFromRecordedGames ? "Recorded" : entry.isSynthetic ? "Imported" : "Account"}</td>
                                         <td>{formatTimestamp(entry.updatedAt)}</td>
                                     </tr>
                                 ))}
@@ -111,7 +111,7 @@ export default async function ClubDetailPage({
                         <span className="ui-panel__eyebrow">Game history</span>
                         <h2 className="ui-panel__title">Per-game ledgers</h2>
                     </div>
-                    <p className="muted-copy">Imported sessions are grouped by game date rather than individual poker hands.</p>
+                    <p className="muted-copy">Recorded sessions are grouped by game date rather than individual poker hands.</p>
                 </header>
 
                 {club.gameHistory.length ? (
@@ -125,7 +125,7 @@ export default async function ClubDetailPage({
                                     </div>
                                     <div className="club-game-card__meta">
                                         <span>{game.entryCount} players</span>
-                                        <span>Imported {formatTimestamp(game.importedAt)}</span>
+                                        <span>Recorded {formatTimestamp(game.importedAt)}</span>
                                     </div>
                                 </header>
 

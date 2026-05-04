@@ -10,13 +10,17 @@ export interface ClubSummary {
 }
 
 export interface ClubLeaderboardEntry {
+    entryKey: string;
     accountId: string;
+    accountIds: string[];
     username: string;
     displayName?: string;
     totalProfit: number;
     gamesPlayed: number;
     updatedAt: string;
     isSynthetic: boolean;
+    isVisibleInLeaderboard: boolean;
+    isDerivedFromRecordedGames: boolean;
 }
 
 export interface ClubGameLedgerEntry {

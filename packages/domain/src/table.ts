@@ -1083,7 +1083,7 @@ function resolveShowdown(
   const runoutBoards = buildRunoutBoards(hand, runoutCount);
   const pots = buildPots(table.players, hand);
   const payouts = new Map<string, number>();
-  const winnerHandLabels = new Map<string, string>();
+  const winnerHandLabelsByAccount = new Map<string, Set<string>>();
   const runoutResults: AllInRunoutResult[] = [];
 
   for (let runoutIndex = 0; runoutIndex < runoutBoards.length; runoutIndex += 1) {
@@ -1103,11 +1103,11 @@ function resolveShowdown(
       payouts.set(accountId, (payouts.get(accountId) ?? 0) + amountWon);
     }
 
-    if (runoutBoards.length === 1) {
-      for (const winner of result.winners) {
-        if (winner.handLabel) {
-          winnerHandLabels.set(winner.accountId, winner.handLabel);
-        }
+    for (const winner of result.winners) {
+      if (winner.handLabel) {
+        const existingLabels = winnerHandLabelsByAccount.get(winner.accountId) ?? new Set<string>();
+        existingLabels.add(winner.handLabel);
+        winnerHandLabelsByAccount.set(winner.accountId, existingLabels);
       }
     }
   }
@@ -1115,7 +1115,9 @@ function resolveShowdown(
   return {
     primaryBoard: runoutBoards[0] ?? hand.board,
     payouts,
-    winnerHandLabels,
+    winnerHandLabels: new Map(
+      Array.from(winnerHandLabelsByAccount.entries(), ([accountId, labels]) => [accountId, Array.from(labels).join(" / ")])
+    ),
     allInRunout: buildAllInRunoutState(hand, eligiblePlayers, "showdown", runoutResults),
   };
 }

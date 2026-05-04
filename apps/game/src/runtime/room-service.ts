@@ -23,6 +23,7 @@ export interface CreateRoomRequest {
   blindSchedule?: BlindLevel[];
   autoStartNextHand?: boolean;
   autoStartDelaySeconds?: number;
+  runItTwiceEnabled?: boolean;
   revealAllShowdownHands?: boolean;
 }
 
@@ -146,13 +147,17 @@ export interface RoomManagementAdmin {
 export type ClubRoleValue = "OWNER" | "ADMIN" | "MEMBER";
 
 export interface ClubLeaderboardEntry {
+  entryKey: string;
   accountId: string;
+  accountIds: string[];
   username: string;
   displayName?: string;
   totalProfit: number;
   gamesPlayed: number;
   updatedAt: string;
   isSynthetic: boolean;
+  isVisibleInLeaderboard: boolean;
+  isDerivedFromRecordedGames: boolean;
 }
 
 export interface ClubGameLedgerEntry {
@@ -245,8 +250,11 @@ export interface CreateSyntheticClubPlayerRequest {
 export interface UpdateClubLeaderboardEntryRequest {
   clubId: string;
   accountId: string;
-  totalProfit: number;
-  gamesPlayed: number;
+  accountIds?: string[];
+  displayName?: string;
+  totalProfit?: number;
+  gamesPlayed?: number;
+  isVisibleInLeaderboard?: boolean;
 }
 
 export interface UpdateClubGameLedgerEntryRequest {
@@ -325,9 +333,51 @@ export interface DeleteManagedRoomsResult {
   deletedSlugs: string[];
 }
 
+export interface GetRoomArchivePreviewRequest {
+  slug: string;
+  accountId: string;
+}
+
+export interface RoomArchiveLedgerMatchRequest {
+  sourceAccountId: string;
+  matchedAccountId?: string | null;
+}
+
 export interface ArchiveRoomRequest {
   slug: string;
   accountId: string;
+  matchedLedgerAccounts?: RoomArchiveLedgerMatchRequest[];
+}
+
+export interface RoomArchiveUserOption {
+  accountId: string;
+  username: string;
+  isClubMember: boolean;
+}
+
+export interface RoomArchiveLedgerRow {
+  sourceAccountId: string;
+  sourceUsername: string;
+  displayName: string;
+  totalBuyIn: number;
+  buyOut: number;
+  stack: number;
+  cashOut: number;
+  wins: number;
+  rebuys: number;
+  netResult: number;
+}
+
+export interface RoomArchivePreview {
+  roomId: string;
+  slug: string;
+  name: string;
+  clubId: string;
+  clubName: string;
+  label: string;
+  playedAt: string;
+  ledger: RoomArchiveLedgerRow[];
+  users: RoomArchiveUserOption[];
 }
 
 export interface ArchivedHandParticipant {
@@ -568,6 +618,7 @@ export interface RoomRegistry {
   submitRunItTwiceDecision(input: RoomRunItTwiceDecisionRequest): Promise<RoomSnapshot>;
   expirePendingRunItTwiceDecision(slug: string): Promise<RoomSnapshot>;
   resolvePendingRunItTwiceDecision(slug: string): Promise<RoomSnapshot>;
+  getRoomArchivePreview(input: GetRoomArchivePreviewRequest): Promise<RoomArchivePreview>;
   getRoomSnapshot(slug: string, accountId?: string): Promise<RoomSnapshot>;
   getViewerRoomSnapshot(slug: string, accountId?: string): Promise<RoomSnapshot>;
   assertManagementAdmin(sessionToken?: string): Promise<RoomManagementAdmin>;

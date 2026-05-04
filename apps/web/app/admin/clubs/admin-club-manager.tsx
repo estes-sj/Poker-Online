@@ -11,13 +11,17 @@ import {
 import { buildBrowserHttpUrl, getBrowserGameHttpBaseUrl } from "../../lib/public-service-urls";
 
 interface ClubLeaderboardEntry {
+    entryKey: string;
     accountId: string;
+    accountIds: string[];
     username: string;
     displayName?: string;
     totalProfit: number;
     gamesPlayed: number;
     updatedAt: string;
     isSynthetic: boolean;
+    isVisibleInLeaderboard: boolean;
+    isDerivedFromRecordedGames: boolean;
 }
 
 interface ClubGameLedgerEntry {
@@ -77,6 +81,7 @@ interface ClubUserSearchResult {
 interface LeaderboardDraft {
     totalProfit: string;
     gamesPlayed: string;
+    isVisibleInLeaderboard: boolean;
 }
 
 interface GameEntryDraft {
@@ -147,9 +152,10 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
 
         setLeaderboardDrafts((currentDrafts) => ({
             ...currentDrafts,
-            ...Object.fromEntries(activeClub.leaderboard.map((entry) => [entry.accountId, {
+            ...Object.fromEntries(activeClub.leaderboard.map((entry) => [entry.entryKey, {
                 totalProfit: String(entry.totalProfit),
                 gamesPlayed: String(entry.gamesPlayed),
+                isVisibleInLeaderboard: entry.isVisibleInLeaderboard,
             }])),
         }));
         setGameDrafts((currentDrafts) => ({
@@ -191,9 +197,10 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
             });
             setLeaderboardDrafts((currentDrafts) => ({
                 ...currentDrafts,
-                ...Object.fromEntries(payload.flatMap((club) => club.leaderboard.map((entry) => [entry.accountId, {
+                ...Object.fromEntries(payload.flatMap((club) => club.leaderboard.map((entry) => [entry.entryKey, {
                     totalProfit: String(entry.totalProfit),
                     gamesPlayed: String(entry.gamesPlayed),
+                    isVisibleInLeaderboard: entry.isVisibleInLeaderboard,
                 }]))),
             }));
             setGameDrafts((currentDrafts) => ({
@@ -221,9 +228,10 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
         setSearchResults([]);
         setLeaderboardDrafts((currentDrafts) => ({
             ...currentDrafts,
-            ...Object.fromEntries(updatedClub.leaderboard.map((entry) => [entry.accountId, {
+            ...Object.fromEntries(updatedClub.leaderboard.map((entry) => [entry.entryKey, {
                 totalProfit: String(entry.totalProfit),
                 gamesPlayed: String(entry.gamesPlayed),
+                isVisibleInLeaderboard: entry.isVisibleInLeaderboard,
             }])),
         }));
         setGameDrafts((currentDrafts) => ({
@@ -415,26 +423,29 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
         }
     }
 
-    async function handleSaveEntry(accountId: string) {
+    async function handleSaveEntry(entry: ClubLeaderboardEntry) {
         if (!session || !activeClub) {
             return;
         }
 
-        const draft = leaderboardDrafts[accountId];
+        const draft = leaderboardDrafts[entry.entryKey];
 
         if (!draft) {
             return;
         }
 
+        const canEditTotals = entry.accountIds.length === 1 && !entry.isDerivedFromRecordedGames;
         let totalProfit = 0;
         let gamesPlayed = 0;
 
-        try {
-            totalProfit = parseWholeNumber(draft.totalProfit, "Total profit", true);
-            gamesPlayed = parseWholeNumber(draft.gamesPlayed, "Games played");
-        } catch (parseError) {
-            setError(parseError instanceof Error ? parseError.message : "Enter whole-number leaderboard values.");
-            return;
+        if (canEditTotals) {
+            try {
+                totalProfit = parseWholeNumber(draft.totalProfit, "Total profit", true);
+                gamesPlayed = parseWholeNumber(draft.gamesPlayed, "Games played");
+            } catch (parseError) {
+                setError(parseError instanceof Error ? parseError.message : "Enter whole-number leaderboard values.");
+                return;
+            }
         }
 
         setIsMutating(true);
@@ -443,13 +454,18 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
 
         try {
             const gameBaseUrl = getBrowserGameHttpBaseUrl();
-            const response = await fetch(buildBrowserHttpUrl(gameBaseUrl, `/v1/admin/clubs/${activeClub.clubId}/leaderboard/${accountId}`), {
+            const response = await fetch(buildBrowserHttpUrl(gameBaseUrl, `/v1/admin/clubs/${activeClub.clubId}/leaderboard/${entry.accountId}`), {
                 method: "POST",
                 headers: {
                     Authorization: `Bearer ${session.token}`,
                     "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ totalProfit, gamesPlayed }),
+                body: JSON.stringify({
+                    accountIds: entry.accountIds,
+                    displayName: entry.displayName ?? entry.username,
+                    isVisibleInLeaderboard: draft.isVisibleInLeaderboard,
+                    ...(canEditTotals ? { totalProfit, gamesPlayed } : {}),
+                }),
             });
 
             const payload = (await response.json()) as ManagedClubSummary | { error?: string };
@@ -466,13 +482,25 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
         }
     }
 
-    function handleDraftChange(accountId: string, field: keyof LeaderboardDraft, value: string) {
+    function handleDraftChange(entryKey: string, field: keyof LeaderboardDraft, value: string) {
         setLeaderboardDrafts((currentDrafts) => ({
             ...currentDrafts,
-            [accountId]: {
-                totalProfit: currentDrafts[accountId]?.totalProfit ?? "0",
-                gamesPlayed: currentDrafts[accountId]?.gamesPlayed ?? "0",
+            [entryKey]: {
+                totalProfit: currentDrafts[entryKey]?.totalProfit ?? "0",
+                gamesPlayed: currentDrafts[entryKey]?.gamesPlayed ?? "0",
+                isVisibleInLeaderboard: currentDrafts[entryKey]?.isVisibleInLeaderboard ?? true,
                 [field]: value,
+            },
+        }));
+    }
+
+    function handleVisibilityDraftChange(entryKey: string, isVisibleInLeaderboard: boolean) {
+        setLeaderboardDrafts((currentDrafts) => ({
+            ...currentDrafts,
+            [entryKey]: {
+                totalProfit: currentDrafts[entryKey]?.totalProfit ?? "0",
+                gamesPlayed: currentDrafts[entryKey]?.gamesPlayed ?? "0",
+                isVisibleInLeaderboard,
             },
         }));
     }
@@ -627,7 +655,7 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                 <div className="admin-club-manager__toolbar">
                     <div className="admin-room-manager__toolbar-copy">
                         <strong>Clubs use the existing room ledger data.</strong>
-                        <p className="muted-copy">Tie a room to a club and every settled hand updates that club's all-time ranking. Imported games can also be edited here.</p>
+                        <p className="muted-copy">Tie a room to a club and every settled hand updates that club's all-time ranking. Recorded games can also be edited here.</p>
                     </div>
 
                     <form className="admin-club-manager__create-form" onSubmit={handleCreateClub}>
@@ -705,7 +733,7 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                 </article>
                                 <article className="admin-club-manager__metric">
                                     <strong>{activeClub.gameHistory.length}</strong>
-                                    <span>Imported games</span>
+                                    <span>Recorded games</span>
                                 </article>
                             </div>
 
@@ -827,7 +855,7 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                 <div className="admin-club-manager__section-header">
                                     <div>
                                         <strong>Leaderboard entries</strong>
-                                        <p className="muted-copy">Adjust club totals directly for testing or historical imports.</p>
+                                        <p className="muted-copy">Recorded display names appear here automatically. Toggle whether each entry appears on the public leaderboard, and adjust totals directly for single-account rows.</p>
                                     </div>
                                 </div>
 
@@ -839,23 +867,26 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                                     <th scope="col">Player</th>
                                                     <th scope="col">Profit</th>
                                                     <th scope="col">Games</th>
+                                                    <th scope="col">Visible</th>
                                                     <th scope="col">Type</th>
                                                     <th scope="col">Save</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 {activeClub.leaderboard.map((entry) => {
-                                                    const draft = leaderboardDrafts[entry.accountId] ?? {
+                                                    const draft = leaderboardDrafts[entry.entryKey] ?? {
                                                         totalProfit: String(entry.totalProfit),
                                                         gamesPlayed: String(entry.gamesPlayed),
+                                                        isVisibleInLeaderboard: entry.isVisibleInLeaderboard,
                                                     };
+                                                    const canEditTotals = entry.accountIds.length === 1 && !entry.isDerivedFromRecordedGames;
 
                                                     return (
-                                                        <tr key={entry.accountId}>
+                                                        <tr key={entry.entryKey}>
                                                             <td>
                                                                 <div className="admin-club-manager__table-player">
                                                                     <strong>{entry.displayName ?? entry.username}</strong>
-                                                                    <span>{entry.isSynthetic ? "Imported player" : "Registered account"}</span>
+                                                                    <span>{entry.isDerivedFromRecordedGames ? (entry.accountIds.length > 1 ? `${entry.accountIds.length} recorded accounts grouped under this display name` : "Derived from recorded games") : entry.isSynthetic ? "Imported player" : "Registered account"}</span>
                                                                 </div>
                                                             </td>
                                                             <td>
@@ -864,7 +895,8 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                                                     type="number"
                                                                     step={1}
                                                                     value={draft.totalProfit}
-                                                                    onChange={(event) => handleDraftChange(entry.accountId, "totalProfit", event.target.value)}
+                                                                    onChange={(event) => handleDraftChange(entry.entryKey, "totalProfit", event.target.value)}
+                                                                    disabled={isMutating || !canEditTotals}
                                                                 />
                                                             </td>
                                                             <td>
@@ -874,13 +906,24 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                                                     min={0}
                                                                     step={1}
                                                                     value={draft.gamesPlayed}
-                                                                    onChange={(event) => handleDraftChange(entry.accountId, "gamesPlayed", event.target.value)}
+                                                                    onChange={(event) => handleDraftChange(entry.entryKey, "gamesPlayed", event.target.value)}
+                                                                    disabled={isMutating || !canEditTotals}
                                                                 />
                                                             </td>
-                                                            <td>{entry.isSynthetic ? "Imported" : "Account"}</td>
                                                             <td>
-                                                                <button className="button button--secondary" type="button" onClick={() => void handleSaveEntry(entry.accountId)} disabled={isMutating}>
-                                                                    Save
+                                                                <label>
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={draft.isVisibleInLeaderboard}
+                                                                        onChange={(event) => handleVisibilityDraftChange(entry.entryKey, event.target.checked)}
+                                                                        disabled={isMutating}
+                                                                    /> {draft.isVisibleInLeaderboard ? "Shown" : "Hidden"}
+                                                                </label>
+                                                            </td>
+                                                            <td>{entry.isDerivedFromRecordedGames ? "Recorded" : entry.isSynthetic ? "Imported" : "Account"}</td>
+                                                            <td>
+                                                                <button className="button button--secondary" type="button" onClick={() => void handleSaveEntry(entry)} disabled={isMutating}>
+                                                                    {canEditTotals ? "Save" : "Save visibility"}
                                                                 </button>
                                                             </td>
                                                         </tr>
@@ -890,15 +933,15 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                         </table>
                                     </div>
                                 ) : (
-                                    <p className="muted-copy">No leaderboard rows exist yet. Imported players or club-linked hands will populate this list.</p>
+                                    <p className="muted-copy">No leaderboard rows exist yet. Imported players, recorded sessions, or club-linked hands will populate this list.</p>
                                 )}
                             </section>
 
                             <section className="admin-club-manager__section">
                                 <div className="admin-club-manager__section-header">
                                     <div>
-                                        <strong>Imported games</strong>
-                                        <p className="muted-copy">Edit imported game dates and ledger rows. Saving a game recalculates the affected leaderboard totals.</p>
+                                        <strong>Recorded games</strong>
+                                        <p className="muted-copy">Edit recorded game dates and ledger rows. Saving a game recalculates the affected leaderboard totals.</p>
                                     </div>
                                 </div>
 
@@ -934,7 +977,7 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                                         <div className="admin-club-manager__game-actions">
                                                             <div className="club-game-card__meta">
                                                                 <span>{draft.entries.length} players</span>
-                                                                <span>Imported {formatTimestamp(game.importedAt)}</span>
+                                                                <span>Recorded {formatTimestamp(game.importedAt)}</span>
                                                             </div>
                                                             <button className="button button--secondary" type="button" onClick={() => void handleSaveGame(game.gameId)} disabled={isMutating}>
                                                                 {isMutating ? "Saving..." : "Save game"}

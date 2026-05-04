@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
+import { readStoredBrowserSession, SESSION_STORAGE_EVENT } from "../../lib/browser-session";
 import { HOUSE_RULES_CONFIG } from "../../lib/house-rules-config";
 import { buildBrowserHttpUrl, buildBrowserWsUrl, getBrowserGameHttpBaseUrl, getBrowserGameWsBaseUrl } from "../../lib/public-service-urls";
 import { compareEvaluatedHands, evaluateHoldemHand, getCurrentHeroHandLabel } from "./hand-evaluator";
@@ -13,9 +14,9 @@ import { useTableSoundEffects } from "./table-sound-effects";
 import { MediaAudioRack, ParticipantCameraSurface, useTableMedia } from "./table-media";
 import type { ArchivedHandRecord, Card, HandActionRecord, HeroActionState, LastHandResult, RevealMode, RoomPlayer, RoomSnapshot, SessionState } from "./room-types";
 
-const STORAGE_KEY = "river-club-session";
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
 const MOBILE_LAYOUT_RECOMMENDATION_STORAGE_KEY = "river-club-mobile-layout-recommendation-dismissed";
+const ACTION_PAD_IDLE_DIM_STORAGE_KEY = "river-club-action-pad-idle-dim";
 const ACTION_PAD_VIEWPORT_MARGIN = 16;
 const ACTION_PAD_TOP_MARGIN = 96;
 const QUICK_REACTIONS = ["👏", "🔥", "😂", "😮", "💀"] as const;
@@ -242,6 +243,37 @@ interface SessionLedgerRow {
     net: number;
 }
 
+interface RoomArchiveUserOption {
+    accountId: string;
+    username: string;
+    isClubMember: boolean;
+}
+
+interface RoomArchiveLedgerRow {
+    sourceAccountId: string;
+    sourceUsername: string;
+    displayName: string;
+    totalBuyIn: number;
+    buyOut: number;
+    stack: number;
+    cashOut: number;
+    wins: number;
+    rebuys: number;
+    netResult: number;
+}
+
+interface RoomArchivePreview {
+    roomId: string;
+    slug: string;
+    name: string;
+    clubId: string;
+    clubName: string;
+    label: string;
+    playedAt: string;
+    ledger: RoomArchiveLedgerRow[];
+    users: RoomArchiveUserOption[];
+}
+
 function resolveRoomDisplayName(snapshot: RoomSnapshot | null | undefined, accountId: string): string {
     return snapshot?.ledgerState.displayNameByAccount[accountId]
         ?? snapshot?.players.find((player) => player.accountId === accountId)?.displayName
@@ -348,6 +380,8 @@ export function RoomClient({
     const [preselectedHeroAction, setPreselectedHeroAction] = useState<null | "check_or_fold">(null);
     const [seatRequestPrompt, setSeatRequestPrompt] = useState<SeatRequestPromptState | null>(null);
     const [requestNoticeModal, setRequestNoticeModal] = useState<RequestNoticeModalState | null>(null);
+    const [archivePreview, setArchivePreview] = useState<RoomArchivePreview | null>(null);
+    const [archiveMatchDrafts, setArchiveMatchDrafts] = useState<Record<string, string>>({});
     const [seatApprovalDrafts, setSeatApprovalDrafts] = useState<Record<string, string>>({});
     const [rebuyApprovalDrafts, setRebuyApprovalDrafts] = useState<Record<string, string>>({});
     const [adminApprovalQueue, setAdminApprovalQueue] = useState<AdminApprovalQueueEntry[]>([]);
@@ -358,6 +392,7 @@ export function RoomClient({
     const [archivedReplayStartedAt, setArchivedReplayStartedAt] = useState<number | null>(null);
     const [runoutEquityState, setRunoutEquityState] = useState<RunoutEquityViewState>(createEmptyRunoutEquityViewState);
     const [actionPadOffset, setActionPadOffset] = useState<ActionPadOffset>(DEFAULT_ACTION_PAD_OFFSET);
+    const [dimActionPadWhenIdle, setDimActionPadWhenIdle] = useState(true);
     const [isActionPadDragging, setIsActionPadDragging] = useState(false);
     const reconnectTimerRef = useRef<number | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
@@ -450,25 +485,57 @@ export function RoomClient({
     }
 
     useEffect(() => {
-        const stored = window.localStorage.getItem(STORAGE_KEY);
+        const syncSessionFromStorage = () => {
+            const nextSession = readStoredBrowserSession() as SessionState | null;
 
-        if (!stored) {
+            setSession(nextSession);
+
+            if (!initialAccountId) {
+                setAccountId(nextSession?.account.id);
+            }
+
+            if (nextSession) {
+                setDisplayName((current) => current || nextSession.account.username);
+            }
+        };
+
+        syncSessionFromStorage();
+        window.addEventListener("storage", syncSessionFromStorage);
+        window.addEventListener(SESSION_STORAGE_EVENT, syncSessionFromStorage);
+
+        return () => {
+            window.removeEventListener("storage", syncSessionFromStorage);
+            window.removeEventListener(SESSION_STORAGE_EVENT, syncSessionFromStorage);
+        };
+    }, [initialAccountId]);
+
+    useEffect(() => {
+        if (typeof window === "undefined") {
             return;
         }
 
         try {
-            const nextSession = JSON.parse(stored) as SessionState;
-            setSession(nextSession);
+            const storedPreference = window.localStorage.getItem(ACTION_PAD_IDLE_DIM_STORAGE_KEY);
 
-            if (!initialAccountId) {
-                setAccountId(nextSession.account.id);
+            if (storedPreference === "0") {
+                setDimActionPadWhenIdle(false);
             }
-
-            setDisplayName((current) => current || nextSession.account.username);
         } catch {
-            window.localStorage.removeItem(STORAGE_KEY);
+            // Ignore storage failures and keep the default dimming behavior.
         }
-    }, [initialAccountId]);
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        try {
+            window.localStorage.setItem(ACTION_PAD_IDLE_DIM_STORAGE_KEY, dimActionPadWhenIdle ? "1" : "0");
+        } catch {
+            // Ignore storage failures and just keep the in-memory preference.
+        }
+    }, [dimActionPadWhenIdle]);
 
     useEffect(() => {
         if (typeof window === "undefined") {
@@ -991,6 +1058,15 @@ export function RoomClient({
         wins: totals.wins + row.wins,
         rebuys: totals.rebuys + row.rebuys,
     }), { buyIn: 0, buyOut: 0, stack: 0, net: 0, wins: 0, rebuys: 0 });
+    const archivePreviewTotals = archivePreview?.ledger.reduce((totals, row) => ({
+        buyIn: totals.buyIn + row.totalBuyIn,
+        buyOut: totals.buyOut + row.buyOut,
+        stack: totals.stack + row.stack,
+        net: totals.net + row.netResult,
+        wins: totals.wins + row.wins,
+        rebuys: totals.rebuys + row.rebuys,
+    }), { buyIn: 0, buyOut: 0, stack: 0, net: 0, wins: 0, rebuys: 0 }) ?? { buyIn: 0, buyOut: 0, stack: 0, net: 0, wins: 0, rebuys: 0 };
+    const archiveMatchedCount = archivePreview?.ledger.filter((row) => Boolean(archiveMatchDrafts[row.sourceAccountId])).length ?? 0;
 
     useEffect(() => {
         if (!isPhoneViewport) {
@@ -1028,8 +1104,11 @@ export function RoomClient({
         }
     }
 
+    const shouldForceOpaqueActionPad = Boolean(isActionPadDragging || heroActionState?.canAct || heroCanRespondToRunItTwice);
+
     function renderActionPanel(variant: "inline" | "dialog") {
         const isInline = variant === "inline";
+        const isIdleDimmable = isInline && dimActionPadWhenIdle && !shouldForceOpaqueActionPad;
 
         return (
             <section
@@ -1037,6 +1116,7 @@ export function RoomClient({
                 className={[
                     "table-action-panel",
                     isInline ? "table-action-panel--inline" : "table-action-panel--dialog",
+                    isIdleDimmable ? "table-action-panel--idle-dimmable" : "table-action-panel--force-opaque",
                     isInline && isActionPadDragging ? "table-action-panel--dragging" : "",
                 ].filter(Boolean).join(" ")}
                 style={isInline ? { transform: `translate(${actionPadOffset.x}px, ${actionPadOffset.y}px)` } : undefined}
@@ -1047,17 +1127,33 @@ export function RoomClient({
                         <strong className="table-action-panel__title">{heroPlayer ? heroPlayer.displayName : "Waiting for seat"}</strong>
                     </div>
 
-                    {isInline && !isPhoneViewport ? (
+                    <div className="table-action-panel__controls">
                         <button
-                            className="table-action-panel__drag-handle"
+                            className={[
+                                "table-action-panel__visibility-toggle",
+                                dimActionPadWhenIdle ? "table-action-panel__visibility-toggle--dimmed" : "table-action-panel__visibility-toggle--visible",
+                            ].filter(Boolean).join(" ")}
                             type="button"
-                            onPointerDown={handleActionPadPointerDown}
-                            aria-label="Drag action pad"
-                            aria-grabbed={isActionPadDragging}
+                            onClick={() => setDimActionPadWhenIdle((current) => !current)}
+                            aria-label={dimActionPadWhenIdle ? "Keep the action pad opaque when idle" : "Let the action pad dim when idle"}
+                            aria-pressed={!dimActionPadWhenIdle}
+                            title={dimActionPadWhenIdle ? "Action pad dims when idle" : "Action pad stays opaque"}
                         >
-                            Move
+                            <span className="table-action-panel__visibility-eye" aria-hidden="true" />
                         </button>
-                    ) : null}
+
+                        {isInline && !isPhoneViewport ? (
+                            <button
+                                className="table-action-panel__drag-handle"
+                                type="button"
+                                onPointerDown={handleActionPadPointerDown}
+                                aria-label="Drag action pad"
+                                aria-grabbed={isActionPadDragging}
+                            >
+                                Move
+                            </button>
+                        ) : null}
+                    </div>
                 </div>
 
                 {heroCanRespondToRunItTwice ? (
@@ -1227,7 +1323,14 @@ export function RoomClient({
         );
     }
 
-    async function submitRoomMutation(path: string, body: Record<string, unknown>) {
+    async function submitJson<T>(
+        path: string,
+        body: Record<string, unknown>,
+        options: {
+            applySnapshot?: boolean;
+            fallbackError: string;
+        },
+    ): Promise<T> {
         if (demoMode) {
             const error = new Error("Sample table is read-only.");
             setActionError(error.message);
@@ -1253,21 +1356,31 @@ export function RoomClient({
                 body: JSON.stringify(body),
             });
 
-            const payload = (await response.json()) as RoomSnapshot & { error?: string };
+            const payload = (await response.json()) as T & { error?: string };
 
             if (!response.ok) {
-                throw new Error(payload.error ?? "Unable to update the room.");
+                throw new Error(payload.error ?? options.fallbackError);
             }
 
-            setSnapshot(payload);
+            if (options.applySnapshot) {
+                setSnapshot(payload as unknown as RoomSnapshot);
+            }
+
             return payload;
         } catch (error) {
-            const message = error instanceof Error ? error.message : "Unable to update the room.";
+            const message = error instanceof Error ? error.message : options.fallbackError;
             setActionError(message);
             throw error;
         } finally {
             setIsMutating(false);
         }
+    }
+
+    async function submitRoomMutation(path: string, body: Record<string, unknown>) {
+        return submitJson<RoomSnapshot>(path, body, {
+            applySnapshot: true,
+            fallbackError: "Unable to update the room.",
+        });
     }
 
     async function handleJoinRoom() {
@@ -1665,14 +1778,67 @@ export function RoomClient({
         });
     }
 
+    function closeArchivePreview() {
+        setArchivePreview(null);
+        setArchiveMatchDrafts({});
+    }
+
     async function handleArchiveTable() {
         if (!accountId) {
+            return;
+        }
+
+        if (snapshot?.visibility === "club" && snapshot.clubId) {
+            try {
+                const preview = await submitJson<RoomArchivePreview>(`/v1/rooms/${slug}/admin/archive-preview`, {
+                    accountId,
+                }, {
+                    fallbackError: "Unable to prepare the archive preview.",
+                });
+
+                setArchivePreview(preview);
+                setArchiveMatchDrafts(Object.fromEntries(preview.ledger.map((row) => [row.sourceAccountId, ""])));
+                setOpenMenuPanel(null);
+            } catch {
+                return;
+            }
+
             return;
         }
 
         await submitRoomMutation(`/v1/rooms/${slug}/admin/archive`, {
             accountId,
         });
+    }
+
+    async function handleConfirmArchiveTable() {
+        if (!accountId || !archivePreview) {
+            return;
+        }
+
+        try {
+            await submitRoomMutation(`/v1/rooms/${slug}/admin/archive`, {
+                accountId,
+                matchedLedgerAccounts: archivePreview.ledger
+                    .map((row) => {
+                        const matchedAccountId = archiveMatchDrafts[row.sourceAccountId];
+
+                        if (!matchedAccountId) {
+                            return null;
+                        }
+
+                        return {
+                            sourceAccountId: row.sourceAccountId,
+                            matchedAccountId,
+                        };
+                    })
+                    .filter((value): value is { sourceAccountId: string; matchedAccountId: string } => Boolean(value)),
+            });
+
+            closeArchivePreview();
+        } catch {
+            return;
+        }
     }
 
     function restartArchivedReplay() {
@@ -3384,6 +3550,100 @@ export function RoomClient({
                 </div>
             ) : null}
 
+            {archivePreview ? (
+                <div className="session-ledger-modal" role="dialog" aria-modal="true" aria-label="Archive club session">
+                    <button className="session-ledger-modal__backdrop" type="button" aria-label="Close archive preview" onClick={closeArchivePreview} />
+                    <section className="session-ledger-modal__panel session-ledger-modal__panel--archive">
+                        <header className="session-ledger-modal__header">
+                            <div>
+                                <h2>Match ledger to club users</h2>
+                                <p>{archivePreview.clubName} recorded at {formatArchivePreviewTimestamp(archivePreview.playedAt)}</p>
+                                <p className="session-ledger-modal__summary">Choose a system user for duplicate or alternate accounts before archiving. Leaving a row on None keeps the current room account.</p>
+                            </div>
+                            <button className="session-ledger-modal__close" type="button" onClick={closeArchivePreview} aria-label="Close archive preview">
+                                ×
+                            </button>
+                        </header>
+
+                        <div className="session-ledger-modal__table-wrap">
+                            <div className="session-ledger-modal__table session-ledger-modal__table--archive">
+                                <div className="session-ledger-modal__row session-ledger-modal__row--header session-ledger-modal__row--archive">
+                                    <span>Player</span>
+                                    <span>Buy-in</span>
+                                    <span>Buy-out</span>
+                                    <span>Stack</span>
+                                    <span>Wins</span>
+                                    <span>Rebuys</span>
+                                    <span>Net</span>
+                                    <span>Match to user</span>
+                                </div>
+
+                                {archivePreview.ledger.map((row) => (
+                                    <div key={row.sourceAccountId} className="session-ledger-modal__row session-ledger-modal__row--archive">
+                                        <div className="session-ledger-modal__player-cell">
+                                            <strong>{row.displayName}</strong>
+                                            <span>@{row.sourceUsername} · {formatSessionLedgerHandle(row.sourceAccountId)}</span>
+                                        </div>
+                                        <span>{formatNumber(row.totalBuyIn)}</span>
+                                        <span>{formatNumber(row.buyOut)}</span>
+                                        <span>{formatNumber(row.stack)}</span>
+                                        <span>{formatNumber(row.wins)}</span>
+                                        <span>{formatNumber(row.rebuys)}</span>
+                                        <span className={row.netResult >= 0 ? "session-ledger-modal__net session-ledger-modal__net--positive" : "session-ledger-modal__net session-ledger-modal__net--negative"}>
+                                            {row.netResult >= 0 ? "+" : ""}{formatNumber(row.netResult)}
+                                        </span>
+                                        <label className="session-ledger-modal__match-field">
+                                            <span className="session-ledger-modal__match-label">Match</span>
+                                            <select
+                                                className="control-input"
+                                                value={archiveMatchDrafts[row.sourceAccountId] ?? ""}
+                                                onChange={(event) => setArchiveMatchDrafts((current) => ({
+                                                    ...current,
+                                                    [row.sourceAccountId]: event.target.value,
+                                                }))}
+                                                disabled={isMutating}
+                                                aria-label={`Match ${row.displayName} to a system user`}
+                                            >
+                                                <option value="">None - keep current account</option>
+                                                {archivePreview.users
+                                                    .filter((user) => user.accountId !== row.sourceAccountId)
+                                                    .map((user) => (
+                                                        <option key={`${row.sourceAccountId}-${user.accountId}`} value={user.accountId}>
+                                                            {user.username}{user.isClubMember ? " - club member" : ""}
+                                                        </option>
+                                                    ))}
+                                            </select>
+                                        </label>
+                                    </div>
+                                ))}
+
+                                <div className="session-ledger-modal__row session-ledger-modal__row--footer session-ledger-modal__row--archive">
+                                    <span>Table total</span>
+                                    <span>{formatNumber(archivePreviewTotals.buyIn)}</span>
+                                    <span>{formatNumber(archivePreviewTotals.buyOut)}</span>
+                                    <span>{formatNumber(archivePreviewTotals.stack)}</span>
+                                    <span>{formatNumber(archivePreviewTotals.wins)}</span>
+                                    <span>{formatNumber(archivePreviewTotals.rebuys)}</span>
+                                    <span className={archivePreviewTotals.net >= 0 ? "session-ledger-modal__net session-ledger-modal__net--positive" : "session-ledger-modal__net session-ledger-modal__net--negative"}>
+                                        {archivePreviewTotals.net >= 0 ? "+" : ""}{formatNumber(archivePreviewTotals.net)}
+                                    </span>
+                                    <span>{archiveMatchedCount} remapped</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="table-dialog__actions session-ledger-modal__actions">
+                            <button className="button button--secondary" type="button" onClick={closeArchivePreview} disabled={isMutating}>
+                                Cancel
+                            </button>
+                            <button className="button button--primary" type="button" onClick={() => void handleConfirmArchiveTable()} disabled={isMutating}>
+                                Archive table
+                            </button>
+                        </div>
+                    </section>
+                </div>
+            ) : null}
+
             {isPhoneViewport && isMobileActionMenuOpen ? (
                 <div className="table-dialog" role="dialog" aria-modal="true" aria-label="Action menu">
                     <button className="table-dialog__backdrop" type="button" aria-label="Close action menu" onClick={() => setIsMobileActionMenuOpen(false)} />
@@ -5053,6 +5313,22 @@ function formatChatTimestamp(value: string): string {
     }
 
     return new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+    }).format(date);
+}
+
+function formatArchivePreviewTimestamp(value: string): string {
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return "this session";
+    }
+
+    return new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
         hour: "numeric",
         minute: "2-digit",
     }).format(date);

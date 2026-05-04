@@ -34,6 +34,7 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
         blindSchedule: Array.isArray(body.blindSchedule) ? (body.blindSchedule as never) : undefined,
         autoStartNextHand: optionalBoolean(body.autoStartNextHand),
         autoStartDelaySeconds: optionalNumber(body.autoStartDelaySeconds),
+        runItTwiceEnabled: optionalBoolean(body.runItTwiceEnabled),
       });
 
       return reply.code(201).send(snapshot);
@@ -199,8 +200,11 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
       return reply.send(await registry.updateClubLeaderboardEntry({
         clubId: requireString(params.clubId, "clubId"),
         accountId: requireString(params.accountId, "accountId"),
-        totalProfit: requireNumber(body.totalProfit, "totalProfit"),
-        gamesPlayed: requireNumber(body.gamesPlayed, "gamesPlayed"),
+        accountIds: optionalStringArray(body.accountIds, "accountIds"),
+        displayName: optionalString(body.displayName),
+        totalProfit: optionalNumber(body.totalProfit),
+        gamesPlayed: optionalNumber(body.gamesPlayed),
+        isVisibleInLeaderboard: optionalBoolean(body.isVisibleInLeaderboard),
       }));
     } catch (error) {
       return reply.code(400).send({ error: getErrorMessage(error) });
@@ -509,6 +513,22 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
     }
   });
 
+  app.post("/v1/rooms/:slug/admin/archive-preview", async (request, reply) => {
+    const params = request.params as Record<string, unknown>;
+    const body = request.body as Record<string, unknown>;
+
+    try {
+      const preview = await registry.getRoomArchivePreview({
+        slug: requireString(params.slug, "slug"),
+        accountId: requireString(body.accountId, "accountId"),
+      });
+
+      return reply.send(preview);
+    } catch (error) {
+      return reply.code(400).send({ error: getErrorMessage(error) });
+    }
+  });
+
   app.post("/v1/rooms/:slug/admin/archive", async (request, reply) => {
     const params = request.params as Record<string, unknown>;
     const body = request.body as Record<string, unknown>;
@@ -517,6 +537,7 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
       const snapshot = await registry.archiveRoom({
         slug: requireString(params.slug, "slug"),
         accountId: requireString(body.accountId, "accountId"),
+        matchedLedgerAccounts: optionalRoomArchiveLedgerMatches(body.matchedLedgerAccounts),
       });
 
       return reply.send(snapshot);
@@ -708,10 +729,18 @@ function requireStringArray(value: unknown, fieldName: string): string[] {
     .filter((entry) => entry.length > 0);
 
   if (parsed.length === 0) {
-    throw new Error(`Field '${fieldName}' must include at least one room id.`);
+    throw new Error(`Field '${fieldName}' must include at least one string value.`);
   }
 
   return parsed;
+}
+
+function optionalStringArray(value: unknown, fieldName: string): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  return requireStringArray(value, fieldName);
 }
 
 function requireClubLedgerEntries(value: unknown, fieldName: string) {
@@ -732,6 +761,29 @@ function requireClubLedgerEntries(value: unknown, fieldName: string) {
       hoursPlayed: optionalNullableString(parsed.hoursPlayed),
       totalBuyIn: requireNumber(parsed.totalBuyIn, `${fieldName}[${index}].totalBuyIn`),
       cashOut: requireNumber(parsed.cashOut, `${fieldName}[${index}].cashOut`),
+    };
+  });
+}
+
+function optionalRoomArchiveLedgerMatches(value: unknown) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error("Field 'matchedLedgerAccounts' must be an array.");
+  }
+
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`Field 'matchedLedgerAccounts[${index}]' must be an object.`);
+    }
+
+    const parsed = entry as Record<string, unknown>;
+
+    return {
+      sourceAccountId: requireString(parsed.sourceAccountId, `matchedLedgerAccounts[${index}].sourceAccountId`),
+      matchedAccountId: optionalNullableString(parsed.matchedAccountId),
     };
   });
 }

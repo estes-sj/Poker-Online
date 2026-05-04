@@ -519,6 +519,7 @@ describe("table start", () => {
         amountWon: 5_000,
         netChips: 0,
         finalStack: 5_000,
+        handLabel: "Pair",
       },
       {
         accountId: "b",
@@ -526,6 +527,7 @@ describe("table start", () => {
         amountWon: 5_000,
         netChips: 0,
         finalStack: 5_000,
+        handLabel: "Flush",
       },
     ]);
     expect(table.lastCompletedHand?.allInRunout).toEqual({

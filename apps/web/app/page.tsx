@@ -110,6 +110,7 @@ export default function HomePage() {
                             Sign in or open a room
                         </Link>
                         <Link className="button button--secondary" href="/rooms">Browse rooms</Link>
+                        <Link className="button button--secondary" href="/clubs">Browse clubs</Link>
                         <Link className="button button--secondary" href="/rooms/sample-table">View sample table</Link>
                     </div>
                     <div className="landing-hero__proof" aria-label="Product highlights">

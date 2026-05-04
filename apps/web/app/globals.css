@@ -4068,6 +4068,12 @@ button {
   gap: 12px;
 }
 
+.table-action-panel__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .table-utility-dock__eyebrow,
 .table-action-panel__eyebrow {
   font-size: 0.72rem;
@@ -4100,6 +4106,14 @@ button {
   will-change: transform;
 }
 
+.table-action-panel--force-opaque {
+  opacity: 1;
+  background: rgba(10, 13, 17, 0.88);
+  border-color: rgba(245, 240, 223, 0.08);
+  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.26);
+  backdrop-filter: blur(18px);
+}
+
 .table-action-panel--dragging {
   opacity: 1;
   background: rgba(10, 13, 17, 0.88);
@@ -4121,6 +4135,65 @@ button {
 .table-mobile-actions__toggle {
   display: none;
   pointer-events: auto;
+}
+
+.table-action-panel__visibility-toggle {
+  pointer-events: auto;
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 240, 223, 0.12);
+  background: rgba(245, 240, 223, 0.08);
+  color: rgba(245, 240, 223, 0.88);
+  display: grid;
+  place-items: center;
+}
+
+.table-action-panel__visibility-toggle:hover,
+.table-action-panel__visibility-toggle:focus-visible {
+  background: rgba(245, 240, 223, 0.14);
+  border-color: rgba(245, 240, 223, 0.2);
+}
+
+.table-action-panel__visibility-toggle--visible {
+  color: var(--accent);
+  border-color: rgba(215, 179, 92, 0.24);
+}
+
+.table-action-panel__visibility-eye {
+  position: relative;
+  display: block;
+  width: 14px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-radius: 999px / 75%;
+}
+
+.table-action-panel__visibility-eye::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+}
+
+.table-action-panel__visibility-toggle--dimmed .table-action-panel__visibility-eye::after {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: 3px;
+  width: 20px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: rotate(-32deg);
+  transform-origin: center;
 }
 
 .table-action-panel__drag-handle {
@@ -4154,8 +4227,8 @@ button {
   width: min(420px, calc(100vw - 20px));
 }
 
-.table-command-deck__action-wrap:hover .table-action-panel,
-.table-command-deck__action-wrap:focus-within .table-action-panel {
+.table-command-deck__action-wrap:hover .table-action-panel--idle-dimmable,
+.table-command-deck__action-wrap:focus-within .table-action-panel--idle-dimmable {
   opacity: 1;
   background: rgba(10, 13, 17, 0.88);
   border-color: rgba(245, 240, 223, 0.08);
@@ -4466,6 +4539,11 @@ button {
   overflow: hidden;
 }
 
+.session-ledger-modal__panel--archive {
+  width: min(1320px, calc(100vw - 40px));
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
 .session-ledger-modal__header {
   display: flex;
   justify-content: space-between;
@@ -4481,6 +4559,10 @@ button {
 .session-ledger-modal__header p {
   margin: 6px 0 0;
   color: rgba(26, 26, 26, 0.58);
+}
+
+.session-ledger-modal__summary {
+  max-width: 72ch;
 }
 
 .session-ledger-modal__close {
@@ -4506,6 +4588,10 @@ button {
   min-width: 920px;
 }
 
+.session-ledger-modal__table--archive {
+  min-width: 1220px;
+}
+
 .session-ledger-modal__row {
   display: grid;
   grid-template-columns: minmax(260px, 1.7fr) repeat(6, minmax(74px, 0.6fr));
@@ -4515,6 +4601,10 @@ button {
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.82);
   border: 1px solid rgba(26, 26, 26, 0.08);
+}
+
+.session-ledger-modal__row--archive {
+  grid-template-columns: minmax(240px, 1.45fr) repeat(6, minmax(72px, 0.52fr)) minmax(260px, 1.3fr);
 }
 
 .session-ledger-modal__row--header,
@@ -4547,6 +4637,22 @@ button {
 
 .session-ledger-modal__player-cell span {
   color: rgba(26, 26, 26, 0.34);
+}
+
+.session-ledger-modal__match-field {
+  display: grid;
+  gap: 6px;
+}
+
+.session-ledger-modal__match-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(26, 26, 26, 0.48);
+}
+
+.session-ledger-modal__actions {
+  padding-top: 6px;
 }
 
 .session-ledger-modal__net {
@@ -4840,6 +4946,10 @@ button {
     width: min(1080px, calc(100vw - 28px));
   }
 
+  .session-ledger-modal__panel--archive {
+    width: calc(100vw - 28px);
+  }
+
   .table-admin-form-grid {
     grid-template-columns: 1fr;
   }
@@ -5023,6 +5133,10 @@ button {
   .session-ledger-modal__panel {
     width: calc(100vw - 20px);
     padding: 18px;
+  }
+
+  .session-ledger-modal__panel--archive {
+    width: calc(100vw - 20px);
   }
 
   .table-menu-drawer {

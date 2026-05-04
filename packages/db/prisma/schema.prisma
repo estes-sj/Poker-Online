@@ -93,6 +93,21 @@ model Club {
   rooms        Room[]
   rankings     UserRanking[]
   ledgerGames  ClubLedgerGame[]
+  leaderboardDisplayNames ClubLeaderboardDisplayName[]
+}
+
+model ClubLeaderboardDisplayName {
+  id                    String   @id @default(cuid())
+  clubId                String
+  normalizedDisplayName String
+  displayName           String
+  isVisibleInLeaderboard Boolean @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  club                  Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, normalizedDisplayName])
+  @@index([clubId])
 }
 
 model ClubLedgerGame {

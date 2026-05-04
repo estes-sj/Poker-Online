@@ -139,10 +139,11 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                     adminAccountId: session.account.id,
                     clubId: formData.get("clubId") || undefined,
                     password: formData.get("roomPassword") || undefined,
-                    maxPlayers: Number(formData.get("maxPlayers") ?? 6),
+                    maxPlayers: Number(formData.get("maxPlayers") ?? 10),
                     startingStack: Number(formData.get("startingStack") ?? 1000),
                     autoStartNextHand: formData.get("autoStartNextHand") === "on",
                     autoStartDelaySeconds: Number(formData.get("autoStartDelaySeconds") ?? 8),
+                    runItTwiceEnabled: formData.get("runItTwiceEnabled") === "on",
                 }),
             });
 
@@ -347,7 +348,7 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                                 label="Max players"
                                 tooltip="How many seats the table opens. This layout supports between 2 and 10 players."
                             >
-                                <input className="control-input" id="max-players" type="number" name="maxPlayers" placeholder="8 players" defaultValue={8} min={2} max={10} required />
+                                <input className="control-input" id="max-players" type="number" name="maxPlayers" placeholder="10 players" defaultValue={10} min={2} max={10} required />
                             </ControlField>
                             <ControlField
                                 htmlFor="starting-stack"
@@ -364,18 +365,28 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                                     <FieldTooltip label="Explain auto-start next hand" text="If enabled, the server waits for the showdown presentation to finish and then deals the next hand automatically." />
                                 </div>
                                 <label className="control-checkbox" htmlFor="auto-start-next-hand">
-                                    <input id="auto-start-next-hand" type="checkbox" name="autoStartNextHand" defaultChecked />
+                                    <input id="auto-start-next-hand" type="checkbox" name="autoStartNextHand" />
                                     <span>Deal the next hand automatically</span>
                                 </label>
                             </div>
-                            <ControlField
-                                htmlFor="auto-start-delay-seconds"
-                                label="Auto-start delay"
-                                tooltip="How many seconds the table waits between hands before dealing again when auto-start is on."
-                            >
-                                <input className="control-input" id="auto-start-delay-seconds" type="number" name="autoStartDelaySeconds" placeholder="8 seconds" defaultValue={8} min={0} required />
-                            </ControlField>
+                            <div className="control-field">
+                                <div className="control-field__label-row">
+                                    <label className="control-field__label" htmlFor="run-it-twice-enabled">Run it twice</label>
+                                    <FieldTooltip label="Explain run it twice" text="If enabled, eligible all-in showdowns offer a unanimous run-it-twice vote before the board runs out." />
+                                </div>
+                                <label className="control-checkbox" htmlFor="run-it-twice-enabled">
+                                    <input id="run-it-twice-enabled" type="checkbox" name="runItTwiceEnabled" defaultChecked />
+                                    <span>Offer run it twice on all-in showdowns</span>
+                                </label>
+                            </div>
                         </div>
+                        <ControlField
+                            htmlFor="auto-start-delay-seconds"
+                            label="Auto-start delay"
+                            tooltip="How many seconds the table waits between hands before dealing again when auto-start is on."
+                        >
+                            <input className="control-input" id="auto-start-delay-seconds" type="number" name="autoStartDelaySeconds" placeholder="8 seconds" defaultValue={8} min={0} required />
+                        </ControlField>
                         <button className="button button--primary" type="submit" disabled={isCreatingRoom || !canCreateRooms}>
                             {isCreatingRoom ? "Opening room..." : "Open room"}
                         </button>
