@@ -49,6 +49,10 @@ enum RankingScope {
   CLUB
 }
 
+enum ClubLedgerSource {
+  IMPORTED_WORKBOOK
+}
+
 model User {
   id                String           @id @default(cuid())
   email             String           @unique
@@ -63,6 +67,7 @@ model User {
   roomParticipants  TableParticipant[]
   actions           HandAction[]
   rankings          UserRanking[]
+  ledgerEntries     ClubLedgerEntry[]
 }
 
 model Session {
@@ -87,6 +92,41 @@ model Club {
   memberships  ClubMembership[]
   rooms        Room[]
   rankings     UserRanking[]
+  ledgerGames  ClubLedgerGame[]
+}
+
+model ClubLedgerGame {
+  id         String           @id @default(cuid())
+  clubId      String
+  source      ClubLedgerSource @default(IMPORTED_WORKBOOK)
+  sourceKey   String
+  label       String
+  playedAt    DateTime
+  importedAt  DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  club        Club             @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  entries     ClubLedgerEntry[]
+
+  @@unique([clubId, source, sourceKey])
+  @@index([clubId, playedAt])
+}
+
+model ClubLedgerEntry {
+  id          String         @id @default(cuid())
+  gameId       String
+  userId       String
+  displayName  String
+  hoursPlayed  String?
+  totalBuyIn   Int
+  cashOut      Int
+  netResult    Int
+  playerOrder  Int
+  createdAt    DateTime       @default(now())
+  game         ClubLedgerGame @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, userId])
+  @@index([userId])
 }
 
 model ClubMembership {

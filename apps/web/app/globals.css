@@ -919,16 +919,318 @@ button {
   font-size: 0.9rem;
 }
 
+.clubs-page,
+.club-detail-page,
+.admin-club-manager {
+  display: grid;
+  gap: 24px;
+}
+
+.clubs-page__header,
+.club-detail-page__header,
+.club-leaderboard__header,
+.admin-club-manager__header,
+.admin-club-manager__detail-header,
+.admin-club-manager__section-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.clubs-page__intro,
+.club-detail-page__intro,
+.admin-club-manager__detail,
+.admin-club-manager__section,
+.admin-club-manager__create-form,
+.admin-club-manager__search-form,
+.admin-club-manager__import-form,
+.admin-club-manager__table-player {
+  display: grid;
+  gap: 12px;
+}
+
+.clubs-grid,
+.club-detail-page__metrics,
+.admin-club-manager__metrics,
+.admin-club-manager__forms {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.club-card {
+  display: grid;
+  gap: 14px;
+}
+
+.club-detail-page__metric,
+.admin-club-manager__metric {
+  display: grid;
+  gap: 6px;
+  border-radius: 22px;
+  border: 1px solid rgba(245, 240, 223, 0.1);
+  background: rgba(5, 13, 10, 0.36);
+}
+
+.club-detail-page__metric strong,
+.admin-club-manager__metric strong {
+  font-size: 1.4rem;
+}
+
+.clubs-page__empty-state,
+.club-leaderboard,
+.club-game-history,
+.admin-club-manager__panel,
+.admin-club-manager__section,
+.admin-club-manager__club-button {
+  border-radius: 28px;
+}
+
+.club-leaderboard,
+.club-game-history,
+.admin-club-manager__section {
+  border: 1px solid rgba(245, 240, 223, 0.1);
+  background: rgba(5, 13, 10, 0.32);
+  padding: 22px;
+}
+
+.club-leaderboard__table-wrap,
+.club-game-card__table-wrap,
+.admin-club-manager__table-wrap {
+  overflow: auto;
+  border-radius: 20px;
+  border: 1px solid rgba(245, 240, 223, 0.08);
+  background: rgba(5, 13, 10, 0.28);
+}
+
+.club-leaderboard__table,
+.club-game-card__table,
+.admin-club-manager__table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+}
+
+.club-leaderboard__table th,
+.club-leaderboard__table td,
+.club-game-card__table th,
+.club-game-card__table td,
+.admin-club-manager__table th,
+.admin-club-manager__table td {
+  padding: 14px 16px;
+  text-align: left;
+  border-bottom: 1px solid rgba(245, 240, 223, 0.08);
+}
+
+.club-leaderboard__table th,
+.club-game-card__table th,
+.admin-club-manager__table th {
+  color: var(--text-soft);
+  font-size: 0.84rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.club-leaderboard__profit--positive {
+  color: #aee8b3;
+}
+
+.club-leaderboard__profit--negative {
+  color: #ffb4a6;
+}
+
+.club-game-history,
+.club-game-history__list,
+.club-game-card {
+  display: grid;
+  gap: 16px;
+}
+
+.club-game-history__header,
+.club-game-card__header,
+.club-game-card__meta {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.club-game-card {
+  border-radius: 24px;
+  border: 1px solid rgba(245, 240, 223, 0.08);
+  background: rgba(245, 240, 223, 0.04);
+  padding: 18px;
+}
+
+.club-game-card__meta {
+  color: var(--text-soft);
+  font-size: 0.9rem;
+}
+
+.club-game-card__result--positive {
+  color: #aee8b3;
+}
+
+.club-game-card__result--negative {
+  color: #ffb4a6;
+}
+
+.admin-club-manager__content {
+  display: grid;
+  gap: 18px;
+}
+
+.admin-club-manager__toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.admin-club-manager__create-form {
+  width: min(420px, 100%);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.admin-club-manager__workspace {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.admin-club-manager__club-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-club-manager__club-button {
+  display: grid;
+  gap: 6px;
+  padding: 18px;
+  text-align: left;
+  border: 1px solid rgba(245, 240, 223, 0.1);
+  background: rgba(5, 13, 10, 0.36);
+  color: inherit;
+}
+
+.admin-club-manager__club-button--active {
+  border-color: rgba(230, 181, 76, 0.45);
+  box-shadow: 0 0 0 1px rgba(230, 181, 76, 0.22) inset;
+}
+
+.admin-club-manager__club-button span,
+.admin-club-manager__table-player span,
+.admin-club-manager__member-meta span {
+  color: var(--text-soft);
+  font-size: 0.9rem;
+}
+
+.admin-club-manager__search-row,
+.admin-club-manager__member-meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.admin-club-manager__member-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 240, 223, 0.1);
+  background: rgba(245, 240, 223, 0.06);
+}
+
+.admin-club-manager__detail-header a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.admin-club-manager__game-list {
+  display: grid;
+  gap: 16px;
+}
+
+.admin-club-manager__game-card {
+  gap: 16px;
+}
+
+.admin-club-manager__game-fields {
+  flex: 1 1 420px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 220px);
+}
+
+.admin-club-manager__field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.admin-club-manager__field span {
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.admin-club-manager__game-actions {
+  display: grid;
+  gap: 12px;
+  justify-items: end;
+}
+
+.admin-club-manager__result {
+  font-weight: 600;
+}
+
+.admin-club-manager__result--positive {
+  color: #aee8b3;
+}
+
+.admin-club-manager__result--negative {
+  color: #ffb4a6;
+}
+
 @media (max-width: 900px) {
   .admin-rooms-page__header,
   .admin-room-manager__header,
-  .admin-room-manager__toolbar {
+  .admin-room-manager__toolbar,
+  .clubs-page__header,
+  .club-detail-page__header,
+  .club-leaderboard__header,
+  .admin-club-manager__header,
+  .admin-club-manager__detail-header,
+  .admin-club-manager__section-header,
+  .admin-club-manager__toolbar {
     align-items: stretch;
     flex-direction: column;
   }
 
   .admin-room-manager__bulk-actions {
     grid-template-columns: 1fr;
+  }
+
+  .admin-club-manager__create-form,
+  .admin-club-manager__workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-club-manager__game-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-club-manager__game-actions {
+    justify-items: stretch;
   }
 }
 

@@ -68,6 +68,168 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
     }
   });
 
+  app.get("/v1/clubs", async (_request, reply) => {
+    try {
+      return reply.send(await registry.listClubs());
+    } catch (error) {
+      return reply.code(500).send({ error: getErrorMessage(error) });
+    }
+  });
+
+  app.get("/v1/clubs/:slug", async (request, reply) => {
+    try {
+      const params = request.params as Record<string, unknown>;
+      const club = await registry.getClubBySlug(requireString(params.slug, "slug"));
+
+      if (!club) {
+        return reply.code(404).send({ error: "Club not found." });
+      }
+
+      return reply.send(club);
+    } catch (error) {
+      return reply.code(404).send({ error: getErrorMessage(error) });
+    }
+  });
+
+  app.get("/v1/admin/clubs", async (request, reply) => {
+    try {
+      await requireManagementAdmin(registry, request.headers.authorization);
+      return reply.send(await registry.listManagedClubs());
+    } catch (error) {
+      return reply.code(403).send({ error: getErrorMessage(error) });
+    }
+  });
+
+  app.post("/v1/admin/clubs", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+
+    let admin;
+
+    try {
+      admin = await requireManagementAdmin(registry, request.headers.authorization);
+    } catch (error) {
+      return reply.code(403).send({ error: getErrorMessage(error) });
+    }
+
+    try {
+      return reply.code(201).send(await registry.createClub({
+        name: requireString(body.name, "name"),
+        ownerAccountId: admin.accountId,
+      }));
+    } catch (error) {
+      return reply.code(400).send({ error: getErrorMessage(error) });
+    }
+  });
+
+  app.get("/v1/admin/users/search", async (request, reply) => {
+    const query = request.query as Record<string, unknown>;
+
+    try {
+      await requireManagementAdmin(registry, request.headers.authorization);
+    } catch (error) {
+      return reply.code(403).send({ error: getErrorMessage(error) });
+    }
+
+    try {
+      return reply.send(await registry.searchClubUsers({
+        query: requireString(query.query, "query"),
+        clubId: optionalString(query.clubId),
+      }));
+    } catch (error) {
+      return reply.code(400).send({ error: getErrorMessage(error) });
+    }
+  });
+
+  app.post("/v1/admin/clubs/:clubId/members", async (request, reply) => {
+    const params = request.params as Record<string, unknown>;
+    const body = request.body as Record<string, unknown>;
+
+    try {
+      await requireManagementAdmin(registry, request.headers.authorization);
+    } catch (error) {
+      return reply.code(403).send({ error: getErrorMessage(error) });
+    }
+
+    try {
+      return reply.send(await registry.addClubMember({
+        clubId: requireString(params.clubId, "clubId"),
+        accountId: requireString(body.accountId, "accountId"),
+        role: optionalClubRole(body.role),
+        canManageRooms: optionalBoolean(body.canManageRooms),
+        isVisibleInLeaderboard: optionalBoolean(body.isVisibleInLeaderboard),
+      }));
+    } catch (error) {
+      return reply.code(400).send({ error: getErrorMessage(error) });
+    }
+  });
+
+  app.post("/v1/admin/clubs/:clubId/leaderboard/import-player", async (request, reply) => {
+    const params = request.params as Record<string, unknown>;
+    const body = request.body as Record<string, unknown>;
+
+    try {
+      await requireManagementAdmin(registry, request.headers.authorization);
+    } catch (error) {
+      return reply.code(403).send({ error: getErrorMessage(error) });
+    }
+
+    try {
+      return reply.code(201).send(await registry.createSyntheticClubPlayer({
+        clubId: requireString(params.clubId, "clubId"),
+        displayName: requireString(body.displayName, "displayName"),
+        totalProfit: requireNumber(body.totalProfit, "totalProfit"),
+        gamesPlayed: optionalNumber(body.gamesPlayed),
+      }));
+    } catch (error) {
+      return reply.code(400).send({ error: getErrorMessage(error) });
+    }
+  });
+
+  app.post("/v1/admin/clubs/:clubId/leaderboard/:accountId", async (request, reply) => {
+    const params = request.params as Record<string, unknown>;
+    const body = request.body as Record<string, unknown>;
+
+    try {
+      await requireManagementAdmin(registry, request.headers.authorization);
+    } catch (error) {
+      return reply.code(403).send({ error: getErrorMessage(error) });
+    }
+
+    try {
+      return reply.send(await registry.updateClubLeaderboardEntry({
+        clubId: requireString(params.clubId, "clubId"),
+        accountId: requireString(params.accountId, "accountId"),
+        totalProfit: requireNumber(body.totalProfit, "totalProfit"),
+        gamesPlayed: requireNumber(body.gamesPlayed, "gamesPlayed"),
+      }));
+    } catch (error) {
+      return reply.code(400).send({ error: getErrorMessage(error) });
+    }
+  });
+
+  app.post("/v1/admin/clubs/:clubId/games/:gameId", async (request, reply) => {
+    const params = request.params as Record<string, unknown>;
+    const body = request.body as Record<string, unknown>;
+
+    try {
+      await requireManagementAdmin(registry, request.headers.authorization);
+    } catch (error) {
+      return reply.code(403).send({ error: getErrorMessage(error) });
+    }
+
+    try {
+      return reply.send(await registry.updateClubGameLedger({
+        clubId: requireString(params.clubId, "clubId"),
+        gameId: requireString(params.gameId, "gameId"),
+        label: requireString(body.label, "label"),
+        playedAt: requireString(body.playedAt, "playedAt"),
+        entries: requireClubLedgerEntries(body.entries, "entries"),
+      }));
+    } catch (error) {
+      return reply.code(400).send({ error: getErrorMessage(error) });
+    }
+  });
+
   app.get("/v1/admin/rooms", async (request, reply) => {
     try {
       await requireManagementAdmin(registry, request.headers.authorization);
@@ -485,6 +647,14 @@ function optionalString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function optionalNullableString(value: unknown): string | null | undefined {
+  if (value === null) {
+    return null;
+  }
+
+  return optionalString(value);
+}
+
 function requireNumber(value: unknown, fieldName: string): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
     throw new Error(`Field '${fieldName}' must be a number.`);
@@ -544,6 +714,28 @@ function requireStringArray(value: unknown, fieldName: string): string[] {
   return parsed;
 }
 
+function requireClubLedgerEntries(value: unknown, fieldName: string) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`Field '${fieldName}' must be a non-empty array.`);
+  }
+
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`Field '${fieldName}[${index}]' must be an object.`);
+    }
+
+    const parsed = entry as Record<string, unknown>;
+
+    return {
+      accountId: requireString(parsed.accountId, `${fieldName}[${index}].accountId`),
+      displayName: requireString(parsed.displayName, `${fieldName}[${index}].displayName`),
+      hoursPlayed: optionalNullableString(parsed.hoursPlayed),
+      totalBuyIn: requireNumber(parsed.totalBuyIn, `${fieldName}[${index}].totalBuyIn`),
+      cashOut: requireNumber(parsed.cashOut, `${fieldName}[${index}].cashOut`),
+    };
+  });
+}
+
 function requireBoolean(value: unknown, fieldName: string): boolean {
   if (typeof value !== "boolean") {
     throw new Error(`Field '${fieldName}' must be a boolean.`);
@@ -556,8 +748,12 @@ function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-async function requireManagementAdmin(registry: RoomRegistry, authorizationHeader?: string): Promise<void> {
-  await registry.assertManagementAdmin(getBearerToken(authorizationHeader));
+async function requireManagementAdmin(registry: RoomRegistry, authorizationHeader?: string) {
+  return registry.assertManagementAdmin(getBearerToken(authorizationHeader));
+}
+
+function optionalClubRole(value: unknown): "OWNER" | "ADMIN" | "MEMBER" | undefined {
+  return value === "OWNER" || value === "ADMIN" || value === "MEMBER" ? value : undefined;
 }
 
 function optionalVisibility(value: unknown): "private" | "club" | undefined {

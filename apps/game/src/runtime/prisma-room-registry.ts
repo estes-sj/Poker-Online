@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { Prisma, RoomStatus, RoomVisibility, type PrismaClient } from "@prisma/client";
 import { prisma } from "../../../../packages/db/src/index.js";
@@ -32,13 +32,24 @@ import {
 
 import { hashSecret, verifySecret } from "./passwords.js";
 import type {
+  AddClubMemberRequest,
   ArchiveRoomRequest,
   ArchivedHandRecord,
   AutoExpiringRoom,
+  ClubDetails,
+  ClubGameLedger,
+  ClubGameLedgerEntry,
+  ClubLeaderboardEntry,
+  ClubMemberSummary,
+  ClubSummary,
+  ClubUserSearchResult,
+  CreateClubRequest,
   CreateRoomRequest,
+  CreateSyntheticClubPlayerRequest,
   DeleteManagedRoomsRequest,
   DeleteManagedRoomsResult,
   JoinRoomRequest,
+  ManagedClubSummary,
   LeaveSeatRequest,
   ManagedRoomSummary,
   PublicRoomSummary,
@@ -73,8 +84,11 @@ import type {
   RoomManagementAdmin,
   SeatBotRequest,
   SeatPlayerRequest,
+  SearchClubUsersRequest,
   StartHandRequest,
   StopRoomRequest,
+  UpdateClubGameLedgerRequest,
+  UpdateClubLeaderboardEntryRequest,
   UpdateManagedRoomsAutoExpirationRequest,
   UpdateRoomAdminOptionsRequest,
 } from "./room-service.js";
@@ -94,8 +108,12 @@ const MAX_RECENT_COMPLETED_HANDS = 12;
 const REACTION_DURATION_MS = 4_000;
 const MAX_AUTO_EXPIRE_HOURS = 24 * 365;
 const BOT_ACCOUNT_ID_PREFIX = "bot_";
+const BOT_EMAIL_DOMAIN = "bots.local";
+const CLUB_IMPORT_EMAIL_DOMAIN = "club-import.local";
+const MAX_CLUB_USER_SEARCH_RESULTS = 12;
 
 type PrismaClientLike = PrismaClient;
+type RankingRecalculationClient = Pick<PrismaClientLike, "clubLedgerEntry" | "userRanking">;
 
 interface PersistedRoomRecord {
   id: string;
@@ -122,6 +140,73 @@ interface ManagedPersistedRoomRecord extends PersistedRoomRecord {
   admin: {
     username: string;
   };
+}
+
+interface PersistedClubRecord {
+  id: string;
+  slug: string;
+  name: string;
+  ownerId: string;
+  createdAt: Date;
+  updatedAt: Date;
+  owner: {
+    username: string;
+  };
+  _count: {
+    memberships: number;
+    rooms: number;
+  };
+}
+
+interface PersistedClubMembershipRecord {
+  role: "OWNER" | "ADMIN" | "MEMBER";
+  canManageRooms: boolean;
+  isVisibleInLeaderboard: boolean;
+  joinedAt: Date;
+  user: {
+    id: string;
+    username: string;
+    email: string;
+  };
+}
+
+interface PersistedClubRankingRecord {
+  totalProfit: bigint;
+  gamesPlayed: number;
+  updatedAt: Date;
+  user: {
+    id: string;
+    username: string;
+    email: string;
+  };
+}
+
+interface PersistedClubLedgerEntryRecord {
+  displayName: string;
+  hoursPlayed: string | null;
+  totalBuyIn: number;
+  cashOut: number;
+  netResult: number;
+  playerOrder: number;
+  user: {
+    id: string;
+    username: string;
+    email: string;
+  };
+}
+
+interface PersistedClubLedgerGameRecord {
+  id: string;
+  label: string;
+  playedAt: Date;
+  importedAt: Date;
+  entries: PersistedClubLedgerEntryRecord[];
+}
+
+interface ManagedPersistedClubRecord extends PersistedClubRecord {
+  memberships: PersistedClubMembershipRecord[];
+  rankings: PersistedClubRankingRecord[];
+  ledgerGames: PersistedClubLedgerGameRecord[];
 }
 
 interface PersistedRoomRuntimeState {
@@ -230,6 +315,549 @@ export class PrismaRoomRegistry implements RoomRegistry {
       accountId: sessionAccount.id,
       username: sessionAccount.username,
     };
+  }
+
+  async listClubs(): Promise<ClubSummary[]> {
+    const clubs = await this.database.club.findMany({
+      orderBy: [
+        { name: "asc" },
+      ],
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        ownerId: true,
+        createdAt: true,
+        updatedAt: true,
+        owner: {
+          select: {
+            username: true,
+          },
+        },
+        _count: {
+          select: {
+            memberships: true,
+            rooms: true,
+          },
+        },
+      },
+    });
+
+    return clubs.map((club) => buildClubSummary(club));
+  }
+
+  async getClubBySlug(slug: string): Promise<ClubDetails | null> {
+    const club = await this.database.club.findUnique({
+      where: { slug },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        ownerId: true,
+        createdAt: true,
+        updatedAt: true,
+        owner: {
+          select: {
+            username: true,
+          },
+        },
+        _count: {
+          select: {
+            memberships: true,
+            rooms: true,
+          },
+        },
+        rankings: {
+          where: {
+            scope: "CLUB",
+          },
+          orderBy: [
+            { totalProfit: "desc" },
+            { updatedAt: "desc" },
+          ],
+          select: {
+            totalProfit: true,
+            gamesPlayed: true,
+            updatedAt: true,
+            user: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+              },
+            },
+          },
+        },
+        ledgerGames: {
+          orderBy: [
+            { playedAt: "desc" },
+            { importedAt: "desc" },
+          ],
+          select: {
+            id: true,
+            label: true,
+            playedAt: true,
+            importedAt: true,
+            entries: {
+              orderBy: [
+                { playerOrder: "asc" },
+              ],
+              select: {
+                displayName: true,
+                hoursPlayed: true,
+                totalBuyIn: true,
+                cashOut: true,
+                netResult: true,
+                playerOrder: true,
+                user: {
+                  select: {
+                    id: true,
+                    username: true,
+                    email: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!club) {
+      return null;
+    }
+
+    return buildClubDetails(club, club.rankings, club.ledgerGames);
+  }
+
+  async listManagedClubs(): Promise<ManagedClubSummary[]> {
+    const clubs = await this.database.club.findMany({
+      orderBy: [
+        { createdAt: "asc" },
+      ],
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        ownerId: true,
+        createdAt: true,
+        updatedAt: true,
+        owner: {
+          select: {
+            username: true,
+          },
+        },
+        _count: {
+          select: {
+            memberships: true,
+            rooms: true,
+          },
+        },
+        memberships: {
+          orderBy: [
+            { joinedAt: "asc" },
+          ],
+          select: {
+            role: true,
+            canManageRooms: true,
+            isVisibleInLeaderboard: true,
+            joinedAt: true,
+            user: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+              },
+            },
+          },
+        },
+        rankings: {
+          where: {
+            scope: "CLUB",
+          },
+          orderBy: [
+            { totalProfit: "desc" },
+            { updatedAt: "desc" },
+          ],
+          select: {
+            totalProfit: true,
+            gamesPlayed: true,
+            updatedAt: true,
+            user: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+              },
+            },
+          },
+        },
+        ledgerGames: {
+          orderBy: [
+            { playedAt: "desc" },
+            { importedAt: "desc" },
+          ],
+          select: {
+            id: true,
+            label: true,
+            playedAt: true,
+            importedAt: true,
+            entries: {
+              orderBy: [
+                { playerOrder: "asc" },
+              ],
+              select: {
+                displayName: true,
+                hoursPlayed: true,
+                totalBuyIn: true,
+                cashOut: true,
+                netResult: true,
+                playerOrder: true,
+                user: {
+                  select: {
+                    id: true,
+                    username: true,
+                    email: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return clubs.map((club) => buildManagedClubSummary(club));
+  }
+
+  async createClub(input: CreateClubRequest): Promise<ManagedClubSummary> {
+    const owner = await this.assertAdminExists(input.ownerAccountId);
+    const name = normalizeClubName(input.name);
+    const slug = await this.allocateClubSlug(name);
+
+    const club = await this.database.club.create({
+      data: {
+        slug,
+        name,
+        ownerId: owner.id,
+        memberships: {
+          create: {
+            userId: owner.id,
+            role: "OWNER",
+            canManageRooms: true,
+            isVisibleInLeaderboard: true,
+          },
+        },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    return this.getManagedClubSummaryById(club.id);
+  }
+
+  async searchClubUsers(input: SearchClubUsersRequest): Promise<ClubUserSearchResult[]> {
+    const query = normalizeClubUserSearchQuery(input.query);
+
+    if (!query) {
+      return [];
+    }
+
+    const users = await this.database.user.findMany({
+      where: {
+        NOT: [
+          {
+            id: {
+              startsWith: BOT_ACCOUNT_ID_PREFIX,
+            },
+          },
+          {
+            email: {
+              endsWith: `@${BOT_EMAIL_DOMAIN}`,
+            },
+          },
+          {
+            email: {
+              endsWith: `@${CLUB_IMPORT_EMAIL_DOMAIN}`,
+            },
+          },
+        ],
+        OR: [
+          {
+            username: {
+              contains: query,
+              mode: "insensitive",
+            },
+          },
+          {
+            email: {
+              contains: query,
+              mode: "insensitive",
+            },
+          },
+        ],
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+      take: MAX_CLUB_USER_SEARCH_RESULTS,
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        createdAt: true,
+        memberships: {
+          where: {
+            clubId: input.clubId ?? "",
+          },
+          select: {
+            id: true,
+          },
+        },
+      },
+    });
+
+    return users.map((user) => ({
+      accountId: user.id,
+      username: user.username,
+      email: user.email,
+      createdAt: user.createdAt.toISOString(),
+      isMember: user.memberships.length > 0,
+    }));
+  }
+
+  async addClubMember(input: AddClubMemberRequest): Promise<ManagedClubSummary> {
+    await this.assertClubExists(input.clubId);
+
+    const user = await this.database.user.findUnique({
+      where: { id: input.accountId },
+      select: { id: true },
+    });
+
+    if (!user) {
+      throw new Error("User does not exist.");
+    }
+
+    if (isBotAccountId(input.accountId)) {
+      throw new Error("Bots cannot be added to club leaderboards.");
+    }
+
+    await this.database.clubMembership.upsert({
+      where: {
+        clubId_userId: {
+          clubId: input.clubId,
+          userId: input.accountId,
+        },
+      },
+      update: {
+        role: input.role ?? undefined,
+        canManageRooms: input.canManageRooms ?? undefined,
+        isVisibleInLeaderboard: input.isVisibleInLeaderboard ?? undefined,
+      },
+      create: {
+        clubId: input.clubId,
+        userId: input.accountId,
+        role: input.role ?? "MEMBER",
+        canManageRooms: input.canManageRooms ?? false,
+        isVisibleInLeaderboard: input.isVisibleInLeaderboard ?? true,
+      },
+    });
+
+    return this.getManagedClubSummaryById(input.clubId);
+  }
+
+  async createSyntheticClubPlayer(input: CreateSyntheticClubPlayerRequest): Promise<ManagedClubSummary> {
+    const club = await this.database.club.findUnique({
+      where: { id: input.clubId },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!club) {
+      throw new Error("Club does not exist.");
+    }
+
+    const displayName = normalizeSyntheticClubDisplayName(input.displayName);
+    const totalProfit = normalizeRankingChipValue(input.totalProfit, "totalProfit");
+    const gamesPlayed = normalizeGamesPlayed(input.gamesPlayed ?? 0, "gamesPlayed");
+    const username = await this.allocateUniqueUsername(displayName);
+    const email = `club_import_${randomUUID()}@${CLUB_IMPORT_EMAIL_DOMAIN}`;
+
+    const user = await this.database.user.create({
+      data: {
+        email,
+        username,
+        passwordHash: hashSecret(`club-import:${club.id}:${randomUUID()}`),
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    await this.database.clubMembership.create({
+      data: {
+        clubId: club.id,
+        userId: user.id,
+      },
+    });
+
+    if (totalProfit !== 0 || gamesPlayed !== 0) {
+      await this.database.userRanking.create({
+        data: {
+          userId: user.id,
+          clubId: club.id,
+          scope: "CLUB",
+          scopeKey: buildClubScopeKey(club.id),
+          totalProfit: BigInt(totalProfit),
+          gamesPlayed,
+        },
+      });
+    }
+
+    return this.getManagedClubSummaryById(club.id);
+  }
+
+  async updateClubLeaderboardEntry(input: UpdateClubLeaderboardEntryRequest): Promise<ManagedClubSummary> {
+    await this.assertClubExists(input.clubId);
+
+    const user = await this.database.user.findUnique({
+      where: { id: input.accountId },
+      select: { id: true },
+    });
+
+    if (!user) {
+      throw new Error("User does not exist.");
+    }
+
+    if (isBotAccountId(input.accountId)) {
+      throw new Error("Bots cannot appear on club leaderboards.");
+    }
+
+    const totalProfit = normalizeRankingChipValue(input.totalProfit, "totalProfit");
+    const gamesPlayed = normalizeGamesPlayed(input.gamesPlayed, "gamesPlayed");
+    const scopeKey = buildClubScopeKey(input.clubId);
+
+    await this.database.clubMembership.upsert({
+      where: {
+        clubId_userId: {
+          clubId: input.clubId,
+          userId: input.accountId,
+        },
+      },
+      update: {},
+      create: {
+        clubId: input.clubId,
+        userId: input.accountId,
+      },
+    });
+
+    await this.database.userRanking.upsert({
+      where: {
+        userId_scopeKey: {
+          userId: input.accountId,
+          scopeKey,
+        },
+      },
+      update: {
+        clubId: input.clubId,
+        scope: "CLUB",
+        totalProfit: BigInt(totalProfit),
+        gamesPlayed,
+      },
+      create: {
+        userId: input.accountId,
+        clubId: input.clubId,
+        scope: "CLUB",
+        scopeKey,
+        totalProfit: BigInt(totalProfit),
+        gamesPlayed,
+      },
+    });
+
+    return this.getManagedClubSummaryById(input.clubId);
+  }
+
+  async updateClubGameLedger(input: UpdateClubGameLedgerRequest): Promise<ManagedClubSummary> {
+    await this.assertClubExists(input.clubId);
+
+    const label = normalizeClubLedgerGameLabel(input.label);
+    const playedAt = normalizeClubLedgerPlayedAt(input.playedAt);
+    const normalizedEntries = input.entries.map((entry) => ({
+      accountId: entry.accountId,
+      displayName: normalizeSyntheticClubDisplayName(entry.displayName),
+      hoursPlayed: normalizeClubLedgerHoursPlayed(entry.hoursPlayed),
+      totalBuyIn: normalizeNonNegativeChipValue(entry.totalBuyIn, "totalBuyIn"),
+      cashOut: normalizeNonNegativeChipValue(entry.cashOut, "cashOut"),
+    }));
+
+    if (normalizedEntries.length === 0) {
+      throw new Error("Games must include at least one ledger entry.");
+    }
+
+    const game = await this.database.clubLedgerGame.findFirst({
+      where: {
+        id: input.gameId,
+        clubId: input.clubId,
+        source: "IMPORTED_WORKBOOK",
+      },
+      select: {
+        id: true,
+        entries: {
+          orderBy: [
+            { playerOrder: "asc" },
+          ],
+          select: {
+            userId: true,
+          },
+        },
+      },
+    });
+
+    if (!game) {
+      throw new Error("Imported game does not exist.");
+    }
+
+    const existingUserIds = game.entries.map((entry) => entry.userId).sort();
+    const nextUserIds = normalizedEntries.map((entry) => entry.accountId).sort();
+
+    if (existingUserIds.length !== nextUserIds.length || existingUserIds.some((userId, index) => userId !== nextUserIds[index])) {
+      throw new Error("Game edits must keep the same players for now.");
+    }
+
+    await this.database.$transaction(async (transaction) => {
+      await transaction.clubLedgerGame.update({
+        where: { id: game.id },
+        data: {
+          label,
+          playedAt,
+        },
+      });
+
+      for (const [index, entry] of normalizedEntries.entries()) {
+        await transaction.clubLedgerEntry.update({
+          where: {
+            gameId_userId: {
+              gameId: game.id,
+              userId: entry.accountId,
+            },
+          },
+          data: {
+            displayName: entry.displayName,
+            hoursPlayed: entry.hoursPlayed,
+            totalBuyIn: entry.totalBuyIn,
+            cashOut: entry.cashOut,
+            netResult: entry.cashOut - entry.totalBuyIn,
+            playerOrder: index,
+          },
+        });
+      }
+
+      await this.recalculateImportedWorkbookRankings(transaction, input.clubId, existingUserIds);
+    });
+
+    return this.getManagedClubSummaryById(input.clubId);
   }
 
   async listManagedRooms(): Promise<ManagedRoomSummary[]> {
@@ -1540,28 +2168,42 @@ export class PrismaRoomRegistry implements RoomRegistry {
       });
       const participantByUserId = new Map(participantRecords.map((participant) => [participant.userId, participant]));
       const winningsByUserId = new Map(table.lastCompletedHand.winners.map((winner) => [winner.accountId, winner.amountWon]));
+      const persistedHandResults = Object.keys(completedHand.holeCards)
+        .map((accountId) => {
+          const participant = participantByUserId.get(accountId);
+          const player = table.players.find((entry) => entry.accountId === accountId);
+
+          if (!participant || !player) {
+            return null;
+          }
+
+          return {
+            accountId,
+            participantId: participant.id,
+            netChips: (winningsByUserId.get(accountId) ?? 0) - (completedHand.contributions[accountId] ?? 0),
+            finalStack: player.stack,
+            holeCards: completedHand.holeCards[accountId],
+          };
+        })
+        .filter((record): record is NonNullable<typeof record> => record !== null);
 
       await transaction.handResult.createMany({
-        data: Object.keys(completedHand.holeCards)
-          .map((accountId) => {
-            const participant = participantByUserId.get(accountId);
-            const player = table.players.find((entry) => entry.accountId === accountId);
-
-            if (!participant || !player) {
-              return null;
-            }
-
-            return {
-              handId: persistedHand.id,
-              participantId: participant.id,
-              netChips: (winningsByUserId.get(accountId) ?? 0) - (completedHand.contributions[accountId] ?? 0),
-              finalStack: player.stack,
-              holeCards: toJsonValue(completedHand.holeCards[accountId]),
-            };
-          })
-          .filter((record): record is NonNullable<typeof record> => record !== null),
+        data: persistedHandResults.map((record) => ({
+          handId: persistedHand.id,
+          participantId: record.participantId,
+          netChips: record.netChips,
+          finalStack: record.finalStack,
+          holeCards: toJsonValue(record.holeCards),
+        })),
         skipDuplicates: true,
       });
+
+      if (room.clubId) {
+        await this.upsertClubRankingsForHand(transaction, room.clubId, persistedHandResults.map((record) => ({
+          accountId: record.accountId,
+          netChips: record.netChips,
+        })));
+      }
     });
 
     await this.onRoomUpdated?.(input.slug);
@@ -1791,6 +2433,179 @@ export class PrismaRoomRegistry implements RoomRegistry {
     }
   }
 
+  private async getManagedClubSummaryById(clubId: string): Promise<ManagedClubSummary> {
+    const club = await this.database.club.findUnique({
+      where: { id: clubId },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        ownerId: true,
+        createdAt: true,
+        updatedAt: true,
+        owner: {
+          select: {
+            username: true,
+          },
+        },
+        _count: {
+          select: {
+            memberships: true,
+            rooms: true,
+          },
+        },
+        memberships: {
+          orderBy: [
+            { joinedAt: "asc" },
+          ],
+          select: {
+            role: true,
+            canManageRooms: true,
+            isVisibleInLeaderboard: true,
+            joinedAt: true,
+            user: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+              },
+            },
+          },
+        },
+        rankings: {
+          where: {
+            scope: "CLUB",
+          },
+          orderBy: [
+            { totalProfit: "desc" },
+            { updatedAt: "desc" },
+          ],
+          select: {
+            totalProfit: true,
+            gamesPlayed: true,
+            updatedAt: true,
+            user: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+              },
+            },
+          },
+        },
+        ledgerGames: {
+          orderBy: [
+            { playedAt: "desc" },
+            { importedAt: "desc" },
+          ],
+          select: {
+            id: true,
+            label: true,
+            playedAt: true,
+            importedAt: true,
+            entries: {
+              orderBy: [
+                { playerOrder: "asc" },
+              ],
+              select: {
+                displayName: true,
+                hoursPlayed: true,
+                totalBuyIn: true,
+                cashOut: true,
+                netResult: true,
+                playerOrder: true,
+                user: {
+                  select: {
+                    id: true,
+                    username: true,
+                    email: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!club) {
+      throw new Error("Club does not exist.");
+    }
+
+    return buildManagedClubSummary(club);
+  }
+
+  private async recalculateImportedWorkbookRankings(
+    database: RankingRecalculationClient,
+    clubId: string,
+    userIds: string[],
+  ): Promise<void> {
+    const uniqueUserIds = Array.from(new Set(userIds));
+
+    if (uniqueUserIds.length === 0) {
+      return;
+    }
+
+    const entries = await database.clubLedgerEntry.findMany({
+      where: {
+        userId: {
+          in: uniqueUserIds,
+        },
+        game: {
+          clubId,
+          source: "IMPORTED_WORKBOOK",
+        },
+      },
+      select: {
+        userId: true,
+        netResult: true,
+      },
+    });
+
+    const totalsByUserId = new Map(uniqueUserIds.map((userId) => [userId, {
+      totalProfit: 0,
+      gamesPlayed: 0,
+    }]));
+
+    for (const entry of entries) {
+      const aggregate = totalsByUserId.get(entry.userId);
+
+      if (!aggregate) {
+        continue;
+      }
+
+      aggregate.totalProfit += entry.netResult;
+      aggregate.gamesPlayed += 1;
+    }
+
+    const scopeKey = buildClubScopeKey(clubId);
+
+    for (const [userId, aggregate] of totalsByUserId) {
+      await database.userRanking.upsert({
+        where: {
+          userId_scopeKey: {
+            userId,
+            scopeKey,
+          },
+        },
+        update: {
+          clubId,
+          scope: "CLUB",
+          totalProfit: BigInt(aggregate.totalProfit),
+          gamesPlayed: aggregate.gamesPlayed,
+        },
+        create: {
+          userId,
+          clubId,
+          scope: "CLUB",
+          scopeKey,
+          totalProfit: BigInt(aggregate.totalProfit),
+          gamesPlayed: aggregate.gamesPlayed,
+        },
+      });
+    }
+  }
+
   private async allocateSlug(seed: string): Promise<string> {
     const base = slugify(seed);
     let candidate = base;
@@ -1799,6 +2614,42 @@ export class PrismaRoomRegistry implements RoomRegistry {
     while (await this.database.room.findUnique({ where: { slug: candidate }, select: { id: true } })) {
       suffix += 1;
       candidate = `${base}-${suffix}`;
+    }
+
+    return candidate;
+  }
+
+  private async allocateClubSlug(seed: string): Promise<string> {
+    const base = slugifyClubName(seed);
+    let candidate = base;
+    let suffix = 1;
+
+    while (await this.database.club.findUnique({ where: { slug: candidate }, select: { id: true } })) {
+      suffix += 1;
+      candidate = `${base}-${suffix}`;
+    }
+
+    return candidate;
+  }
+
+  private async allocateUniqueUsername(seed: string): Promise<string> {
+    const base = seed.trim() || "Imported player";
+    let candidate = base;
+    let suffix = 1;
+
+    while (await this.database.user.findFirst({
+      where: {
+        username: {
+          equals: candidate,
+          mode: "insensitive",
+        },
+      },
+      select: {
+        id: true,
+      },
+    })) {
+      suffix += 1;
+      candidate = `${base} ${suffix}`;
     }
 
     return candidate;
@@ -1877,6 +2728,57 @@ export class PrismaRoomRegistry implements RoomRegistry {
 
     if (!club) {
       throw new Error("Club does not exist.");
+    }
+  }
+
+  private async upsertClubRankingsForHand(
+    transaction: Prisma.TransactionClient,
+    clubId: string,
+    deltas: Array<{ accountId: string; netChips: number }>,
+  ): Promise<void> {
+    const applicableDeltas = deltas.filter((delta) => !isBotAccountId(delta.accountId));
+
+    if (applicableDeltas.length === 0) {
+      return;
+    }
+
+    await transaction.clubMembership.createMany({
+      data: Array.from(new Set(applicableDeltas.map((delta) => delta.accountId))).map((accountId) => ({
+        clubId,
+        userId: accountId,
+      })),
+      skipDuplicates: true,
+    });
+
+    const scopeKey = buildClubScopeKey(clubId);
+
+    for (const delta of applicableDeltas) {
+      await transaction.userRanking.upsert({
+        where: {
+          userId_scopeKey: {
+            userId: delta.accountId,
+            scopeKey,
+          },
+        },
+        update: {
+          clubId,
+          scope: "CLUB",
+          totalProfit: {
+            increment: BigInt(delta.netChips),
+          },
+          gamesPlayed: {
+            increment: 1,
+          },
+        },
+        create: {
+          userId: delta.accountId,
+          clubId,
+          scope: "CLUB",
+          scopeKey,
+          totalProfit: BigInt(delta.netChips),
+          gamesPlayed: 1,
+        },
+      });
     }
   }
 
@@ -3280,6 +4182,214 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, "");
 
   return slug.length > 0 ? slug : "poker-room";
+}
+
+function slugifyClubName(value: string): string {
+  const slug = slugify(value);
+  return slug === "poker-room" ? "club" : slug;
+}
+
+function normalizeClubName(value: string): string {
+  const name = value.trim();
+
+  if (name.length < 2) {
+    throw new Error("Club name must contain at least 2 characters.");
+  }
+
+  return name;
+}
+
+function normalizeClubUserSearchQuery(value: string): string | null {
+  const query = value.trim();
+  return query.length >= 2 ? query : null;
+}
+
+function normalizeSyntheticClubDisplayName(value: string): string {
+  const displayName = value.trim();
+
+  if (displayName.length < 2) {
+    throw new Error("Imported player name must contain at least 2 characters.");
+  }
+
+  return displayName;
+}
+
+function normalizeRankingChipValue(value: number, fieldName: string): number {
+  if (!Number.isInteger(value)) {
+    throw new Error(`Field '${fieldName}' must be a whole number.`);
+  }
+
+  return value;
+}
+
+function normalizeGamesPlayed(value: number, fieldName: string): number {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`Field '${fieldName}' must be a whole number greater than or equal to zero.`);
+  }
+
+  return value;
+}
+
+function normalizeNonNegativeChipValue(value: number, fieldName: string): number {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`Field '${fieldName}' must be a whole number greater than or equal to zero.`);
+  }
+
+  return value;
+}
+
+function normalizeClubLedgerGameLabel(value: string): string {
+  const label = value.trim();
+
+  if (label.length === 0) {
+    throw new Error("Game label must not be empty.");
+  }
+
+  return label;
+}
+
+function normalizeClubLedgerPlayedAt(value: string): Date {
+  const trimmed = value.trim();
+
+  if (trimmed.length === 0) {
+    throw new Error("Played date must not be empty.");
+  }
+
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? new Date(`${trimmed}T00:00:00.000Z`)
+    : new Date(trimmed);
+
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error("Played date must be a valid date.");
+  }
+
+  return parsed;
+}
+
+function normalizeClubLedgerHoursPlayed(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function buildClubScopeKey(clubId: string): string {
+  return `club:${clubId}`;
+}
+
+function isImportedClubUserEmail(email: string): boolean {
+  return email.toLowerCase().endsWith(`@${CLUB_IMPORT_EMAIL_DOMAIN}`);
+}
+
+function isSyntheticClubUser(user: { id: string; email: string }): boolean {
+  return isBotAccountId(user.id) || isImportedClubUserEmail(user.email);
+}
+
+function buildClubSummary(club: PersistedClubRecord): ClubSummary {
+  return {
+    clubId: club.id,
+    slug: club.slug,
+    name: club.name,
+    ownerUsername: club.owner.username,
+    memberCount: club._count.memberships,
+    linkedRoomCount: club._count.rooms,
+    createdAt: club.createdAt.toISOString(),
+    updatedAt: club.updatedAt.toISOString(),
+  };
+}
+
+function buildClubLeaderboardEntry(
+  ranking: PersistedClubRankingRecord,
+  displayNameByUserId?: ReadonlyMap<string, string>,
+): ClubLeaderboardEntry {
+  return {
+    accountId: ranking.user.id,
+    username: ranking.user.username,
+    displayName: displayNameByUserId?.get(ranking.user.id),
+    totalProfit: Number(ranking.totalProfit),
+    gamesPlayed: ranking.gamesPlayed,
+    updatedAt: ranking.updatedAt.toISOString(),
+    isSynthetic: isSyntheticClubUser(ranking.user),
+  };
+}
+
+function buildClubGameLedgerEntry(entry: PersistedClubLedgerEntryRecord): ClubGameLedgerEntry {
+  return {
+    accountId: entry.user.id,
+    username: entry.user.username,
+    displayName: entry.displayName,
+    hoursPlayed: entry.hoursPlayed,
+    totalBuyIn: entry.totalBuyIn,
+    cashOut: entry.cashOut,
+    netResult: entry.netResult,
+    isSynthetic: isSyntheticClubUser(entry.user),
+  };
+}
+
+function buildClubGameLedger(game: PersistedClubLedgerGameRecord): ClubGameLedger {
+  return {
+    gameId: game.id,
+    label: game.label,
+    playedAt: game.playedAt.toISOString(),
+    importedAt: game.importedAt.toISOString(),
+    entryCount: game.entries.length,
+    ledger: game.entries.map((entry) => buildClubGameLedgerEntry(entry)),
+  };
+}
+
+function buildClubMemberSummary(membership: PersistedClubMembershipRecord): ClubMemberSummary {
+  return {
+    accountId: membership.user.id,
+    username: membership.user.username,
+    email: membership.user.email,
+    role: membership.role,
+    canManageRooms: membership.canManageRooms,
+    isVisibleInLeaderboard: membership.isVisibleInLeaderboard,
+    joinedAt: membership.joinedAt.toISOString(),
+    isSynthetic: isSyntheticClubUser(membership.user),
+  };
+}
+
+function buildClubDetails(
+  club: PersistedClubRecord,
+  rankings: PersistedClubRankingRecord[],
+  gameHistory: PersistedClubLedgerGameRecord[],
+): ClubDetails {
+  const importedDisplayNameByUserId = buildImportedDisplayNameByUserId(gameHistory);
+
+  return {
+    ...buildClubSummary(club),
+    leaderboard: rankings.map((ranking) => buildClubLeaderboardEntry(ranking, importedDisplayNameByUserId)),
+    gameHistory: gameHistory.map((game) => buildClubGameLedger(game)),
+  };
+}
+
+function buildManagedClubSummary(club: ManagedPersistedClubRecord): ManagedClubSummary {
+  const importedDisplayNameByUserId = buildImportedDisplayNameByUserId(club.ledgerGames);
+
+  return {
+    ...buildClubSummary(club),
+    ownerAccountId: club.ownerId,
+    members: club.memberships.map((membership) => buildClubMemberSummary(membership)),
+    leaderboard: club.rankings.map((ranking) => buildClubLeaderboardEntry(ranking, importedDisplayNameByUserId)),
+    gameHistory: club.ledgerGames.map((game) => buildClubGameLedger(game)),
+  };
+}
+
+function buildImportedDisplayNameByUserId(gameHistory: PersistedClubLedgerGameRecord[]): Map<string, string> {
+  const importedDisplayNameByUserId = new Map<string, string>();
+
+  for (const game of gameHistory) {
+    for (const entry of game.entries) {
+      if (!importedDisplayNameByUserId.has(entry.user.id)) {
+        importedDisplayNameByUserId.set(entry.user.id, entry.displayName);
+      }
+    }
+  }
+
+  return importedDisplayNameByUserId;
 }
 
 function toPrismaVisibility(visibility: TableState["visibility"]): RoomVisibility {

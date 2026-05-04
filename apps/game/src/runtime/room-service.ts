@@ -143,6 +143,128 @@ export interface RoomManagementAdmin {
   username: string;
 }
 
+export type ClubRoleValue = "OWNER" | "ADMIN" | "MEMBER";
+
+export interface ClubLeaderboardEntry {
+  accountId: string;
+  username: string;
+  displayName?: string;
+  totalProfit: number;
+  gamesPlayed: number;
+  updatedAt: string;
+  isSynthetic: boolean;
+}
+
+export interface ClubGameLedgerEntry {
+  accountId: string;
+  username: string;
+  displayName: string;
+  hoursPlayed: string | null;
+  totalBuyIn: number;
+  cashOut: number;
+  netResult: number;
+  isSynthetic: boolean;
+}
+
+export interface ClubGameLedger {
+  gameId: string;
+  label: string;
+  playedAt: string;
+  importedAt: string;
+  entryCount: number;
+  ledger: ClubGameLedgerEntry[];
+}
+
+export interface ClubMemberSummary {
+  accountId: string;
+  username: string;
+  email: string;
+  role: ClubRoleValue;
+  canManageRooms: boolean;
+  isVisibleInLeaderboard: boolean;
+  joinedAt: string;
+  isSynthetic: boolean;
+}
+
+export interface ClubSummary {
+  clubId: string;
+  slug: string;
+  name: string;
+  ownerUsername: string;
+  memberCount: number;
+  linkedRoomCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClubDetails extends ClubSummary {
+  leaderboard: ClubLeaderboardEntry[];
+  gameHistory: ClubGameLedger[];
+}
+
+export interface ManagedClubSummary extends ClubSummary {
+  ownerAccountId: string;
+  members: ClubMemberSummary[];
+  leaderboard: ClubLeaderboardEntry[];
+  gameHistory: ClubGameLedger[];
+}
+
+export interface ClubUserSearchResult {
+  accountId: string;
+  username: string;
+  email: string;
+  createdAt: string;
+  isMember: boolean;
+}
+
+export interface CreateClubRequest {
+  name: string;
+  ownerAccountId: string;
+}
+
+export interface AddClubMemberRequest {
+  clubId: string;
+  accountId: string;
+  role?: ClubRoleValue;
+  canManageRooms?: boolean;
+  isVisibleInLeaderboard?: boolean;
+}
+
+export interface SearchClubUsersRequest {
+  query: string;
+  clubId?: string;
+}
+
+export interface CreateSyntheticClubPlayerRequest {
+  clubId: string;
+  displayName: string;
+  totalProfit: number;
+  gamesPlayed?: number;
+}
+
+export interface UpdateClubLeaderboardEntryRequest {
+  clubId: string;
+  accountId: string;
+  totalProfit: number;
+  gamesPlayed: number;
+}
+
+export interface UpdateClubGameLedgerEntryRequest {
+  accountId: string;
+  displayName: string;
+  hoursPlayed?: string | null;
+  totalBuyIn: number;
+  cashOut: number;
+}
+
+export interface UpdateClubGameLedgerRequest {
+  clubId: string;
+  gameId: string;
+  label: string;
+  playedAt: string;
+  entries: UpdateClubGameLedgerEntryRequest[];
+}
+
 export interface ManagedRoomSummary {
   roomId: string;
   slug: string;
@@ -419,6 +541,8 @@ export interface RoomPendingRebuyRequest {
 export interface RoomRegistry {
   createRoom(input: CreateRoomRequest): Promise<RoomSnapshot>;
   joinRoom(input: JoinRoomRequest): Promise<RoomSnapshot>;
+  listClubs(): Promise<ClubSummary[]>;
+  getClubBySlug(slug: string): Promise<ClubDetails | null>;
   listPublicRooms(): Promise<PublicRoomSummary[]>;
   seatPlayer(input: SeatPlayerRequest): Promise<RoomSnapshot>;
   seatBot(input: SeatBotRequest): Promise<RoomSnapshot>;
@@ -447,6 +571,13 @@ export interface RoomRegistry {
   getRoomSnapshot(slug: string, accountId?: string): Promise<RoomSnapshot>;
   getViewerRoomSnapshot(slug: string, accountId?: string): Promise<RoomSnapshot>;
   assertManagementAdmin(sessionToken?: string): Promise<RoomManagementAdmin>;
+  listManagedClubs(): Promise<ManagedClubSummary[]>;
+  createClub(input: CreateClubRequest): Promise<ManagedClubSummary>;
+  searchClubUsers(input: SearchClubUsersRequest): Promise<ClubUserSearchResult[]>;
+  addClubMember(input: AddClubMemberRequest): Promise<ManagedClubSummary>;
+  createSyntheticClubPlayer(input: CreateSyntheticClubPlayerRequest): Promise<ManagedClubSummary>;
+  updateClubLeaderboardEntry(input: UpdateClubLeaderboardEntryRequest): Promise<ManagedClubSummary>;
+  updateClubGameLedger(input: UpdateClubGameLedgerRequest): Promise<ManagedClubSummary>;
   listManagedRooms(): Promise<ManagedRoomSummary[]>;
   listAutoExpiringRooms(): Promise<AutoExpiringRoom[]>;
   getAutoExpiringRoom(slug: string): Promise<AutoExpiringRoom | null>;

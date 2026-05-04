@@ -19,15 +19,24 @@ interface ControlDeskProps {
     };
 }
 
+interface ClubOption {
+    clubId: string;
+    slug: string;
+    name: string;
+}
+
 export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
     const [session, setSession] = useState<BrowserSessionState | null>(null);
     const [registerError, setRegisterError] = useState<string | null>(null);
     const [loginError, setLoginError] = useState<string | null>(null);
     const [roomError, setRoomError] = useState<string | null>(null);
+    const [clubsError, setClubsError] = useState<string | null>(null);
     const [roomLink, setRoomLink] = useState<string | null>(null);
+    const [clubs, setClubs] = useState<ClubOption[]>([]);
     const [isRegistering, setIsRegistering] = useState(false);
     const [isLoggingIn, setIsLoggingIn] = useState(false);
     const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+    const [isLoadingClubs, setIsLoadingClubs] = useState(false);
 
     useEffect(() => {
         const storedSession = readStoredBrowserSession();
@@ -128,6 +137,7 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                 body: JSON.stringify({
                     name: formData.get("roomName"),
                     adminAccountId: session.account.id,
+                    clubId: formData.get("clubId") || undefined,
                     password: formData.get("roomPassword") || undefined,
                     maxPlayers: Number(formData.get("maxPlayers") ?? 6),
                     startingStack: Number(formData.get("startingStack") ?? 1000),
@@ -174,6 +184,50 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
             : `Room creation is limited to ${roomCreationPolicy.adminUsername ?? "the configured admin"}. Sign in with that host account to open a table.`
         : null;
 
+    useEffect(() => {
+        if (!canCreateRooms) {
+            setClubs([]);
+            setClubsError(null);
+            return;
+        }
+
+        let cancelled = false;
+
+        async function loadClubs() {
+            setIsLoadingClubs(true);
+            setClubsError(null);
+
+            try {
+                const gameBaseUrl = getBrowserGameHttpBaseUrl();
+                const response = await fetch(buildBrowserHttpUrl(gameBaseUrl, "/v1/clubs"));
+                const payload = (await response.json()) as ClubOption[] | { error?: string };
+
+                if (!response.ok || !Array.isArray(payload)) {
+                    throw new Error((payload as { error?: string }).error ?? "Unable to load clubs.");
+                }
+
+                if (!cancelled) {
+                    setClubs(payload);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    setClubs([]);
+                    setClubsError(error instanceof Error ? error.message : "Unable to load clubs.");
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsLoadingClubs(false);
+                }
+            }
+        }
+
+        void loadClubs();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [canCreateRooms]);
+
     return (
         <div className="control-desk control-desk--landing" id="host-a-game">
             <section className="ui-panel hero__panel control-desk__panel">
@@ -196,10 +250,18 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                                 <Link className="button button--secondary" href="/rooms">
                                     Browse rooms
                                 </Link>
+                                <Link className="button button--secondary" href="/clubs">
+                                    Browse clubs
+                                </Link>
                                 {canManageRooms ? (
-                                    <Link className="button button--secondary" href="/admin/rooms">
-                                        Manage rooms
-                                    </Link>
+                                    <>
+                                        <Link className="button button--secondary" href="/admin/rooms">
+                                            Manage rooms
+                                        </Link>
+                                        <Link className="button button--secondary" href="/admin/clubs">
+                                            Manage clubs
+                                        </Link>
+                                    </>
                                 ) : null}
                                 <button className="button button--secondary" type="button" onClick={signOut}>
                                     Sign out
@@ -259,6 +321,19 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                         >
                             <input className="control-input" id="room-name" type="text" name="roomName" placeholder="Friday cash game" required />
                         </ControlField>
+                        <ControlField
+                            htmlFor="club-id"
+                            label="Club leaderboard"
+                            tooltip="Optional. If selected, winnings from this room update that club's all-time leaderboard."
+                        >
+                            <select className="control-input" id="club-id" name="clubId" defaultValue="" disabled={isLoadingClubs}>
+                                <option value="">{isLoadingClubs ? "Loading clubs..." : "No club leaderboard"}</option>
+                                {clubs.map((club) => (
+                                    <option key={club.clubId} value={club.clubId}>{club.name}</option>
+                                ))}
+                            </select>
+                        </ControlField>
+                        {clubsError ? <p className="form-error">{clubsError}</p> : null}
                         <ControlField
                             htmlFor="room-password"
                             label="Room password"
