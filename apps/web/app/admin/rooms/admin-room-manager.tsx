@@ -14,6 +14,7 @@ interface ManagedRoomSummary {
     roomId: string;
     slug: string;
     name: string;
+    clubName: string | null;
     adminAccountId: string;
     adminUsername: string;
     visibility: "private" | "club";
@@ -47,7 +48,8 @@ interface AdminRoomManagerProps {
 export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) {
     const [session, setSession] = useState<BrowserSessionState | null>(null);
     const [rooms, setRooms] = useState<ManagedRoomSummary[]>([]);
-    const [selectedRoomIds, setSelectedRoomIds] = useState<string[]>([]);
+    const [selectedLiveRoomIds, setSelectedLiveRoomIds] = useState<string[]>([]);
+    const [selectedArchivedRoomIds, setSelectedArchivedRoomIds] = useState<string[]>([]);
     const [expirationHoursInput, setExpirationHoursInput] = useState("24");
     const [error, setError] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
@@ -62,8 +64,10 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
     );
     const liveRooms = rooms.filter((room) => room.status !== "archived");
     const archivedRooms = rooms.filter((room) => room.status === "archived");
-    const selectedCount = selectedRoomIds.length;
-    const allSelected = liveRooms.length > 0 && selectedCount === liveRooms.length;
+    const selectedLiveCount = selectedLiveRoomIds.length;
+    const selectedArchivedCount = selectedArchivedRoomIds.length;
+    const allLiveSelected = liveRooms.length > 0 && selectedLiveCount === liveRooms.length;
+    const allArchivedSelected = archivedRooms.length > 0 && selectedArchivedCount === archivedRooms.length;
 
     useEffect(() => {
         const storedSession = readStoredBrowserSession();
@@ -102,9 +106,11 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
             }
 
             const liveRoomIds = new Set(payload.filter((room) => room.status !== "archived").map((room) => room.roomId));
+            const archivedRoomIds = new Set(payload.filter((room) => room.status === "archived").map((room) => room.roomId));
 
             setRooms(payload);
-            setSelectedRoomIds((currentSelection) => currentSelection.filter((roomId) => liveRoomIds.has(roomId)));
+            setSelectedLiveRoomIds((currentSelection) => currentSelection.filter((roomId) => liveRoomIds.has(roomId)));
+            setSelectedArchivedRoomIds((currentSelection) => currentSelection.filter((roomId) => archivedRoomIds.has(roomId)));
         } catch (loadError) {
             setError(loadError instanceof Error ? loadError.message : "Unable to load rooms.");
         } finally {
@@ -113,20 +119,32 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
         }
     }
 
-    function toggleRoom(roomId: string) {
-        setSelectedRoomIds((currentSelection) => (
+    function toggleLiveRoom(roomId: string) {
+        setSelectedLiveRoomIds((currentSelection) => (
             currentSelection.includes(roomId)
                 ? currentSelection.filter((currentRoomId) => currentRoomId !== roomId)
                 : [...currentSelection, roomId]
         ));
     }
 
-    function handleToggleAllRooms() {
-        setSelectedRoomIds(allSelected ? [] : liveRooms.map((room) => room.roomId));
+    function toggleArchivedRoom(roomId: string) {
+        setSelectedArchivedRoomIds((currentSelection) => (
+            currentSelection.includes(roomId)
+                ? currentSelection.filter((currentRoomId) => currentRoomId !== roomId)
+                : [...currentSelection, roomId]
+        ));
+    }
+
+    function handleToggleAllLiveRooms() {
+        setSelectedLiveRoomIds(allLiveSelected ? [] : liveRooms.map((room) => room.roomId));
+    }
+
+    function handleToggleAllArchivedRooms() {
+        setSelectedArchivedRoomIds(allArchivedSelected ? [] : archivedRooms.map((room) => room.roomId));
     }
 
     async function handleApplyExpiration(clearExpiration: boolean) {
-        if (!session || selectedRoomIds.length === 0) {
+        if (!session || selectedLiveRoomIds.length === 0) {
             return;
         }
 
@@ -156,7 +174,7 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                     "Content-Type": "application/json",
                 },
                 body: JSON.stringify({
-                    roomIds: selectedRoomIds,
+                    roomIds: selectedLiveRoomIds,
                     autoExpireAfterHours,
                 }),
             });
@@ -178,12 +196,12 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
         }
     }
 
-    async function handleDeleteSelectedRooms() {
-        if (!session || selectedRoomIds.length === 0) {
+    async function deleteSelectedRooms(roomIds: string[], scopeLabel: string) {
+        if (!session || roomIds.length === 0) {
             return;
         }
 
-        const confirmed = window.confirm(`Delete ${selectedRoomIds.length} room${selectedRoomIds.length === 1 ? "" : "s"}? This removes the live room and its persisted session history.`);
+        const confirmed = window.confirm(`Delete ${roomIds.length} ${scopeLabel}${roomIds.length === 1 ? "" : "s"}? This permanently removes the room and its archived session history.`);
 
         if (!confirmed) {
             return;
@@ -202,7 +220,7 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                     "Content-Type": "application/json",
                 },
                 body: JSON.stringify({
-                    roomIds: selectedRoomIds,
+                    roomIds,
                 }),
             });
 
@@ -214,13 +232,22 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
 
             const deletedRoomIds = (payload as DeleteManagedRoomsResult).deletedRoomIds;
             setRooms((currentRooms) => currentRooms.filter((room) => !deletedRoomIds.includes(room.roomId)));
-            setSelectedRoomIds([]);
-            setNotice(`Deleted ${deletedRoomIds.length} room${deletedRoomIds.length === 1 ? "" : "s"}.`);
+            setSelectedLiveRoomIds((currentSelection) => currentSelection.filter((roomId) => !deletedRoomIds.includes(roomId)));
+            setSelectedArchivedRoomIds((currentSelection) => currentSelection.filter((roomId) => !deletedRoomIds.includes(roomId)));
+            setNotice(`Deleted ${deletedRoomIds.length} ${scopeLabel}${deletedRoomIds.length === 1 ? "" : "s"}.`);
         } catch (deleteError) {
             setError(deleteError instanceof Error ? deleteError.message : "Unable to delete rooms.");
         } finally {
             setIsDeleting(false);
         }
+    }
+
+    async function handleDeleteSelectedLiveRooms() {
+        await deleteSelectedRooms(selectedLiveRoomIds, "live room");
+    }
+
+    async function handleDeleteSelectedArchivedRooms() {
+        await deleteSelectedRooms(selectedArchivedRoomIds, "archived game");
     }
 
     if (!session) {
@@ -280,11 +307,11 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                     <div className="admin-room-manager__toolbar">
                         <div className="admin-room-manager__toolbar-copy">
                             <p>Signed in as {session.account.username}.</p>
-                            <p>{selectedCount} live room{selectedCount === 1 ? "" : "s"} selected.</p>
+                            <p>{selectedLiveCount} live room{selectedLiveCount === 1 ? "" : "s"} selected.</p>
                         </div>
                         <div className="action-row admin-room-manager__toolbar-actions">
-                            <button className="button button--secondary" type="button" onClick={handleToggleAllRooms} disabled={liveRooms.length === 0 || isLoading}>
-                                {allSelected ? "Clear selection" : "Select all"}
+                            <button className="button button--secondary" type="button" onClick={handleToggleAllLiveRooms} disabled={liveRooms.length === 0 || isLoading}>
+                                {allLiveSelected ? "Clear selection" : "Select all"}
                             </button>
                         </div>
                     </div>
@@ -306,13 +333,13 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                         </label>
 
                         <div className="action-row admin-room-manager__bulk-buttons">
-                            <button className="button button--secondary" type="button" onClick={() => void handleApplyExpiration(false)} disabled={selectedCount === 0 || isApplyingExpiration || isDeleting}>
+                            <button className="button button--secondary" type="button" onClick={() => void handleApplyExpiration(false)} disabled={selectedLiveCount === 0 || isApplyingExpiration || isDeleting}>
                                 {isApplyingExpiration ? "Applying..." : "Apply to selected"}
                             </button>
-                            <button className="button button--secondary" type="button" onClick={() => void handleApplyExpiration(true)} disabled={selectedCount === 0 || isApplyingExpiration || isDeleting}>
+                            <button className="button button--secondary" type="button" onClick={() => void handleApplyExpiration(true)} disabled={selectedLiveCount === 0 || isApplyingExpiration || isDeleting}>
                                 Clear expiration
                             </button>
-                            <button className="button button--primary admin-room-manager__delete-button" type="button" onClick={() => void handleDeleteSelectedRooms()} disabled={selectedCount === 0 || isDeleting || isApplyingExpiration}>
+                            <button className="button button--primary admin-room-manager__delete-button" type="button" onClick={() => void handleDeleteSelectedLiveRooms()} disabled={selectedLiveCount === 0 || isDeleting || isApplyingExpiration}>
                                 {isDeleting ? "Deleting..." : "Delete selected"}
                             </button>
                         </div>
@@ -335,7 +362,7 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                                 <thead>
                                     <tr>
                                         <th scope="col" className="admin-room-table__checkbox-cell">
-                                            <input type="checkbox" checked={allSelected} onChange={handleToggleAllRooms} aria-label="Select all rooms" />
+                                            <input type="checkbox" checked={allLiveSelected} onChange={handleToggleAllLiveRooms} aria-label="Select all live rooms" />
                                         </th>
                                         <th scope="col">Room</th>
                                         <th scope="col">Seats</th>
@@ -346,7 +373,7 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                                 </thead>
                                 <tbody>
                                     {liveRooms.map((room) => {
-                                        const selected = selectedRoomIds.includes(room.roomId);
+                                        const selected = selectedLiveRoomIds.includes(room.roomId);
 
                                         return (
                                             <tr key={room.roomId} className={selected ? "admin-room-table__row admin-room-table__row--selected" : "admin-room-table__row"}>
@@ -354,7 +381,7 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                                                     <input
                                                         type="checkbox"
                                                         checked={selected}
-                                                        onChange={() => toggleRoom(room.roomId)}
+                                                        onChange={() => toggleLiveRoom(room.roomId)}
                                                         aria-label={`Select ${room.name}`}
                                                     />
                                                 </td>
@@ -366,6 +393,7 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                                                         <div className="admin-room-table__room-meta">
                                                             <span>{capitalizeLabel(room.status)}</span>
                                                             <span>{room.visibility === "club" ? "Club" : "Private"}</span>
+                                                            {room.clubName ? <span>Club: {room.clubName}</span> : null}
                                                             <span>{room.handCount} hand{room.handCount === 1 ? "" : "s"}</span>
                                                             {room.passwordProtected ? <span>Password</span> : null}
                                                             <span>Admin: {room.adminUsername}</span>
@@ -415,6 +443,21 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                 </header>
 
                 <div className="ui-panel__body admin-room-manager__content">
+                    <div className="admin-room-manager__toolbar">
+                        <div className="admin-room-manager__toolbar-copy">
+                            <p>Select archived games to delete preserved sessions in bulk.</p>
+                            <p>{selectedArchivedCount} archived game{selectedArchivedCount === 1 ? "" : "s"} selected.</p>
+                        </div>
+                        <div className="action-row admin-room-manager__toolbar-actions">
+                            <button className="button button--secondary" type="button" onClick={handleToggleAllArchivedRooms} disabled={archivedRooms.length === 0 || isLoading || isDeleting}>
+                                {allArchivedSelected ? "Clear selection" : "Select all"}
+                            </button>
+                            <button className="button button--primary admin-room-manager__delete-button" type="button" onClick={() => void handleDeleteSelectedArchivedRooms()} disabled={selectedArchivedCount === 0 || isDeleting || isApplyingExpiration}>
+                                {isDeleting ? "Deleting..." : "Delete selected"}
+                            </button>
+                        </div>
+                    </div>
+
                     {isLoading ? (
                         <div className="admin-room-manager__empty-state">
                             <p>Loading archived tables...</p>
@@ -428,6 +471,9 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                             <table className="admin-room-table">
                                 <thead>
                                     <tr>
+                                        <th scope="col" className="admin-room-table__checkbox-cell">
+                                            <input type="checkbox" checked={allArchivedSelected} onChange={handleToggleAllArchivedRooms} aria-label="Select all archived games" />
+                                        </th>
                                         <th scope="col">Room</th>
                                         <th scope="col">Seats</th>
                                         <th scope="col">Hands</th>
@@ -438,9 +484,18 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                                 <tbody>
                                     {archivedRooms.map((room) => {
                                         const archivedAt = room.archivedAt ?? room.lastActivityAt;
+                                        const selected = selectedArchivedRoomIds.includes(room.roomId);
 
                                         return (
-                                            <tr key={room.roomId} className="admin-room-table__row">
+                                            <tr key={room.roomId} className={selected ? "admin-room-table__row admin-room-table__row--selected" : "admin-room-table__row"}>
+                                                <td className="admin-room-table__checkbox-cell">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selected}
+                                                        onChange={() => toggleArchivedRoom(room.roomId)}
+                                                        aria-label={`Select archived game ${room.name}`}
+                                                    />
+                                                </td>
                                                 <td>
                                                     <div className="admin-room-table__room-cell">
                                                         <Link className="admin-room-table__room-link" href={`/rooms/${room.slug}`}>
@@ -449,6 +504,7 @@ export function AdminRoomManager({ roomCreationPolicy }: AdminRoomManagerProps) 
                                                         <div className="admin-room-table__room-meta">
                                                             <span>Archived</span>
                                                             <span>{room.visibility === "club" ? "Club" : "Private"}</span>
+                                                            {room.clubName ? <span>Club: {room.clubName}</span> : null}
                                                             {room.passwordProtected ? <span>Password</span> : null}
                                                             <span>Admin: {room.adminUsername}</span>
                                                         </div>

@@ -627,6 +627,105 @@ describe("table start", () => {
     ]);
   });
 
+  it("reveals both showdown hands during a run-it-twice runout even when one caller still has chips behind", () => {
+    const now = new Date("2026-04-12T00:07:00.000Z");
+    let table = createTable({
+      slug: "run-it-twice-covered-call",
+      name: "Run It Twice Covered Call",
+      adminAccountId: "admin-1",
+      visibility: "private",
+      maxPlayers: 2,
+      startingStack: 5_000,
+      blindSchedule,
+      autoStartNextHand: true,
+      autoStartDelaySeconds: 0,
+      runItTwiceEnabled: true,
+      passwordProtected: false,
+    }, now);
+
+    table = seatPlayer(table, { accountId: "a", displayName: "A", seatIndex: 0, stack: 3_000 }, now);
+    table = seatPlayer(table, { accountId: "b", displayName: "B", seatIndex: 1, stack: 5_000 }, now);
+    table = setPlayerReady(table, "a", true, now);
+    table = setPlayerReady(table, "b", true, now);
+    table = startHand(table, {
+      now,
+      deck: [
+        { rank: "A", suit: "spades" },
+        { rank: "K", suit: "diamonds" },
+        { rank: "A", suit: "hearts" },
+        { rank: "Q", suit: "diamonds" },
+        { rank: "5", suit: "clubs" },
+        { rank: "2", suit: "clubs" },
+        { rank: "7", suit: "hearts" },
+        { rank: "8", suit: "clubs" },
+        { rank: "6", suit: "spades" },
+        { rank: "3", suit: "spades" },
+        { rank: "J", suit: "hearts" },
+        { rank: "9", suit: "clubs" },
+        { rank: "4", suit: "hearts" },
+        { rank: "2", suit: "diamonds" },
+        { rank: "7", suit: "diamonds" },
+        { rank: "8", suit: "spades" },
+        { rank: "6", suit: "clubs" },
+        { rank: "3", suit: "diamonds" },
+        { rank: "J", suit: "spades" },
+        { rank: "9", suit: "diamonds" },
+      ],
+    });
+
+    table = applyPlayerAction(table, { accountId: "a", type: "all_in" }, now);
+    table = applyPlayerAction(table, { accountId: "b", type: "call" }, now);
+
+    expect(table.currentHand?.runItTwicePrompt).toEqual({
+      eligibleAccountIds: ["a", "b"],
+      responsesByAccountId: {},
+      createdAt: now.toISOString(),
+    });
+
+    table = applyRunItTwiceDecision(table, { accountId: "a", willing: true }, now);
+    table = applyRunItTwiceDecision(table, { accountId: "b", willing: true }, now);
+    table = resolvePendingRunItTwiceDecision(table, now);
+
+    expect(table.currentHand).toBeNull();
+    expect(table.lastCompletedHand?.allInRunout).toEqual({
+      startBoardCount: 0,
+      revealIntervalMs: 2_000,
+      revealedAccountIds: ["a", "b"],
+      runouts: [
+        {
+          board: [
+            { rank: "2", suit: "clubs" },
+            { rank: "7", suit: "hearts" },
+            { rank: "8", suit: "clubs" },
+            { rank: "3", suit: "spades" },
+            { rank: "9", suit: "clubs" },
+          ],
+          winners: [{ accountId: "a", seatIndex: 0, amountWon: 3_000, handLabel: "Pair" }],
+        },
+        {
+          board: [
+            { rank: "2", suit: "diamonds" },
+            { rank: "7", suit: "diamonds" },
+            { rank: "8", suit: "spades" },
+            { rank: "3", suit: "diamonds" },
+            { rank: "9", suit: "diamonds" },
+          ],
+          winners: [{ accountId: "b", seatIndex: 1, amountWon: 3_000, handLabel: "Flush" }],
+        },
+      ],
+    });
+    expect(table.lastCompletedHand?.revealedHoleCards).toEqual({
+      a: [
+        { rank: "A", suit: "spades" },
+        { rank: "A", suit: "hearts" },
+      ],
+      b: [
+        { rank: "K", suit: "diamonds" },
+        { rank: "Q", suit: "diamonds" },
+      ],
+    });
+  });
+
   it("defaults unanswered run-it-twice votes to no when the prompt expires", () => {
     const now = new Date("2026-04-12T00:10:00.000Z");
     let table = createTable({

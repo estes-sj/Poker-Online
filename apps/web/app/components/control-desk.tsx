@@ -179,6 +179,7 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                     name: formData.get("roomName"),
                     adminAccountId: session.account.id,
                     clubId: formData.get("clubId") || undefined,
+                    isPubliclyListed: formData.get("isPubliclyListed") === "on",
                     password: formData.get("roomPassword") || undefined,
                     maxPlayers: Number(formData.get("maxPlayers") ?? 10),
                     startingStack: Number(formData.get("startingStack") ?? 1000),
@@ -437,6 +438,16 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                                 <label className="control-checkbox" htmlFor="run-it-twice-enabled">
                                     <input id="run-it-twice-enabled" type="checkbox" name="runItTwiceEnabled" defaultChecked />
                                     <span>Offer run it twice on all-in showdowns</span>
+                                </label>
+                            </div>
+                            <div className="control-field">
+                                <div className="control-field__label-row">
+                                    <label className="control-field__label" htmlFor="public-room-listing">Public room listing</label>
+                                    <FieldTooltip label="Explain public room listing" text="If enabled, the room appears on the public rooms page. If disabled, it stays accessible only through its direct link." />
+                                </div>
+                                <label className="control-checkbox" htmlFor="public-room-listing">
+                                    <input id="public-room-listing" type="checkbox" name="isPubliclyListed" defaultChecked />
+                                    <span>Show this room on the public rooms page</span>
                                 </label>
                             </div>
                         </div>

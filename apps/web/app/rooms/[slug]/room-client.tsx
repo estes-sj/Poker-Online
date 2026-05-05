@@ -5,9 +5,9 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
-import { readStoredBrowserSession, SESSION_STORAGE_EVENT } from "../../lib/browser-session";
+import { readStoredBrowserSession, SESSION_STORAGE_EVENT, writeStoredBrowserSession } from "../../lib/browser-session";
 import { HOUSE_RULES_CONFIG } from "../../lib/house-rules-config";
-import { buildBrowserHttpUrl, buildBrowserWsUrl, getBrowserGameHttpBaseUrl, getBrowserGameWsBaseUrl } from "../../lib/public-service-urls";
+import { buildBrowserHttpUrl, buildBrowserWsUrl, getBrowserApiBaseUrl, getBrowserGameHttpBaseUrl, getBrowserGameWsBaseUrl } from "../../lib/public-service-urls";
 import { compareEvaluatedHands, evaluateHoldemHand, getCurrentHeroHandLabel } from "./hand-evaluator";
 import type { MediaParticipantState } from "./media-types";
 import { useTableSoundEffects } from "./table-sound-effects";
@@ -408,6 +408,16 @@ interface SeatRequestPromptState {
     requestedStack: string;
 }
 
+type PendingAuthAction =
+    | {
+        kind: "join-room";
+        password: string;
+    }
+    | {
+        kind: "take-seat";
+        seatIndex: number;
+    };
+
 interface RequestNoticeModalState {
     title: string;
     message: string;
@@ -429,6 +439,10 @@ interface AdminOptionsDraft {
     decisionTimeSeconds: string;
     timeBankSeconds: string;
     timeBankRefillHands: string;
+    isPubliclyListed: boolean;
+    minBuyInAmount: string;
+    maxBuyInRuleKind: "fixed_amount" | "chip_lead_percentage";
+    maxBuyInRuleValue: string;
     revealAllShowdownHands: boolean;
     runItTwiceEnabled: boolean;
 }
@@ -489,6 +503,12 @@ export function RoomClient({
     const [preselectedHeroAction, setPreselectedHeroAction] = useState<null | "check_or_fold">(null);
     const [seatRequestPrompt, setSeatRequestPrompt] = useState<SeatRequestPromptState | null>(null);
     const [requestNoticeModal, setRequestNoticeModal] = useState<RequestNoticeModalState | null>(null);
+    const [pendingAuthAction, setPendingAuthAction] = useState<PendingAuthAction | null>(null);
+    const [authRegisterError, setAuthRegisterError] = useState<string | null>(null);
+    const [authLoginError, setAuthLoginError] = useState<string | null>(null);
+    const [isRegisteringInRoom, setIsRegisteringInRoom] = useState(false);
+    const [isLoggingInRoom, setIsLoggingInRoom] = useState(false);
+    const [isCompletingAuthAction, setIsCompletingAuthAction] = useState(false);
     const [archivePreview, setArchivePreview] = useState<RoomArchivePreview | null>(null);
     const [archiveMatchDrafts, setArchiveMatchDrafts] = useState<Record<string, string>>({});
     const [seatApprovalDrafts, setSeatApprovalDrafts] = useState<Record<string, string>>({});
@@ -876,7 +896,7 @@ export function RoomClient({
         }
 
         if (!seatRequestStack) {
-            setSeatRequestStack(String(snapshot.startingStack));
+            setSeatRequestStack(String(defaultBuyInAmount(snapshot)));
         }
     }, [rebuyAmount, seatRequestStack, snapshot]);
 
@@ -959,7 +979,7 @@ export function RoomClient({
     );
     const viewerHasRoomAccess = Boolean(snapshot && (!snapshot.passwordProtected || snapshot.viewerHasRoomAccess));
     const isProtectedRoomLocked = Boolean(!demoMode && snapshot?.passwordProtected && !viewerHasRoomAccess);
-    const canJoinProtectedRoom = Boolean(snapshot && snapshot.passwordProtected && accountId && !viewerHasRoomAccess);
+    const canJoinProtectedRoom = Boolean(snapshot && snapshot.passwordProtected && !viewerHasRoomAccess);
     const canChat = Boolean(snapshot && accountId && session && viewerHasRoomAccess && !demoMode && !isArchivedRoom);
     const canConnectMedia = Boolean(session && snapshot && viewerHasRoomAccess && !demoMode && !isArchivedRoom);
     const media = useTableMedia({
@@ -1505,21 +1525,169 @@ export function RoomClient({
         });
     }
 
-    async function handleJoinRoom() {
-        if (!accountId) {
-            setActionError("Sign in on the home page before joining a room.");
+    function openAuthDialog(nextAction: PendingAuthAction) {
+        setPendingAuthAction(nextAction);
+        setAuthRegisterError(null);
+        setAuthLoginError(null);
+        setActionError(null);
+    }
+
+    function closeAuthDialog() {
+        if (isRegisteringInRoom || isLoggingInRoom || isCompletingAuthAction) {
             return;
         }
 
-        await submitRoomMutation(`/v1/rooms/${slug}/join`, {
-            accountId,
-            password: roomPassword || undefined,
+        setPendingAuthAction(null);
+        setAuthRegisterError(null);
+        setAuthLoginError(null);
+    }
+
+    function persistSession(nextSession: SessionState) {
+        setSession(nextSession);
+        setAccountId(nextSession.account.id);
+        setDisplayName((current) => current || nextSession.account.username);
+        writeStoredBrowserSession(nextSession);
+    }
+
+    function openSeatRequestDialog(seatIndex: number) {
+        if (!snapshot) {
+            return;
+        }
+
+        setActionError(null);
+        setDisplayName((current) => current || session?.account.username || "");
+        setSeatRequestPrompt({
+            seatIndex,
+            requestedStack: heroPendingSeatRequest
+                ? String(heroPendingSeatRequest.requestedStack)
+                : seatRequestStack || String(defaultBuyInAmount(snapshot)),
         });
+    }
+
+    async function continuePendingAuthAction(nextSession: SessionState, nextAction: PendingAuthAction | null) {
+        if (!nextAction) {
+            return;
+        }
+
+        setIsCompletingAuthAction(true);
+
+        try {
+            if (nextAction.kind === "join-room") {
+                await submitRoomMutation(`/v1/rooms/${slug}/join`, {
+                    accountId: nextSession.account.id,
+                    password: nextAction.password || undefined,
+                });
+            }
+
+            if (nextAction.kind === "take-seat") {
+                openSeatRequestDialog(nextAction.seatIndex);
+            }
+
+            setPendingAuthAction(null);
+        } finally {
+            setIsCompletingAuthAction(false);
+        }
+    }
+
+    async function handleRegisterInRoom(formData: FormData) {
+        setIsRegisteringInRoom(true);
+        setAuthRegisterError(null);
+
+        try {
+            const apiBaseUrl = getBrowserApiBaseUrl();
+            const response = await fetch(buildBrowserHttpUrl(apiBaseUrl, "/v1/auth/register"), {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    email: formData.get("email"),
+                    username: formData.get("username"),
+                    password: formData.get("password"),
+                }),
+            });
+
+            const payload = (await response.json()) as Partial<SessionState> & { error?: string };
+
+            if (!response.ok || !payload.account || !payload.token) {
+                throw new Error(payload.error ?? "Unable to register account.");
+            }
+
+            const nextSession = {
+                account: payload.account,
+                token: payload.token,
+            } satisfies SessionState;
+
+            persistSession(nextSession);
+            await continuePendingAuthAction(nextSession, pendingAuthAction);
+        } catch (error) {
+            setAuthRegisterError(error instanceof Error ? error.message : "Unable to register account.");
+        } finally {
+            setIsRegisteringInRoom(false);
+        }
+    }
+
+    async function handleLoginInRoom(formData: FormData) {
+        setIsLoggingInRoom(true);
+        setAuthLoginError(null);
+
+        try {
+            const apiBaseUrl = getBrowserApiBaseUrl();
+            const response = await fetch(buildBrowserHttpUrl(apiBaseUrl, "/v1/auth/login"), {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    identifier: formData.get("identifier"),
+                    password: formData.get("password"),
+                }),
+            });
+
+            const payload = (await response.json()) as Partial<SessionState> & { error?: string };
+
+            if (!response.ok || !payload.account || !payload.token) {
+                throw new Error(payload.error ?? "Unable to sign in.");
+            }
+
+            const nextSession = {
+                account: payload.account,
+                token: payload.token,
+            } satisfies SessionState;
+
+            persistSession(nextSession);
+            await continuePendingAuthAction(nextSession, pendingAuthAction);
+        } catch (error) {
+            setAuthLoginError(error instanceof Error ? error.message : "Unable to sign in.");
+        } finally {
+            setIsLoggingInRoom(false);
+        }
+    }
+
+    async function handleJoinRoom() {
+        try {
+            await submitRoomMutation(`/v1/rooms/${slug}/join`, {
+                accountId,
+                password: roomPassword || undefined,
+            });
+
+            if (!accountId) {
+                openAuthDialog({
+                    kind: "join-room",
+                    password: roomPassword,
+                });
+            }
+        } catch {
+            return;
+        }
     }
 
     function handleSeatClick(seatIndex: number) {
         if (!accountId) {
-            setActionError("Sign in on the home page before taking a seat.");
+            openAuthDialog({
+                kind: "take-seat",
+                seatIndex,
+            });
             return;
         }
 
@@ -1532,23 +1700,16 @@ export function RoomClient({
             return;
         }
 
-        if (!isAdmin) {
-            setActionError(null);
-            setSeatRequestPrompt({
-                seatIndex,
-                requestedStack: heroPendingSeatRequest
-                    ? String(heroPendingSeatRequest.requestedStack)
-                    : seatRequestStack || String(snapshot.startingStack),
-            });
-            return;
-        }
-
-        void handleSeat(seatIndex, seatRequestStack || String(snapshot.startingStack));
+        openSeatRequestDialog(seatIndex);
     }
 
     async function handleSeat(seatIndex: number, requestedStackInput = seatRequestStack, showConfirmation = false) {
         if (!accountId) {
-            setActionError("Sign in on the home page before taking a seat.");
+            setSeatRequestPrompt(null);
+            openAuthDialog({
+                kind: "take-seat",
+                seatIndex,
+            });
             return;
         }
 
@@ -1592,7 +1753,7 @@ export function RoomClient({
             return;
         }
 
-        await handleSeat(seatRequestPrompt.seatIndex, seatRequestPrompt.requestedStack, true);
+        await handleSeat(seatRequestPrompt.seatIndex, seatRequestPrompt.requestedStack, !isAdmin);
     }
 
     async function handleSeatBot(seatIndex: number) {
@@ -1871,6 +2032,15 @@ export function RoomClient({
                 turnSeconds: parseOptionalWholeNumber(adminOptionsDraft.decisionTimeSeconds, "Decision time limit"),
                 timeBankSeconds: parseOptionalWholeNumber(adminOptionsDraft.timeBankSeconds, "Time bank length"),
                 timeBankRefillHands: parseOptionalWholeNumber(adminOptionsDraft.timeBankRefillHands, "Time bank refill hands"),
+                isPubliclyListed: adminOptionsDraft.isPubliclyListed,
+                minBuyInAmount: parseRequiredWholeNumber(adminOptionsDraft.minBuyInAmount, "Minimum buy-in"),
+                maxBuyInRule: {
+                    kind: adminOptionsDraft.maxBuyInRuleKind,
+                    value: parseRequiredWholeNumber(
+                        adminOptionsDraft.maxBuyInRuleValue,
+                        adminOptionsDraft.maxBuyInRuleKind === "fixed_amount" ? "Maximum buy-in" : "Chip leader percentage",
+                    ),
+                },
                 revealAllShowdownHands: adminOptionsDraft.revealAllShowdownHands,
                 runItTwiceEnabled: adminOptionsDraft.runItTwiceEnabled,
             });
@@ -2183,7 +2353,7 @@ export function RoomClient({
                         <div className="table-dialog__content">
                             {session
                                 ? <p className="muted-copy">Signed in as {session.account.username}</p>
-                                : <p className="muted-copy">Sign in on the home page before entering this room.</p>}
+                                : <p className="muted-copy"></p>}
 
                             <input
                                 className="control-input"
@@ -2207,12 +2377,63 @@ export function RoomClient({
                             <Link className="button button--secondary" href="/">
                                 Return home
                             </Link>
-                            <button className="button button--primary" type="button" onClick={() => void handleJoinRoom()} disabled={isMutating || !accountId}>
+                            <button className="button button--primary" type="button" onClick={() => void handleJoinRoom()} disabled={isMutating}>
                                 Unlock room
                             </button>
                         </div>
                     </section>
                 </div>
+
+                {pendingAuthAction ? (
+                    <div className="table-dialog" role="dialog" aria-modal="true" aria-label="Sign in or register to continue">
+                        <button className="table-dialog__backdrop" type="button" aria-label="Close sign-in dialog" onClick={closeAuthDialog} />
+                        <section className="table-dialog__panel table-dialog__panel--wide table-dialog__panel--scrollable">
+                            <header className="table-dialog__header">
+                                <div>
+                                    <span className="table-menu-drawer__eyebrow">Account required</span>
+                                    <h2>{pendingAuthAction.kind === "join-room" ? "Sign in to join this room" : "Sign in to take a seat"}</h2>
+                                    <p>{pendingAuthAction.kind === "join-room" ? "The room password looks good. Sign in or create an account and the room will unlock automatically." : "Sign in or create an account and your seat setup will continue automatically."}</p>
+                                </div>
+                                <button className="table-dialog__close" type="button" onClick={closeAuthDialog} aria-label="Close sign-in dialog">
+                                    ×
+                                </button>
+                            </header>
+
+                            <div className="control-desk__auth-stack">
+                                <section className="control-desk__form-block">
+                                    <div className="control-desk__form-copy">
+                                        <strong>New account</strong>
+                                        <p>Create an account to save your stats and jump into this table.</p>
+                                    </div>
+                                    <form className="control-form" action={handleRegisterInRoom}>
+                                        <input className="control-input" type="email" name="email" placeholder="email" required />
+                                        <input className="control-input" type="text" name="username" placeholder="username" required />
+                                        <input className="control-input" type="password" name="password" placeholder="password" required minLength={8} />
+                                        <button className="button button--primary" type="submit" disabled={isRegisteringInRoom || isCompletingAuthAction}>
+                                            {isRegisteringInRoom ? "Creating account..." : isCompletingAuthAction ? "Finishing..." : "Create account"}
+                                        </button>
+                                        {authRegisterError ? <p className="form-error">{authRegisterError}</p> : null}
+                                    </form>
+                                </section>
+
+                                <section className="control-desk__form-block">
+                                    <div className="control-desk__form-copy">
+                                        <strong>Sign in</strong>
+                                        <p>Use your existing account and the room will keep going from there.</p>
+                                    </div>
+                                    <form className="control-form" action={handleLoginInRoom}>
+                                        <input className="control-input" type="text" name="identifier" placeholder="email or username" required />
+                                        <input className="control-input" type="password" name="password" placeholder="password" required />
+                                        <button className="button button--secondary" type="submit" disabled={isLoggingInRoom || isCompletingAuthAction}>
+                                            {isLoggingInRoom ? "Signing in..." : isCompletingAuthAction ? "Finishing..." : "Sign in"}
+                                        </button>
+                                        {authLoginError ? <p className="form-error">{authLoginError}</p> : null}
+                                    </form>
+                                </section>
+                            </div>
+                        </section>
+                    </div>
+                ) : null}
             </main>
         );
     }
@@ -2304,7 +2525,7 @@ export function RoomClient({
                                     {openMenuPanel === "seat" ? (
                                         <div className="table-menu-drawer__section">
                                             <span className="table-menu-drawer__eyebrow">Seat</span>
-                                            {session ? <p className="muted-copy">Signed in as {session.account.username}</p> : <p className="muted-copy">Sign in on the home page to take a seat from this browser.</p>}
+                                            {session ? <p className="muted-copy">Signed in as {session.account.username}</p> : <p className="muted-copy">Pick a seat and you will be asked to sign in or create an account from this page.</p>}
 
                                             {heroPlayer ? (
                                                 <div className="table-stat-list">
@@ -2314,25 +2535,13 @@ export function RoomClient({
                                                 </div>
                                             ) : (
                                                 <>
-                                                    <input
-                                                        className="control-input"
-                                                        type="text"
-                                                        value={displayName}
-                                                        onChange={(event) => setDisplayName(event.target.value)}
-                                                        placeholder="display name"
-                                                    />
-
-                                                    {isAdmin ? (
-                                                        <input
-                                                            className="control-input"
-                                                            type="number"
-                                                            min={100}
-                                                            step={100}
-                                                            value={seatRequestStack}
-                                                            onChange={(event) => setSeatRequestStack(event.target.value)}
-                                                            placeholder="requested stack"
-                                                        />
-                                                    ) : <p className="muted-copy">Pick an open seat and you will be prompted for your intended stack.</p>}
+                                                    {snapshot ? (
+                                                        <div className="table-stat-list">
+                                                            <span className="chip-pill">Min {formatNumber(snapshot.buyInState.minRebuyAmount)}</span>
+                                                            <span className="chip-pill">Max {formatNumber(snapshot.buyInState.maxRebuyAmount)}</span>
+                                                        </div>
+                                                    ) : null}
+                                                    <p className="muted-copy">Pick an open seat to set an optional display name and choose your buy-in.</p>
                                                 </>
                                             )}
 
@@ -2568,6 +2777,25 @@ export function RoomClient({
                                                             <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.timeBankRefillHands} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, timeBankRefillHands: event.target.value }))} placeholder="blank = disabled" />
                                                         </label>
                                                         <label className="table-admin-field table-admin-field--toggle">
+                                                            <input type="checkbox" checked={adminOptionsDraft.isPubliclyListed} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, isPubliclyListed: event.target.checked }))} />
+                                                            <span>Show this room on the public rooms page</span>
+                                                        </label>
+                                                        <label className="table-admin-field">
+                                                            <span>Minimum buy-in</span>
+                                                            <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.minBuyInAmount} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, minBuyInAmount: event.target.value }))} />
+                                                        </label>
+                                                        <label className="table-admin-field">
+                                                            <span>Maximum buy-in rule</span>
+                                                            <select className="control-input" value={adminOptionsDraft.maxBuyInRuleKind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, maxBuyInRuleKind: event.target.value as AdminOptionsDraft["maxBuyInRuleKind"] }))}>
+                                                                <option value="chip_lead_percentage">Percent of chip leader</option>
+                                                                <option value="fixed_amount">Fixed amount</option>
+                                                            </select>
+                                                        </label>
+                                                        <label className="table-admin-field">
+                                                            <span>{adminOptionsDraft.maxBuyInRuleKind === "fixed_amount" ? "Maximum buy-in" : "Chip leader percentage"}</span>
+                                                            <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.maxBuyInRuleValue} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, maxBuyInRuleValue: event.target.value }))} />
+                                                        </label>
+                                                        <label className="table-admin-field table-admin-field--toggle">
                                                             <input type="checkbox" checked={adminOptionsDraft.useBlindSchedule} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, useBlindSchedule: event.target.checked }))} />
                                                             <span>Use blind schedule</span>
                                                         </label>
@@ -2580,6 +2808,8 @@ export function RoomClient({
                                                             <span>Run it twice on all-in showdowns before the river</span>
                                                         </label>
                                                     </div>
+
+                                                    <p className="muted-copy">Current buy-in window: {formatNumber(snapshot.buyInState.minRebuyAmount)} to {formatNumber(snapshot.buyInState.maxRebuyAmount)}.</p>
 
                                                     {adminOptionsDraft.useBlindSchedule ? (
                                                         <div className="table-admin-field table-admin-field--full table-admin-schedule">
@@ -2942,7 +3172,7 @@ export function RoomClient({
                                                     className="button button--secondary table-seat__button"
                                                     type="button"
                                                     onClick={() => handleSeatClick(seat.seatIndex)}
-                                                    disabled={isMutating || !accountId || Boolean(seat.pendingRequest)}
+                                                    disabled={isMutating || Boolean(seat.pendingRequest)}
                                                 >
                                                     {seat.pendingRequest ? "Pending" : heroPendingSeatRequest ? "Move request" : "Take seat"}
                                                 </button>
@@ -3373,8 +3603,8 @@ export function RoomClient({
                         <header className="table-dialog__header">
                             <div>
                                 <span className="table-menu-drawer__eyebrow">Seat request</span>
-                                <h2>Request Seat {seatRequestPrompt.seatIndex + 1}</h2>
-                                <p>Choose the stack you want the game owner to approve.</p>
+                                <h2>{isAdmin ? `Sit in Seat ${seatRequestPrompt.seatIndex + 1}` : `Request Seat ${seatRequestPrompt.seatIndex + 1}`}</h2>
+                                <p>{isAdmin ? "Set an optional display name and your buy-in before sitting down." : "Set an optional display name and the buy-in you want the game owner to approve."}</p>
                             </div>
                             <button className="table-dialog__close" type="button" onClick={() => setSeatRequestPrompt(null)} aria-label="Close seat request">
                                 ×
@@ -3382,11 +3612,30 @@ export function RoomClient({
                         </header>
 
                         <label className="table-admin-field">
+                            <span>Display name</span>
+                            <input
+                                className="control-input"
+                                type="text"
+                                value={displayName}
+                                onChange={(event) => setDisplayName(event.target.value)}
+                                placeholder={session?.account.username ?? "optional display name"}
+                            />
+                        </label>
+
+                        {snapshot ? (
+                            <div className="table-stat-list">
+                                <span className="chip-pill">Min buy-in {formatNumber(snapshot.buyInState.minRebuyAmount)}</span>
+                                <span className="chip-pill">Max buy-in {formatNumber(snapshot.buyInState.maxRebuyAmount)}</span>
+                            </div>
+                        ) : null}
+
+                        <label className="table-admin-field">
                             <span>Intended stack</span>
                             <input
                                 className="control-input"
                                 type="number"
-                                min={1}
+                                min={snapshot?.buyInState.minRebuyAmount ?? 1}
+                                max={snapshot?.buyInState.maxRebuyAmount}
                                 step={1}
                                 value={seatRequestPrompt.requestedStack}
                                 onChange={(event) => setSeatRequestPrompt((current) => current ? { ...current, requestedStack: event.target.value } : current)}
@@ -3400,8 +3649,59 @@ export function RoomClient({
                                 Cancel
                             </button>
                             <button className="button button--primary" type="button" onClick={() => void handleConfirmSeatRequest()} disabled={isMutating}>
-                                Send request
+                                {isAdmin ? "Sit down" : "Send request"}
                             </button>
+                        </div>
+                    </section>
+                </div>
+            ) : null}
+
+            {pendingAuthAction ? (
+                <div className="table-dialog" role="dialog" aria-modal="true" aria-label="Sign in or register to continue">
+                    <button className="table-dialog__backdrop" type="button" aria-label="Close sign-in dialog" onClick={closeAuthDialog} />
+                    <section className="table-dialog__panel table-dialog__panel--wide table-dialog__panel--scrollable">
+                        <header className="table-dialog__header">
+                            <div>
+                                <span className="table-menu-drawer__eyebrow">Account required</span>
+                                <h2>{pendingAuthAction.kind === "join-room" ? "Sign in to join this room" : "Sign in to take a seat"}</h2>
+                                <p>{pendingAuthAction.kind === "join-room" ? "The room password looks good. Sign in or create an account and the room will unlock automatically." : "Sign in or create an account and your seat setup will continue automatically."}</p>
+                            </div>
+                            <button className="table-dialog__close" type="button" onClick={closeAuthDialog} aria-label="Close sign-in dialog">
+                                ×
+                            </button>
+                        </header>
+
+                        <div className="control-desk__auth-stack">
+                            <section className="control-desk__form-block">
+                                <div className="control-desk__form-copy">
+                                    <strong>New account</strong>
+                                    <p>Create an account to save your stats and jump into this table.</p>
+                                </div>
+                                <form className="control-form" action={handleRegisterInRoom}>
+                                    <input className="control-input" type="email" name="email" placeholder="email" required />
+                                    <input className="control-input" type="text" name="username" placeholder="username" required />
+                                    <input className="control-input" type="password" name="password" placeholder="password" required minLength={8} />
+                                    <button className="button button--primary" type="submit" disabled={isRegisteringInRoom || isCompletingAuthAction}>
+                                        {isRegisteringInRoom ? "Creating account..." : isCompletingAuthAction ? "Finishing..." : "Create account"}
+                                    </button>
+                                    {authRegisterError ? <p className="form-error">{authRegisterError}</p> : null}
+                                </form>
+                            </section>
+
+                            <section className="control-desk__form-block">
+                                <div className="control-desk__form-copy">
+                                    <strong>Sign in</strong>
+                                    <p>Use your existing account and the room will keep going from there.</p>
+                                </div>
+                                <form className="control-form" action={handleLoginInRoom}>
+                                    <input className="control-input" type="text" name="identifier" placeholder="email or username" required />
+                                    <input className="control-input" type="password" name="password" placeholder="password" required />
+                                    <button className="button button--secondary" type="submit" disabled={isLoggingInRoom || isCompletingAuthAction}>
+                                        {isLoggingInRoom ? "Signing in..." : isCompletingAuthAction ? "Finishing..." : "Sign in"}
+                                    </button>
+                                    {authLoginError ? <p className="form-error">{authLoginError}</p> : null}
+                                </form>
+                            </section>
                         </div>
                     </section>
                 </div>
@@ -3451,7 +3751,8 @@ export function RoomClient({
                             <input
                                 className="control-input"
                                 type="number"
-                                min={1}
+                                min={snapshot?.buyInState.minRebuyAmount ?? 1}
+                                max={snapshot?.buyInState.maxRebuyAmount}
                                 step={1}
                                 value={seatApprovalDrafts[activeAdminSeatRequest.id] ?? String(activeAdminSeatRequest.requestedStack)}
                                 onChange={(event) => setSeatApprovalDrafts((current) => ({ ...current, [activeAdminSeatRequest.id]: event.target.value }))}
@@ -4892,6 +5193,10 @@ function createEmptyAdminOptionsDraft(): AdminOptionsDraft {
         decisionTimeSeconds: "",
         timeBankSeconds: "",
         timeBankRefillHands: "",
+        isPubliclyListed: true,
+        minBuyInAmount: "1000",
+        maxBuyInRuleKind: "chip_lead_percentage",
+        maxBuyInRuleValue: "50",
         revealAllShowdownHands: false,
         runItTwiceEnabled: false,
     };
@@ -4914,6 +5219,10 @@ function buildAdminOptionsDraft(snapshot: RoomSnapshot): AdminOptionsDraft {
         decisionTimeSeconds: snapshot.adminOptions.decisionTimeSeconds === null ? "" : String(snapshot.adminOptions.decisionTimeSeconds),
         timeBankSeconds: snapshot.adminOptions.timeBankSeconds === null ? "" : String(snapshot.adminOptions.timeBankSeconds),
         timeBankRefillHands: snapshot.adminOptions.timeBankRefillHands === null ? "" : String(snapshot.adminOptions.timeBankRefillHands),
+        isPubliclyListed: snapshot.adminOptions.isPubliclyListed,
+        minBuyInAmount: String(snapshot.adminOptions.minBuyInAmount),
+        maxBuyInRuleKind: snapshot.adminOptions.maxBuyInRule.kind,
+        maxBuyInRuleValue: String(snapshot.adminOptions.maxBuyInRule.value),
         revealAllShowdownHands: snapshot.adminOptions.revealAllShowdownHands,
         runItTwiceEnabled: snapshot.adminOptions.runItTwiceEnabled,
     };
@@ -5242,9 +5551,13 @@ function getNativeEmoji(selection: EmojiPickerSelection | null | undefined): str
     return typeof fallbackNative === "string" && fallbackNative.trim() ? fallbackNative.trim() : null;
 }
 
-function defaultRebuyAmount(snapshot: RoomSnapshot): number {
+function defaultBuyInAmount(snapshot: RoomSnapshot): number {
     const { minRebuyAmount, maxRebuyAmount } = snapshot.buyInState;
     return Math.max(minRebuyAmount, Math.min(maxRebuyAmount, snapshot.startingStack));
+}
+
+function defaultRebuyAmount(snapshot: RoomSnapshot): number {
+    return defaultBuyInAmount(snapshot);
 }
 
 function buildRebuyPresets(snapshot: RoomSnapshot): Array<{ label: string; amount: number }> {

@@ -271,6 +271,12 @@ export function buildDemoRoomPreset(slug: string): DemoRoomPreset | null {
                 decisionTimeSeconds: 25,
                 timeBankSeconds: 90,
                 timeBankRefillHands: 8,
+                isPubliclyListed: true,
+                minBuyInAmount: 1000,
+                maxBuyInRule: {
+                    kind: "chip_lead_percentage",
+                    value: 50,
+                },
                 revealAllShowdownHands: true,
                 runItTwiceEnabled: false,
             },

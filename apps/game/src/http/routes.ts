@@ -28,6 +28,7 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
         sessionToken: getBearerToken(request.headers.authorization),
         clubId: optionalString(body.clubId),
         visibility: optionalVisibility(body.visibility),
+        isPubliclyListed: optionalBoolean(body.isPubliclyListed),
         password: optionalString(body.password),
         maxPlayers: optionalNumber(body.maxPlayers),
         startingStack: optionalNumber(body.startingStack),
@@ -470,6 +471,9 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
         turnSeconds: requireNullableNumber(body.turnSeconds, "turnSeconds"),
         timeBankSeconds: requireNullableNumber(body.timeBankSeconds, "timeBankSeconds"),
         timeBankRefillHands: requireNullableNumber(body.timeBankRefillHands, "timeBankRefillHands"),
+        isPubliclyListed: requireBoolean(body.isPubliclyListed, "isPubliclyListed"),
+        minBuyInAmount: requireNumber(body.minBuyInAmount, "minBuyInAmount"),
+        maxBuyInRule: requireRoomBuyInMaxRule(body.maxBuyInRule),
         revealAllShowdownHands: requireBoolean(body.revealAllShowdownHands, "revealAllShowdownHands"),
         runItTwiceEnabled: requireBoolean(body.runItTwiceEnabled, "runItTwiceEnabled"),
       });
@@ -818,6 +822,24 @@ function requireBlindSchedule(value: unknown) {
   }
 
   return value as never;
+}
+
+function requireRoomBuyInMaxRule(value: unknown): { kind: "fixed_amount" | "chip_lead_percentage"; value: number } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Field 'maxBuyInRule' must be an object.");
+  }
+
+  const parsed = value as Record<string, unknown>;
+  const kind = parsed.kind;
+
+  if (kind !== "fixed_amount" && kind !== "chip_lead_percentage") {
+    throw new Error("Field 'maxBuyInRule.kind' must be 'fixed_amount' or 'chip_lead_percentage'.");
+  }
+
+  return {
+    kind,
+    value: requireNumber(parsed.value, "maxBuyInRule.value"),
+  };
 }
 
 function requireActionType(value: unknown): "fold" | "check" | "call" | "bet" | "raise" | "all_in" {

@@ -6,6 +6,7 @@ interface PublicRoomSummary {
     roomId: string;
     slug: string;
     name: string;
+    clubName: string | null;
     adminUsername: string;
     visibility: "private" | "club";
     status: string;
@@ -95,6 +96,7 @@ export default async function RoomsPage() {
                                         <td>
                                             <div className="rooms-archive-table__room">
                                                 <strong>{room.name}</strong>
+                                                {room.clubName ? <span>Club: {room.clubName}</span> : null}
                                                 <span>{room.slug}</span>
                                             </div>
                                         </td>
@@ -135,6 +137,7 @@ function RoomCard({ room }: { room: PublicRoomSummary }) {
             <div className="room-card__meta">
                 <span>{room.seatedPlayerCount}/{room.maxPlayers} seated</span>
                 <span>{room.passwordProtected ? "Password" : room.visibility === "club" ? "Club" : "Private"}</span>
+                {room.clubName ? <span>Club: {room.clubName}</span> : null}
                 <span>{room.handCount} hands</span>
             </div>
 

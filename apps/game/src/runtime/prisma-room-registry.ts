@@ -58,6 +58,7 @@ import type {
   RevealMode,
   RoomAdminOptionsState,
   RoomBlindState,
+  RoomBuyInMaxRule,
   RoomBuyInState,
   RoomChatMessage,
   RoomChatRequest,
@@ -115,6 +116,7 @@ const BOT_ACCOUNT_ID_PREFIX = "bot_";
 const BOT_EMAIL_DOMAIN = "bots.local";
 const CLUB_IMPORT_EMAIL_DOMAIN = "club-import.local";
 const MAX_CLUB_USER_SEARCH_RESULTS = 12;
+const DEFAULT_MAX_BUY_IN_PERCENTAGE = 50;
 
 type PrismaClientLike = PrismaClient;
 type PrismaTransactionClient = Omit<PrismaClientLike, "$on" | "$connect" | "$disconnect" | "$use" | "$transaction" | "$extends">;
@@ -165,6 +167,9 @@ interface ManagedPersistedRoomRecord extends PersistedRoomRecord {
   admin: {
     username: string;
   };
+  club: {
+    name: string;
+  } | null;
 }
 
 interface PersistedClubRecord {
@@ -323,7 +328,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
       roomId: baseTable.roomId,
     };
 
-    const runtimeState = createRuntimeState(table);
+    const runtimeState = createRuntimeState(table, input.isPubliclyListed ?? true);
 
     await this.database.room.create({
       data: {
@@ -1066,6 +1071,11 @@ export class PrismaRoomRegistry implements RoomRegistry {
             username: true,
           },
         },
+        club: {
+          select: {
+            name: true,
+          },
+        },
       },
     });
 
@@ -1101,10 +1111,21 @@ export class PrismaRoomRegistry implements RoomRegistry {
             username: true,
           },
         },
+        club: {
+          select: {
+            name: true,
+          },
+        },
       },
     });
 
-    return rooms.map((room) => buildPublicRoomSummary(room, this.requireRuntimeState(room)));
+    return rooms.flatMap((room) => {
+      const runtimeState = this.requireRuntimeState(room);
+
+      return isRoomPubliclyListed(runtimeState.adminOptions)
+        ? [buildPublicRoomSummary(room, runtimeState)]
+        : [];
+    });
   }
 
   async listAutoExpiringRooms(): Promise<AutoExpiringRoom[]> {
@@ -1193,6 +1214,11 @@ export class PrismaRoomRegistry implements RoomRegistry {
             username: true,
           },
         },
+        club: {
+          select: {
+            name: true,
+          },
+        },
       },
     });
 
@@ -1249,10 +1275,6 @@ export class PrismaRoomRegistry implements RoomRegistry {
     const room = await this.requireRoom(input.slug);
     const runtimeState = this.requireRuntimeState(room);
 
-    if (room.passwordHash && !input.accountId) {
-      throw new Error("Sign in before joining a password-protected room.");
-    }
-
     if (room.passwordHash && !verifySecret(input.password ?? "", room.passwordHash)) {
       throw new Error("Room password is incorrect.");
     }
@@ -1286,7 +1308,12 @@ export class PrismaRoomRegistry implements RoomRegistry {
     const runtimeState = this.requireRuntimeState(room);
     this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
-    const requestedStack = normalizeRequestedStack(input.requestedStack, runtimeState.table.startingStack);
+    const requestedStack = normalizeRequestedStack(
+      input.requestedStack,
+      runtimeState.table.startingStack,
+      runtimeState.buyInState.minRebuyAmount,
+      runtimeState.buyInState.maxRebuyAmount,
+    );
 
     if (runtimeState.table.adminAccountId !== input.accountId) {
       if (runtimeState.table.players.some((player) => player.accountId === input.accountId)) {
@@ -1375,7 +1402,12 @@ export class PrismaRoomRegistry implements RoomRegistry {
       throw new Error("Only the room admin can seat bots.");
     }
 
-    const requestedStack = normalizeRequestedStack(input.requestedStack, runtimeState.table.startingStack);
+    const requestedStack = normalizeRequestedStack(
+      input.requestedStack,
+      runtimeState.table.startingStack,
+      runtimeState.buyInState.minRebuyAmount,
+      runtimeState.buyInState.maxRebuyAmount,
+    );
     const displayName = normalizeBotDisplayName(input.displayName, runtimeState.table);
     const botAccountId = `${BOT_ACCOUNT_ID_PREFIX}${crypto.randomUUID()}`;
     const botUsername = buildBotUsername(room.slug, botAccountId);
@@ -1688,7 +1720,12 @@ export class PrismaRoomRegistry implements RoomRegistry {
       return this.toSnapshot(nextRuntimeState, input.accountId);
     }
 
-    const requestedStack = normalizeRequestedStack(input.requestedStack, request.requestedStack);
+    const requestedStack = normalizeRequestedStack(
+      input.requestedStack,
+      request.requestedStack,
+      runtimeState.buyInState.minRebuyAmount,
+      runtimeState.buyInState.maxRebuyAmount,
+    );
     const approvedRequest = {
       ...request,
       requestedStack,
@@ -1810,6 +1847,10 @@ export class PrismaRoomRegistry implements RoomRegistry {
     const turnSeconds = normalizeOptionalWholeNumber(input.turnSeconds, "Decision time limit");
     const timeBankSeconds = normalizeOptionalWholeNumber(input.timeBankSeconds, "Time bank length");
     const timeBankRefillHands = normalizeOptionalWholeNumber(input.timeBankRefillHands, "Time bank refill hands");
+    const buyInOptions = normalizeRoomBuyInAdminOptions(runtimeState.table, {
+      minBuyInAmount: input.minBuyInAmount,
+      maxBuyInRule: input.maxBuyInRule,
+    });
 
     if (input.autoStartDelaySeconds < 0) {
       throw new Error("Showdown presentation time cannot be negative.");
@@ -1829,16 +1870,21 @@ export class PrismaRoomRegistry implements RoomRegistry {
           : null,
       updatedAt: now.toISOString(),
     };
+    const nextAdminOptions = {
+      decisionTimeSeconds: turnSeconds,
+      timeBankSeconds,
+      timeBankRefillHands,
+      isPubliclyListed: input.isPubliclyListed,
+      minBuyInAmount: buyInOptions.minBuyInAmount,
+      maxBuyInRule: buyInOptions.maxBuyInRule,
+      revealAllShowdownHands: input.revealAllShowdownHands,
+      runItTwiceEnabled: input.runItTwiceEnabled,
+    } satisfies RoomAdminOptionsState;
     const nextRuntimeState: PersistedRoomRuntimeState = {
       ...runtimeState,
       table,
-      adminOptions: {
-        decisionTimeSeconds: turnSeconds,
-        timeBankSeconds,
-        timeBankRefillHands,
-        revealAllShowdownHands: input.revealAllShowdownHands,
-        runItTwiceEnabled: input.runItTwiceEnabled,
-      },
+      adminOptions: nextAdminOptions,
+      buyInState: buildRuntimeBuyInState(table, nextAdminOptions, runtimeState.buyInState.buyInTotalByAccount),
       turnState: {
         turnSeconds,
         timeBankSeconds,
@@ -3381,18 +3427,16 @@ export class PrismaRoomRegistry implements RoomRegistry {
   }
 }
 
-function createRuntimeState(table: TableState): PersistedRoomRuntimeState {
+function createRuntimeState(table: TableState, isPubliclyListed = true): PersistedRoomRuntimeState {
+  const adminOptions = buildDefaultRoomAdminOptions(table, isPubliclyListed);
+
   return {
     table,
     joinedViewerAccountIds: ensureJoinedViewerAccountIds([], table),
     chatMessages: [],
     seatReactions: [],
     seatGestures: [],
-    buyInState: {
-      minRebuyAmount: Math.max(100, Math.floor(table.startingStack / 20)),
-      maxRebuyAmount: table.startingStack * 5,
-      buyInTotalByAccount: ensureBuyInEntries({}, table.players, table.startingStack),
-    },
+    buyInState: buildRuntimeBuyInState(table, adminOptions, {}),
     ledgerState: ensureLedgerState(undefined, table.players),
     playerStats: {
       handsWonByAccount: ensureCounterEntries({}, table.players),
@@ -3404,13 +3448,7 @@ function createRuntimeState(table: TableState): PersistedRoomRuntimeState {
       currentTurnStartedAt: table.currentHand?.startedAt ?? null,
       timeBankMsByAccount: ensureTimeBankEntries({}, table.players, DEFAULT_TIMEBANK_SECONDS),
     },
-    adminOptions: {
-      decisionTimeSeconds: DEFAULT_TURN_SECONDS,
-      timeBankSeconds: DEFAULT_TIMEBANK_SECONDS,
-      timeBankRefillHands: null,
-      revealAllShowdownHands: table.revealAllShowdownHands,
-      runItTwiceEnabled: table.runItTwiceEnabled,
-    },
+    adminOptions,
     pendingSeatRequests: [],
     pendingRebuyRequests: [],
     pauseState: {
@@ -3433,6 +3471,7 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
   const normalizedHandHistory = normalizeArchivedHandHistory(runtimeState.handHistory);
   const revealAllShowdownHands = runtimeState.adminOptions?.revealAllShowdownHands ?? runtimeState.table.revealAllShowdownHands ?? false;
   const runItTwiceEnabled = runtimeState.adminOptions?.runItTwiceEnabled ?? runtimeState.table.runItTwiceEnabled ?? false;
+  const buyInOptions = normalizeRoomBuyInAdminOptions(runtimeState.table, runtimeState.adminOptions);
 
   return {
     table: {
@@ -3449,11 +3488,7 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
     seatGestures: Array.isArray(runtimeState.seatGestures)
       ? runtimeState.seatGestures.filter((gesture) => gesture && typeof gesture.accountId === "string" && typeof gesture.emoji === "string" && typeof gesture.updatedAt === "string").slice(-MAX_SEAT_GESTURES)
       : [],
-    buyInState: {
-      minRebuyAmount: runtimeState.buyInState?.minRebuyAmount ?? Math.max(100, Math.floor(runtimeState.table.startingStack / 20)),
-      maxRebuyAmount: runtimeState.buyInState?.maxRebuyAmount ?? runtimeState.table.startingStack * 5,
-      buyInTotalByAccount: ensureBuyInEntries(runtimeState.buyInState?.buyInTotalByAccount ?? {}, runtimeState.table.players, runtimeState.table.startingStack),
-    },
+    buyInState: buildRuntimeBuyInState(runtimeState.table, buyInOptions, runtimeState.buyInState?.buyInTotalByAccount ?? {}),
     ledgerState: ensureLedgerState(runtimeState.ledgerState, runtimeState.table.players),
     playerStats: {
       handsWonByAccount: ensureCounterEntries(runtimeState.playerStats?.handsWonByAccount ?? {}, runtimeState.table.players),
@@ -3471,6 +3506,9 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
       decisionTimeSeconds: turnSeconds,
       timeBankSeconds,
       timeBankRefillHands: normalizeOptionalRuntimeSetting(runtimeState.adminOptions?.timeBankRefillHands, null),
+      isPubliclyListed: isRoomPubliclyListed(runtimeState.adminOptions),
+      minBuyInAmount: buyInOptions.minBuyInAmount,
+      maxBuyInRule: buyInOptions.maxBuyInRule,
       revealAllShowdownHands,
       runItTwiceEnabled,
     },
@@ -3508,9 +3546,14 @@ function syncRuntimeState(
   const now = options.now ?? new Date();
   const turnState = debitTimeBankForAction(runtimeState.turnState, options.actingAccountId, now);
   const playerStats = syncPlayerStats(runtimeState.playerStats, runtimeState.table, table, options.ensurePlayerAccountId);
+  const adminOptions = {
+    ...runtimeState.adminOptions,
+    revealAllShowdownHands: table.revealAllShowdownHands,
+    runItTwiceEnabled: table.runItTwiceEnabled,
+  } satisfies RoomAdminOptionsState;
   const previousHand = runtimeState.table.currentHand;
   const nextHand = table.currentHand;
-  const shouldRefillTimeBank = shouldRefillTimeBankAfterHand(runtimeState.table, table, runtimeState.adminOptions.timeBankRefillHands);
+  const shouldRefillTimeBank = shouldRefillTimeBankAfterHand(runtimeState.table, table, adminOptions.timeBankRefillHands);
   const shouldResetTurnClock = Boolean(
     nextHand && (
       options.actingAccountId
@@ -3527,12 +3570,7 @@ function syncRuntimeState(
     joinedViewerAccountIds: ensureJoinedViewerAccountIds(runtimeState.joinedViewerAccountIds, table),
     seatReactions: runtimeState.seatReactions.filter((reaction) => Date.parse(reaction.expiresAt) > now.getTime()),
     seatGestures: filterSeatGesturesForPlayers(runtimeState.seatGestures, table.players),
-    buyInState: {
-      ...runtimeState.buyInState,
-      minRebuyAmount: runtimeState.buyInState.minRebuyAmount,
-      maxRebuyAmount: runtimeState.buyInState.maxRebuyAmount,
-      buyInTotalByAccount: ensureBuyInEntries(runtimeState.buyInState.buyInTotalByAccount, table.players, table.startingStack, options.ensurePlayerAccountId),
-    },
+    buyInState: buildRuntimeBuyInState(table, adminOptions, runtimeState.buyInState.buyInTotalByAccount, options.ensurePlayerAccountId),
     ledgerState: ensureLedgerState(runtimeState.ledgerState, table.players),
     playerStats,
     turnState: {
@@ -3548,11 +3586,7 @@ function syncRuntimeState(
         ? resetOrClampTimeBankEntries({}, table.players, turnState.timeBankSeconds, options.ensurePlayerAccountId)
         : ensureTimeBankEntries(turnState.timeBankMsByAccount, table.players, turnState.timeBankSeconds, options.ensurePlayerAccountId),
     },
-    adminOptions: {
-      ...runtimeState.adminOptions,
-      revealAllShowdownHands: table.revealAllShowdownHands,
-      runItTwiceEnabled: table.runItTwiceEnabled,
-    },
+    adminOptions,
     pendingSeatRequests: runtimeState.pendingSeatRequests,
     pendingRebuyRequests: runtimeState.pendingRebuyRequests,
     pauseState: runtimeState.pauseState,
@@ -3658,6 +3692,8 @@ function buildFullRoomSnapshot(
 
 function buildLockedRoomSnapshot(runtimeState: PersistedRoomRuntimeState): RoomSnapshot {
   const table = runtimeState.table;
+  const buyInOptions = normalizeRoomBuyInAdminOptions(table, runtimeState.adminOptions);
+  const lockedBuyInState = buildRuntimeBuyInState(table, buyInOptions, {});
 
   return {
     roomId: table.roomId,
@@ -3686,6 +3722,9 @@ function buildLockedRoomSnapshot(runtimeState: PersistedRoomRuntimeState): RoomS
       decisionTimeSeconds: null,
       timeBankSeconds: null,
       timeBankRefillHands: null,
+      isPubliclyListed: isRoomPubliclyListed(runtimeState.adminOptions),
+      minBuyInAmount: buyInOptions.minBuyInAmount,
+      maxBuyInRule: buyInOptions.maxBuyInRule,
       revealAllShowdownHands: false,
       runItTwiceEnabled: false,
     },
@@ -3695,11 +3734,7 @@ function buildLockedRoomSnapshot(runtimeState: PersistedRoomRuntimeState): RoomS
     chatMessages: [],
     seatReactions: [],
     seatGestures: [],
-    buyInState: {
-      minRebuyAmount: Math.max(100, Math.floor(table.startingStack / 20)),
-      maxRebuyAmount: table.startingStack * 5,
-      buyInTotalByAccount: {},
-    },
+    buyInState: lockedBuyInState,
     ledgerState: {
       displayNameByAccount: {},
       buyOutByAccount: {},
@@ -3731,6 +3766,7 @@ function buildManagedRoomSummary(room: ManagedPersistedRoomRecord, runtimeState:
     roomId: room.id,
     slug: room.slug,
     name: runtimeState.table.name,
+    clubName: room.club?.name ?? null,
     adminAccountId: room.adminId,
     adminUsername: room.admin.username,
     visibility: runtimeState.table.visibility,
@@ -3755,6 +3791,7 @@ function buildPublicRoomSummary(room: ManagedPersistedRoomRecord, runtimeState: 
     roomId: room.id,
     slug: room.slug,
     name: runtimeState.table.name,
+    clubName: room.club?.name ?? null,
     adminUsername: room.admin.username,
     visibility: runtimeState.table.visibility,
     status: runtimeState.table.status,
@@ -4408,11 +4445,106 @@ function normalizeOptionalWholeNumber(value: number | null, label: string): numb
   return normalized;
 }
 
-function normalizeRequestedStack(value: number | undefined, fallback: number): number {
+function buildDefaultRoomBuyInMaxRule(): RoomBuyInMaxRule {
+  return {
+    kind: "chip_lead_percentage",
+    value: DEFAULT_MAX_BUY_IN_PERCENTAGE,
+  };
+}
+
+function buildDefaultRoomAdminOptions(table: TableState, isPubliclyListed = true): RoomAdminOptionsState {
+  return {
+    decisionTimeSeconds: DEFAULT_TURN_SECONDS,
+    timeBankSeconds: DEFAULT_TIMEBANK_SECONDS,
+    timeBankRefillHands: null,
+    isPubliclyListed,
+    minBuyInAmount: table.startingStack,
+    maxBuyInRule: buildDefaultRoomBuyInMaxRule(),
+    revealAllShowdownHands: table.revealAllShowdownHands,
+    runItTwiceEnabled: table.runItTwiceEnabled,
+  };
+}
+
+function isRoomPubliclyListed(
+  adminOptions: Pick<RoomAdminOptionsState, "isPubliclyListed"> | Partial<Pick<RoomAdminOptionsState, "isPubliclyListed">> | undefined,
+): boolean {
+  return adminOptions?.isPubliclyListed ?? true;
+}
+
+function normalizePositiveWholeNumber(value: number | undefined, fallback: number, label: string): number {
+  const normalized = Math.floor(value ?? fallback);
+
+  if (!Number.isFinite(normalized) || normalized <= 0) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+
+  return normalized;
+}
+
+function normalizeRoomBuyInAdminOptions(
+  table: TableState,
+  adminOptions: Pick<RoomAdminOptionsState, "minBuyInAmount" | "maxBuyInRule"> | Partial<Pick<RoomAdminOptionsState, "minBuyInAmount" | "maxBuyInRule">> | undefined,
+): Pick<RoomAdminOptionsState, "minBuyInAmount" | "maxBuyInRule"> {
+  const defaultOptions = buildDefaultRoomAdminOptions(table);
+  const configuredRule = adminOptions?.maxBuyInRule;
+  const fallbackRule = defaultOptions.maxBuyInRule;
+  const kind = configuredRule?.kind === "fixed_amount" || configuredRule?.kind === "chip_lead_percentage"
+    ? configuredRule.kind
+    : fallbackRule.kind;
+
+  return {
+    minBuyInAmount: normalizePositiveWholeNumber(adminOptions?.minBuyInAmount, defaultOptions.minBuyInAmount, "Minimum buy-in"),
+    maxBuyInRule: {
+      kind,
+      value: normalizePositiveWholeNumber(
+        configuredRule?.value,
+        fallbackRule.value,
+        kind === "chip_lead_percentage" ? "Chip leader percentage" : "Maximum buy-in",
+      ),
+    },
+  };
+}
+
+function getChipLeaderStack(table: TableState): number {
+  return table.players.reduce((largestStack, player) => Math.max(largestStack, player.stack), 0);
+}
+
+function resolveConfiguredMaxBuyInAmount(table: TableState, maxBuyInRule: RoomBuyInMaxRule): number {
+  if (maxBuyInRule.kind === "fixed_amount") {
+    return maxBuyInRule.value;
+  }
+
+  return Math.max(table.startingStack, Math.floor(getChipLeaderStack(table) * (maxBuyInRule.value / 100)));
+}
+
+function buildRuntimeBuyInState(
+  table: TableState,
+  adminOptions: Pick<RoomAdminOptionsState, "minBuyInAmount" | "maxBuyInRule">,
+  buyInTotalByAccount: Record<string, number>,
+  ensurePlayerAccountId?: string,
+): RoomBuyInState {
+  const buyInOptions = normalizeRoomBuyInAdminOptions(table, adminOptions);
+
+  return {
+    minRebuyAmount: buyInOptions.minBuyInAmount,
+    maxRebuyAmount: Math.max(buyInOptions.minBuyInAmount, resolveConfiguredMaxBuyInAmount(table, buyInOptions.maxBuyInRule)),
+    buyInTotalByAccount: ensureBuyInEntries(buyInTotalByAccount, table.players, table.startingStack, ensurePlayerAccountId),
+  };
+}
+
+function normalizeRequestedStack(value: number | undefined, fallback: number, minAmount: number, maxAmount: number): number {
   const normalized = Math.floor(value ?? fallback);
 
   if (!Number.isFinite(normalized) || normalized <= 0) {
     throw new Error("Requested stack must be a positive integer.");
+  }
+
+  if (normalized < minAmount) {
+    throw new Error(`Requested stack must be at least ${minAmount}.`);
+  }
+
+  if (normalized > maxAmount) {
+    throw new Error(`Requested stack cannot exceed ${maxAmount}.`);
   }
 
   return normalized;

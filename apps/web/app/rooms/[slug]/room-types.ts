@@ -187,10 +187,20 @@ export interface RoomBlindState {
   pausedAt: string | null;
 }
 
+export type RoomBuyInMaxRuleKind = "fixed_amount" | "chip_lead_percentage";
+
+export interface RoomBuyInMaxRule {
+  kind: RoomBuyInMaxRuleKind;
+  value: number;
+}
+
 export interface RoomAdminOptionsState {
   decisionTimeSeconds: number | null;
   timeBankSeconds: number | null;
   timeBankRefillHands: number | null;
+  isPubliclyListed: boolean;
+  minBuyInAmount: number;
+  maxBuyInRule: RoomBuyInMaxRule;
   revealAllShowdownHands: boolean;
   runItTwiceEnabled: boolean;
 }

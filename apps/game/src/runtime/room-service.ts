@@ -17,6 +17,7 @@ export interface CreateRoomRequest {
   sessionToken?: string;
   clubId?: string;
   visibility?: CreateTableInput["visibility"];
+  isPubliclyListed?: boolean;
   password?: string;
   maxPlayers?: number;
   startingStack?: number;
@@ -126,6 +127,13 @@ export interface StartHandRequest {
   accountId: string;
 }
 
+export type RoomBuyInMaxRuleKind = "fixed_amount" | "chip_lead_percentage";
+
+export interface RoomBuyInMaxRule {
+  kind: RoomBuyInMaxRuleKind;
+  value: number;
+}
+
 export interface UpdateRoomAdminOptionsRequest {
   slug: string;
   accountId: string;
@@ -135,6 +143,9 @@ export interface UpdateRoomAdminOptionsRequest {
   turnSeconds: number | null;
   timeBankSeconds: number | null;
   timeBankRefillHands: number | null;
+  isPubliclyListed: boolean;
+  minBuyInAmount: number;
+  maxBuyInRule: RoomBuyInMaxRule;
   revealAllShowdownHands: boolean;
   runItTwiceEnabled: boolean;
 }
@@ -277,6 +288,7 @@ export interface ManagedRoomSummary {
   roomId: string;
   slug: string;
   name: string;
+  clubName: string | null;
   adminAccountId: string;
   adminUsername: string;
   visibility: TableState["visibility"];
@@ -299,6 +311,7 @@ export interface PublicRoomSummary {
   roomId: string;
   slug: string;
   name: string;
+  clubName: string | null;
   adminUsername: string;
   visibility: TableState["visibility"];
   status: TableState["status"];
@@ -537,6 +550,9 @@ export interface RoomAdminOptionsState {
   decisionTimeSeconds: number | null;
   timeBankSeconds: number | null;
   timeBankRefillHands: number | null;
+  isPubliclyListed: boolean;
+  minBuyInAmount: number;
+  maxBuyInRule: RoomBuyInMaxRule;
   revealAllShowdownHands: boolean;
   runItTwiceEnabled: boolean;
 }

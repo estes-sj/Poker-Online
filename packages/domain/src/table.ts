@@ -1213,7 +1213,6 @@ function buildAllInRunoutState(
   }
 
   const revealedAccountIds = eligiblePlayers
-    .filter((player) => player.stack === 0)
     .sort((left, right) => left.seatIndex - right.seatIndex)
     .map((player) => player.accountId);
 
