@@ -25,6 +25,33 @@ interface ClubOption {
     name: string;
 }
 
+interface BlindLevelDraft {
+    smallBlind: string;
+    bigBlind: string;
+    durationMinutes: string;
+}
+
+interface BlindLevelDraftValidation {
+    smallBlind?: string;
+    bigBlind?: string;
+    durationMinutes?: string;
+}
+
+const DEFAULT_BLIND_LEVELS: Array<{ smallBlind: number; bigBlind: number; durationMinutes: number }> = [
+    { smallBlind: 10, bigBlind: 20, durationMinutes: 15 },
+    { smallBlind: 20, bigBlind: 40, durationMinutes: 15 },
+    { smallBlind: 30, bigBlind: 60, durationMinutes: 15 },
+    { smallBlind: 40, bigBlind: 80, durationMinutes: 15 },
+    { smallBlind: 50, bigBlind: 100, durationMinutes: 15 },
+    { smallBlind: 75, bigBlind: 150, durationMinutes: 15 },
+    { smallBlind: 125, bigBlind: 250, durationMinutes: 15 },
+    { smallBlind: 200, bigBlind: 400, durationMinutes: 15 },
+    { smallBlind: 300, bigBlind: 600, durationMinutes: 15 },
+    { smallBlind: 500, bigBlind: 1000, durationMinutes: 15 },
+    { smallBlind: 700, bigBlind: 1400, durationMinutes: 15 },
+    { smallBlind: 1000, bigBlind: 2000, durationMinutes: 15 },
+];
+
 export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
     const [session, setSession] = useState<BrowserSessionState | null>(null);
     const [registerError, setRegisterError] = useState<string | null>(null);
@@ -37,6 +64,9 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
     const [isLoggingIn, setIsLoggingIn] = useState(false);
     const [isCreatingRoom, setIsCreatingRoom] = useState(false);
     const [isLoadingClubs, setIsLoadingClubs] = useState(false);
+    const [useBlindSchedule, setUseBlindSchedule] = useState(false);
+    const [blindLevels, setBlindLevels] = useState<BlindLevelDraft[]>(() => buildDefaultBlindLevelDrafts());
+    const [blindScheduleValidation, setBlindScheduleValidation] = useState<BlindLevelDraftValidation[]>(() => buildEmptyBlindLevelDraftValidations(DEFAULT_BLIND_LEVELS.length));
 
     useEffect(() => {
         const storedSession = readStoredBrowserSession();
@@ -122,6 +152,17 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
             return;
         }
 
+        const scheduleValidation = useBlindSchedule
+            ? validateBlindScheduleDrafts(blindLevels)
+            : { rows: buildEmptyBlindLevelDraftValidations(blindLevels.length), errors: [] };
+
+        setBlindScheduleValidation(scheduleValidation.rows);
+
+        if (useBlindSchedule && scheduleValidation.errors.length > 0) {
+            setRoomError(scheduleValidation.errors[0] ?? "Fix the blind schedule before opening the room.");
+            return;
+        }
+
         setIsCreatingRoom(true);
         setRoomError(null);
         setRoomLink(null);
@@ -144,6 +185,7 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                     autoStartNextHand: formData.get("autoStartNextHand") === "on",
                     autoStartDelaySeconds: Number(formData.get("autoStartDelaySeconds") ?? 8),
                     runItTwiceEnabled: formData.get("runItTwiceEnabled") === "on",
+                    blindSchedule: useBlindSchedule ? parseBlindScheduleDrafts(blindLevels) : undefined,
                 }),
             });
 
@@ -160,6 +202,24 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
         } finally {
             setIsCreatingRoom(false);
         }
+    }
+
+    function applyBlindLevels(nextLevels: BlindLevelDraft[]) {
+        setBlindLevels(nextLevels);
+        setBlindScheduleValidation(buildEmptyBlindLevelDraftValidations(nextLevels.length));
+        setRoomError(null);
+    }
+
+    function updateBlindLevel(index: number, field: keyof BlindLevelDraft, value: string) {
+        applyBlindLevels(blindLevels.map((level, levelIndex) => levelIndex === index ? { ...level, [field]: value } : level));
+    }
+
+    function addBlindLevel() {
+        applyBlindLevels([...blindLevels, buildNextBlindLevelDraft(blindLevels)]);
+    }
+
+    function removeBlindLevel(index: number) {
+        applyBlindLevels(blindLevels.filter((_, levelIndex) => levelIndex !== index));
     }
 
     function persistSession(account: BrowserSessionState["account"], token: string) {
@@ -387,6 +447,113 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                         >
                             <input className="control-input" id="auto-start-delay-seconds" type="number" name="autoStartDelaySeconds" placeholder="8 seconds" defaultValue={8} min={0} required />
                         </ControlField>
+                        <ControlField
+                            htmlFor="use-blind-schedule"
+                            label="Blind schedule"
+                            tooltip="Enable a custom blind structure for this room instead of using the server default schedule."
+                        >
+                            <label className="control-checkbox" htmlFor="use-blind-schedule">
+                                <input
+                                    id="use-blind-schedule"
+                                    type="checkbox"
+                                    checked={useBlindSchedule}
+                                    onChange={(event) => {
+                                        setUseBlindSchedule(event.target.checked);
+                                        setBlindScheduleValidation(buildEmptyBlindLevelDraftValidations(blindLevels.length));
+                                        setRoomError(null);
+                                    }}
+                                />
+                                <span>Use a custom blind schedule for this room</span>
+                            </label>
+                            {useBlindSchedule ? (
+                                <div className="control-schedule">
+                                    <div className="control-schedule__toolbar">
+                                        <p className="muted-copy">The schedule starts at +0:00 and each level duration sets the next start time.</p>
+                                        <button className="button button--secondary control-schedule__action" type="button" onClick={addBlindLevel}>
+                                            Add level
+                                        </button>
+                                    </div>
+                                    <div className="control-schedule__table-wrap">
+                                        <table className="control-schedule__table">
+                                            <thead>
+                                                <tr>
+                                                    <th scope="col">Level</th>
+                                                    <th scope="col">Starts</th>
+                                                    <th scope="col">Small blind</th>
+                                                    <th scope="col">Big blind</th>
+                                                    <th scope="col">Minutes</th>
+                                                    <th scope="col" className="control-schedule__actions-column">Action</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {blindLevels.map((level, index) => {
+                                                    const offsetLabel = formatBlindScheduleOffset(getBlindScheduleOffsetMinutes(blindLevels, index));
+                                                    const rowValidation = blindScheduleValidation[index] ?? {};
+
+                                                    return (
+                                                        <tr key={index}>
+                                                            <td>{index + 1}</td>
+                                                            <td>
+                                                                <span className="control-schedule__offset">[{offsetLabel}]</span>
+                                                            </td>
+                                                            <td>
+                                                                <input
+                                                                    className="control-input control-schedule__input"
+                                                                    type="number"
+                                                                    min={1}
+                                                                    step={1}
+                                                                    value={level.smallBlind}
+                                                                    onChange={(event) => updateBlindLevel(index, "smallBlind", event.target.value)}
+                                                                    aria-label={`Level ${index + 1} small blind`}
+                                                                    aria-invalid={rowValidation.smallBlind ? true : undefined}
+                                                                />
+                                                                {rowValidation.smallBlind ? <p className="form-error control-schedule__error">{rowValidation.smallBlind}</p> : null}
+                                                            </td>
+                                                            <td>
+                                                                <input
+                                                                    className="control-input control-schedule__input"
+                                                                    type="number"
+                                                                    min={1}
+                                                                    step={1}
+                                                                    value={level.bigBlind}
+                                                                    onChange={(event) => updateBlindLevel(index, "bigBlind", event.target.value)}
+                                                                    aria-label={`Level ${index + 1} big blind`}
+                                                                    aria-invalid={rowValidation.bigBlind ? true : undefined}
+                                                                />
+                                                                {rowValidation.bigBlind ? <p className="form-error control-schedule__error">{rowValidation.bigBlind}</p> : null}
+                                                            </td>
+                                                            <td>
+                                                                <input
+                                                                    className="control-input control-schedule__input"
+                                                                    type="number"
+                                                                    min={1}
+                                                                    step={1}
+                                                                    value={level.durationMinutes}
+                                                                    onChange={(event) => updateBlindLevel(index, "durationMinutes", event.target.value)}
+                                                                    aria-label={`Level ${index + 1} duration in minutes`}
+                                                                    aria-invalid={rowValidation.durationMinutes ? true : undefined}
+                                                                />
+                                                                {rowValidation.durationMinutes ? <p className="form-error control-schedule__error">{rowValidation.durationMinutes}</p> : null}
+                                                            </td>
+                                                            <td>
+                                                                <button
+                                                                    className="button button--secondary control-schedule__remove"
+                                                                    type="button"
+                                                                    onClick={() => removeBlindLevel(index)}
+                                                                    disabled={blindLevels.length <= 1}
+                                                                >
+                                                                    Remove
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            ) : null}
+                        </ControlField>
                         <button className="button button--primary" type="submit" disabled={isCreatingRoom || !canCreateRooms}>
                             {isCreatingRoom ? "Opening room..." : "Open room"}
                         </button>
@@ -440,4 +607,133 @@ function FieldTooltip({ label, text }: FieldTooltipProps) {
             </span>
         </span>
     );
+}
+
+function buildDefaultBlindLevelDrafts(): BlindLevelDraft[] {
+    return DEFAULT_BLIND_LEVELS.map((level) => ({
+        smallBlind: String(level.smallBlind),
+        bigBlind: String(level.bigBlind),
+        durationMinutes: String(level.durationMinutes),
+    }));
+}
+
+function buildEmptyBlindLevelDraftValidations(count: number): BlindLevelDraftValidation[] {
+    return Array.from({ length: count }, () => ({}));
+}
+
+function buildNextBlindLevelDraft(levels: BlindLevelDraft[]): BlindLevelDraft {
+    const lastLevel = levels.at(-1);
+    const lastSmallBlind = parseWholeNumberInput(lastLevel?.smallBlind ?? "");
+    const lastBigBlind = parseWholeNumberInput(lastLevel?.bigBlind ?? "");
+    const lastDuration = parseWholeNumberInput(lastLevel?.durationMinutes ?? "15");
+
+    return {
+        smallBlind: lastSmallBlind !== null && lastSmallBlind > 0 ? String(lastSmallBlind * 2) : "",
+        bigBlind: lastBigBlind !== null && lastBigBlind > 0 ? String(lastBigBlind * 2) : "",
+        durationMinutes: lastDuration !== null && lastDuration > 0 ? String(lastDuration) : "15",
+    };
+}
+
+function validateBlindScheduleDrafts(levels: BlindLevelDraft[]): { rows: BlindLevelDraftValidation[]; errors: string[] } {
+    const rows = buildEmptyBlindLevelDraftValidations(levels.length);
+    const errors: string[] = [];
+
+    if (levels.length === 0) {
+        return {
+            rows,
+            errors: ["Add at least one blind level."],
+        };
+    }
+
+    levels.forEach((level, index) => {
+        const row = rows[index]!;
+        const smallBlind = parseWholeNumberInput(level.smallBlind);
+        const bigBlind = parseWholeNumberInput(level.bigBlind);
+        const durationMinutes = parseWholeNumberInput(level.durationMinutes);
+        const rowLabel = `Level ${index + 1}`;
+
+        if (smallBlind === null || smallBlind <= 0) {
+            row.smallBlind = "Enter a positive whole-number small blind.";
+            errors.push(`${rowLabel}: small blind must be a positive integer.`);
+        }
+
+        if (bigBlind === null || bigBlind <= 0) {
+            row.bigBlind = "Enter a positive whole-number big blind.";
+            errors.push(`${rowLabel}: big blind must be a positive integer.`);
+        }
+
+        if (smallBlind !== null && bigBlind !== null && bigBlind <= smallBlind) {
+            row.bigBlind = "Big blind must be greater than the small blind.";
+            errors.push(`${rowLabel}: big blind must be greater than the small blind.`);
+        }
+
+        if (durationMinutes === null || durationMinutes <= 0) {
+            row.durationMinutes = "Enter a duration above zero minutes.";
+            errors.push(`${rowLabel}: duration must be a positive integer.`);
+        }
+    });
+
+    return { rows, errors };
+}
+
+function parseBlindScheduleDrafts(levels: BlindLevelDraft[]): Array<{
+    level: number;
+    smallBlind: number;
+    bigBlind: number;
+    ante: number;
+    durationMinutes: number;
+}> {
+    return levels.map((level, index) => {
+        const smallBlind = parseRequiredWholeNumber(level.smallBlind, `Blind level ${index + 1} small blind`);
+        const bigBlind = parseRequiredWholeNumber(level.bigBlind, `Blind level ${index + 1} big blind`);
+        const durationMinutes = parseRequiredWholeNumber(level.durationMinutes, `Blind level ${index + 1} duration`);
+
+        if (bigBlind <= smallBlind) {
+            throw new Error(`Blind level ${index + 1} big blind must be greater than the small blind.`);
+        }
+
+        return {
+            level: index + 1,
+            smallBlind,
+            bigBlind,
+            ante: 0,
+            durationMinutes,
+        };
+    });
+}
+
+function getBlindScheduleOffsetMinutes(levels: BlindLevelDraft[], index: number): number {
+    return levels.slice(0, index).reduce((total, level) => total + (parseWholeNumberInput(level.durationMinutes) ?? 0), 0);
+}
+
+function formatBlindScheduleOffset(totalMinutes: number): string {
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return `+${hours}:${String(minutes).padStart(2, "0")}`;
+}
+
+function parseWholeNumberInput(value: string): number | null {
+    const trimmed = value.trim();
+
+    if (!trimmed) {
+        return null;
+    }
+
+    const normalized = Number(trimmed);
+
+    if (!Number.isFinite(normalized) || !Number.isInteger(normalized)) {
+        return null;
+    }
+
+    return normalized;
+}
+
+function parseRequiredWholeNumber(value: string, label: string): number {
+    const normalized = Number(value);
+
+    if (!Number.isFinite(normalized) || !Number.isInteger(normalized) || normalized <= 0) {
+        throw new Error(`${label} must be a positive integer.`);
+    }
+
+    return normalized;
 }

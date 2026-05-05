@@ -61,6 +61,115 @@ const RUNOUT_EQUITY_SAMPLE_COUNT = 5_000;
 const RUNOUT_EQUITY_DECK_RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"] as const;
 const RUNOUT_EQUITY_DECK_SUITS: Card["suit"][] = ["clubs", "diamonds", "hearts", "spades"];
 const ARCHIVED_REPLAY_ACTION_INTERVAL_MS = 750;
+const VICTORY_CONFETTI_DURATION_MS = 6_000;
+const VICTORY_CONFETTI_ANIMATION_MS = 3_200;
+const VICTORY_CONFETTI_PARTICLE_COUNT = 150;
+const VICTORY_CONFETTI_COLORS = ["#4CAF50", "#2196F3", "#FFC107", "#E91E63", "#9C27B0", "#FF5722", "#00BCD4", "#FFEB3B"] as const;
+
+type VictoryConfettiParticle = {
+    x: number;
+    y: number;
+    rotation: number;
+    rotationSpeed: number;
+    velocityX: number;
+    velocityY: number;
+    color: string;
+    size: number;
+    opacity: number;
+};
+
+function VictoryConfettiCanvas({ active }: { active: boolean }) {
+    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+    useEffect(() => {
+        if (!active) {
+            return undefined;
+        }
+
+        const canvas = canvasRef.current;
+        const context = canvas?.getContext("2d");
+        if (!canvas || !context) {
+            return undefined;
+        }
+
+        let animationFrameId = 0;
+        const particles: VictoryConfettiParticle[] = [];
+        const startTime = performance.now();
+
+        const resizeCanvas = () => {
+            const devicePixelRatio = window.devicePixelRatio || 1;
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+
+            canvas.width = Math.floor(width * devicePixelRatio);
+            canvas.height = Math.floor(height * devicePixelRatio);
+            canvas.style.width = `${width}px`;
+            canvas.style.height = `${height}px`;
+            context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+        };
+
+        resizeCanvas();
+
+        for (let index = 0; index < VICTORY_CONFETTI_PARTICLE_COUNT; index += 1) {
+            particles.push({
+                x: Math.random() * window.innerWidth,
+                y: Math.random() * window.innerHeight - window.innerHeight,
+                rotation: Math.random() * 360,
+                rotationSpeed: Math.random() * 10 - 5,
+                velocityX: Math.random() * 4 - 2,
+                velocityY: Math.random() * 3 + 2,
+                color: VICTORY_CONFETTI_COLORS[Math.floor(Math.random() * VICTORY_CONFETTI_COLORS.length)] ?? "#FFC107",
+                size: Math.random() * 8 + 4,
+                opacity: 1,
+            });
+        }
+
+        const animate = (now: number) => {
+            const elapsed = now - startTime;
+            const progress = Math.min(elapsed / VICTORY_CONFETTI_ANIMATION_MS, 1);
+
+            context.clearRect(0, 0, window.innerWidth, window.innerHeight);
+
+            for (const particle of particles) {
+                particle.x += particle.velocityX;
+                particle.y += particle.velocityY;
+                particle.rotation += particle.rotationSpeed;
+                particle.velocityY += 0.1;
+
+                if (progress > 0.7) {
+                    particle.opacity = 1 - (progress - 0.7) / 0.3;
+                }
+
+                context.save();
+                context.translate(particle.x, particle.y);
+                context.rotate((particle.rotation * Math.PI) / 180);
+                context.globalAlpha = Math.max(0, particle.opacity);
+                context.fillStyle = particle.color;
+                context.fillRect(-particle.size / 2, -particle.size / 2, particle.size, particle.size * 1.5);
+                context.restore();
+            }
+
+            if (progress < 1) {
+                animationFrameId = window.requestAnimationFrame(animate);
+            }
+        };
+
+        animationFrameId = window.requestAnimationFrame(animate);
+        window.addEventListener("resize", resizeCanvas);
+
+        return () => {
+            window.cancelAnimationFrame(animationFrameId);
+            window.removeEventListener("resize", resizeCanvas);
+            context.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        };
+    }, [active]);
+
+    if (!active) {
+        return null;
+    }
+
+    return <canvas ref={canvasRef} className="victory-confetti-canvas" aria-hidden="true" />;
+}
 
 const TABLE_LAYOUTS: Record<number, ReadonlyArray<{ left: number; top: number }>> = {
     2: [
@@ -922,10 +1031,12 @@ export function RoomClient({
     const runoutRevealedHoleCards = latestCompletedHand && allInRunoutView?.isActive
         ? filterRevealedHoleCards(latestCompletedHand.revealedHoleCards, new Set(allInRunoutView.revealedAccountIds))
         : null;
+    const runoutHandLabelByAccount = buildRunoutHandLabelByAccount(latestCompletedHand, allInRunoutView);
     const tableSeats = buildTableSeats(tableSnapshot, tablePovSeatIndex ?? heroPlayer?.seatIndex, accountId, Boolean(heroPlayer), {
         suppressWinnerHighlights: isAllInRunoutAnimating,
         completedHandReveals: archivedReplayRevealedCards ?? runoutRevealedHoleCards,
         pendingRunoutWinners,
+        runoutHandLabelByAccount,
         runoutWinPercentByAccount: runoutEquityState.percentByAccount,
         runoutEquityLeaderAccountIds: runoutEquityState.leaderAccountIds,
         runoutEquityTrendByAccount: runoutEquityState.trendByAccount,
@@ -937,6 +1048,17 @@ export function RoomClient({
     const displayedAdditionalBoards = displayedBoards.slice(1);
     const displayedBoardCount = displayedBoards.reduce((totalCards, board) => totalCards + board.length, 0);
     const displayedPot = currentHand?.pot ?? latestCompletedHand?.totalPot ?? 0;
+    const latestCompletedHandConcludedAtMs = latestCompletedHand ? Date.parse(latestCompletedHand.concludedAt) : Number.NaN;
+    const showVictoryConfetti = Boolean(
+        !isArchivedRoom
+        && !currentHand
+        && !isAllInRunoutAnimating
+        && accountId
+        && latestCompletedHand
+        && latestCompletedHand.winners.some((winner) => winner.accountId === accountId)
+        && Number.isFinite(latestCompletedHandConcludedAtMs)
+        && turnClockNow - latestCompletedHandConcludedAtMs <= VICTORY_CONFETTI_DURATION_MS,
+    );
     const centerStatus = isArchivedRoom
         ? buildArchivedCenterStatus(selectedArchivedHand, currentHand)
         : isAllInRunoutAnimating
@@ -2649,6 +2771,8 @@ export function RoomClient({
                             ) : null}
                         </div>
 
+                        <VictoryConfettiCanvas active={showVictoryConfetti} />
+
                         <div className="table-status-rack">
                             {snapshot?.status === "paused" ? <span className="chip-pill">Paused</span> : null}
                             {isArchivedRoom ? <span className="chip-pill">Archived replay</span> : null}
@@ -2745,6 +2869,7 @@ export function RoomClient({
                             const seatCards = buildSeatCardSlots(seat);
                             const seatReaction = seat.player ? activeSeatReactions.get(seat.player.accountId) ?? null : null;
                             const seatGesture = seat.player ? seatGesturesByAccountId.get(seat.player.accountId) ?? null : null;
+                            const heroGestureEmoji = seat.isHero ? heroGesture?.emoji ?? "" : "";
                             const showSeatMediaTile = seat.isHero ? true : Boolean(mediaParticipant) && (!isPhoneViewport || isSpectating);
                             const hasVisibleRevealedCard = Boolean(seat.revealedCards?.some((card) => card !== null));
                             const showHeroNotReadyNotice = Boolean(!isArchivedRoom && seat.isHero && heroPlayer && !heroPlayer.isReady && !heroPlayer.isSittingOut);
@@ -2787,7 +2912,7 @@ export function RoomClient({
                                             <strong className="table-seat__equity-value">{seat.runoutWinPercent}%</strong>
                                         </div>
                                     ) : null}
-                                    {seatGesture ? <div className={["table-seat__gesture", `table-seat__gesture--${seat.mediaPlacement}`].join(" ")}>{seatGesture.emoji}</div> : null}
+                                    {!seat.isHero && seatGesture ? <div className={["table-seat__gesture", `table-seat__gesture--${seat.mediaPlacement}`].join(" ")}>{seatGesture.emoji}</div> : null}
                                     {seatReaction ? <div className="table-seat__reaction">{seatReaction.emoji}</div> : null}
                                     {seat.actionBubble ? <div className="table-seat__bubble">{seat.actionBubble}</div> : null}
                                     {seat.contributionLabel ? <div className="table-seat__chips">{seat.contributionLabel}</div> : null}
@@ -2833,15 +2958,25 @@ export function RoomClient({
                                                     {seat.isHero ? (
                                                         <div className="table-seat__reaction-control">
                                                             <button
-                                                                className="table-seat__reaction-toggle"
+                                                                className={[
+                                                                    "table-seat__reaction-toggle",
+                                                                    heroGestureEmoji ? "table-seat__reaction-toggle--set" : "table-seat__reaction-toggle--empty",
+                                                                ].join(" ")}
                                                                 type="button"
-                                                                onClick={() => {
+                                                                onClick={(event) => {
+                                                                    event.stopPropagation();
                                                                     setGestureInput(heroGesture?.emoji ?? "");
                                                                     setIsReactionMenuOpen((current) => !current);
                                                                 }}
                                                                 disabled={!heroPlayer || isMutating}
+                                                                aria-label={heroGestureEmoji ? "Edit your seat gesture" : "Choose your seat gesture"}
+                                                                title={heroGestureEmoji ? "Edit your seat gesture" : "Choose your seat gesture"}
                                                             >
-                                                                Emoji
+                                                                {heroGestureEmoji ? (
+                                                                    <span className="table-seat__reaction-toggle-emoji" aria-hidden="true">{heroGestureEmoji}</span>
+                                                                ) : (
+                                                                    <span className="table-seat__reaction-toggle-placeholder" aria-hidden="true">+</span>
+                                                                )}
                                                             </button>
 
                                                             {isReactionMenuOpen ? (
@@ -2962,7 +3097,7 @@ export function RoomClient({
                                                     <span>{seat.stackLabel}</span>
                                                 </div>
 
-                                                {seatGesture ? <span className="table-seat__mobile-gesture">{seatGesture.emoji}</span> : null}
+                                                {!seat.isHero && seatGesture ? <span className="table-seat__mobile-gesture">{seatGesture.emoji}</span> : null}
 
                                                 {seat.markers.length ? (
                                                     <div className="table-seat__markers">
@@ -2989,12 +3124,6 @@ export function RoomClient({
                                                         <span className="table-seat__stat-pill-label">R</span>
                                                         <span>{seat.rebuyCount}</span>
                                                     </span>
-                                                    {hasVisibleRevealedCard ? (
-                                                        <span className="table-seat__stat-pill table-seat__stat-pill--revealed">
-                                                            <span className="table-seat__stat-pill-label">Show</span>
-                                                            <span>On</span>
-                                                        </span>
-                                                    ) : null}
                                                 </div>
 
                                                 <div className="table-seat__footer">
@@ -3695,6 +3824,7 @@ function buildTableSeats(
         suppressWinnerHighlights?: boolean;
         completedHandReveals?: Record<string, [Card | null, Card | null]> | null;
         pendingRunoutWinners?: ReadonlyMap<string, LastHandResult["winners"][number]>;
+        runoutHandLabelByAccount?: ReadonlyMap<string, string>;
         runoutWinPercentByAccount?: ReadonlyMap<string, number>;
         runoutEquityLeaderAccountIds?: ReadonlySet<string>;
         runoutEquityTrendByAccount?: ReadonlyMap<string, EquityTrend>;
@@ -3709,6 +3839,7 @@ function buildTableSeats(
     const completedHandReveals = options?.completedHandReveals ?? snapshot?.lastCompletedHand?.revealedHoleCards ?? null;
     const suppressWinnerHighlights = options?.suppressWinnerHighlights ?? false;
     const pendingRunoutWinners = options?.pendingRunoutWinners ?? new Map<string, LastHandResult["winners"][number]>();
+    const runoutHandLabelByAccount = options?.runoutHandLabelByAccount ?? new Map<string, string>();
     const runoutWinPercentByAccount = options?.runoutWinPercentByAccount ?? new Map<string, number>();
     const runoutEquityLeaderAccountIds = options?.runoutEquityLeaderAccountIds ?? new Set<string>();
     const runoutEquityTrendByAccount = options?.runoutEquityTrendByAccount ?? new Map<string, EquityTrend>();
@@ -3727,6 +3858,7 @@ function buildTableSeats(
         const winningEntry = !currentHand && !suppressWinnerHighlights && player
             ? snapshot?.lastCompletedHand?.winners.find((winner) => winner.accountId === player.accountId) ?? null
             : null;
+        const liveRunoutHandLabel = player ? runoutHandLabelByAccount.get(player.accountId) ?? null : null;
         const displayedStack = player ? getDisplayedPlayerStack(player, pendingRunoutWinners) : null;
         const totalHandsWon = player ? snapshot?.playerStats.handsWonByAccount[player.accountId] ?? 0 : 0;
         const revealedCards = player && (isArchivedSnapshot || !currentHand)
@@ -3744,21 +3876,23 @@ function buildTableSeats(
             ? pendingSeatRequest
                 ? "Pending"
                 : "Open seat"
-            : winningEntry
-                ? winningEntry.handLabel ?? "Winner"
-                : isFolded
-                    ? "Folded"
-                    : isActive
-                        ? "Action"
-                        : isArchivedSnapshot
-                            ? ""
-                            : player.isSittingOut
-                                ? "Sitting out"
-                                : !player.isConnected
-                                    ? "Disconnected"
-                                    : player.isReady
-                                        ? "Ready"
-                                        : "Seated";
+            : liveRunoutHandLabel
+                ? liveRunoutHandLabel
+                : winningEntry
+                    ? winningEntry.handLabel ?? "Winner"
+                    : isFolded
+                        ? "Folded"
+                        : isActive
+                            ? "Action"
+                            : isArchivedSnapshot
+                                ? ""
+                                : player.isSittingOut
+                                    ? "Sitting out"
+                                    : !player.isConnected
+                                        ? "Disconnected"
+                                        : player.isReady
+                                            ? "Ready"
+                                            : "Seated";
 
         return {
             seatIndex,
@@ -4048,17 +4182,131 @@ function createEmptyRunoutEquityViewState(): RunoutEquityViewState {
     };
 }
 
+function buildRunoutHandLabelByAccount(
+    lastCompletedHand: LastHandResult | null,
+    allInRunoutView: AllInRunoutView | null,
+): Map<string, string> {
+    if (!lastCompletedHand?.allInRunout || !allInRunoutView) {
+        return new Map();
+    }
+
+    const labelsByAccount = new Map<string, string>();
+
+    for (const participant of buildRunoutVisibleParticipants(lastCompletedHand, allInRunoutView)) {
+        const labels: string[] = [];
+        const seenLabels = new Set<string>();
+
+        for (const board of allInRunoutView.visibleBoards) {
+            if (board.length === 0) {
+                continue;
+            }
+
+            const label = evaluateVisibleHoldemHandLabel([...participant.holeCards, ...board]);
+
+            if (!seenLabels.has(label)) {
+                seenLabels.add(label);
+                labels.push(label);
+            }
+        }
+
+        if (labels.length > 0) {
+            labelsByAccount.set(participant.accountId, labels.join(" / "));
+        }
+    }
+
+    return labelsByAccount;
+}
+
 function buildRunoutEquitySnapshot(
     lastCompletedHand: LastHandResult | null,
     allInRunoutView: AllInRunoutView | null,
 ): RunoutEquitySnapshot | null {
-    if (!lastCompletedHand?.allInRunout || !allInRunoutView || allInRunoutView.visibleBoards.length !== 1) {
+    if (!lastCompletedHand?.allInRunout || !allInRunoutView) {
         return null;
     }
 
-    const visibleBoard = allInRunoutView.visibleBoards[0] ?? [];
+    const participants = buildRunoutVisibleParticipants(lastCompletedHand, allInRunoutView);
 
-    const participants = allInRunoutView.revealedAccountIds
+    if (participants.length < 2) {
+        return null;
+    }
+
+    const knownCardKeys = buildRunoutKnownCardKeys(lastCompletedHand, allInRunoutView, participants);
+
+    if (!knownCardKeys) {
+        return null;
+    }
+
+    const remainingDeck = buildRunoutEquityDeck(knownCardKeys);
+    const boardScenarios = buildRunoutBoardScenarios(
+        allInRunoutView.visibleBoards,
+        remainingDeck,
+        [
+            lastCompletedHand.handId,
+            String(lastCompletedHand.allInRunout.startBoardCount),
+            buildBoardCollectionKey(allInRunoutView.visibleBoards),
+            buildAccountListKey(participants.map((participant) => participant.accountId)),
+        ].join(":"),
+    );
+
+    if (!boardScenarios.length) {
+        return null;
+    }
+
+    const totalShares = new Map(participants.map((participant) => [participant.accountId, 0]));
+
+    for (const boards of boardScenarios) {
+        for (const board of boards) {
+            let bestHand = evaluateHoldemHand([...participants[0]!.holeCards, ...board]);
+            let winningAccountIds = [participants[0]!.accountId];
+
+            for (let index = 1; index < participants.length; index += 1) {
+                const participant = participants[index]!;
+                const evaluatedHand = evaluateHoldemHand([...participant.holeCards, ...board]);
+                const comparison = compareEvaluatedHands(evaluatedHand, bestHand);
+
+                if (comparison > 0) {
+                    bestHand = evaluatedHand;
+                    winningAccountIds = [participant.accountId];
+                    continue;
+                }
+
+                if (comparison === 0) {
+                    winningAccountIds.push(participant.accountId);
+                }
+            }
+
+            const share = 1 / (boards.length * winningAccountIds.length);
+
+            for (const accountId of winningAccountIds) {
+                totalShares.set(accountId, (totalShares.get(accountId) ?? 0) + share);
+            }
+        }
+    }
+
+    const percentByAccount = new Map(
+        participants.map((participant) => [
+            participant.accountId,
+            Math.round(((totalShares.get(participant.accountId) ?? 0) / boardScenarios.length) * 100),
+        ]),
+    );
+    const highestPercent = Math.max(...Array.from(percentByAccount.values()));
+
+    return {
+        percentByAccount,
+        leaderAccountIds: new Set(
+            Array.from(percentByAccount.entries())
+                .filter(([, percent]) => percent === highestPercent)
+                .map(([accountId]) => accountId),
+        ),
+    };
+}
+
+function buildRunoutVisibleParticipants(
+    lastCompletedHand: LastHandResult,
+    allInRunoutView: AllInRunoutView,
+): Array<{ accountId: string; holeCards: [Card, Card] }> {
+    return allInRunoutView.revealedAccountIds
         .map((accountId) => {
             const holeCards = lastCompletedHand.revealedHoleCards[accountId];
 
@@ -4067,20 +4315,18 @@ function buildRunoutEquitySnapshot(
                 : null;
         })
         .filter((entry): entry is { accountId: string; holeCards: [Card, Card] } => entry !== null);
+}
 
-    if (participants.length < 2) {
-        return null;
-    }
-
-    const cardsToDraw = 5 - visibleBoard.length;
-
-    if (cardsToDraw < 0) {
-        return null;
-    }
-
+function buildRunoutKnownCardKeys(
+    lastCompletedHand: LastHandResult,
+    allInRunoutView: AllInRunoutView,
+    participants: Array<{ accountId: string; holeCards: [Card, Card] }>,
+): Set<string> | null {
     const knownCardKeys = new Set<string>();
+    const startBoardCount = lastCompletedHand.allInRunout?.startBoardCount ?? 0;
+    const sharedBoard = (allInRunoutView.visibleBoards[0] ?? []).slice(0, startBoardCount);
 
-    for (const card of visibleBoard) {
+    for (const card of sharedBoard) {
         const cardKey = buildCardIdentity(card);
 
         if (knownCardKeys.has(cardKey)) {
@@ -4088,6 +4334,18 @@ function buildRunoutEquitySnapshot(
         }
 
         knownCardKeys.add(cardKey);
+    }
+
+    for (const board of allInRunoutView.visibleBoards) {
+        for (const card of board.slice(startBoardCount)) {
+            const cardKey = buildCardIdentity(card);
+
+            if (knownCardKeys.has(cardKey)) {
+                return null;
+            }
+
+            knownCardKeys.add(cardKey);
+        }
     }
 
     for (const participant of participants) {
@@ -4102,67 +4360,158 @@ function buildRunoutEquitySnapshot(
         }
     }
 
-    const remainingDeck = buildRunoutEquityDeck(knownCardKeys);
-    const boardCompletions = buildRunoutBoardCompletions(
-        remainingDeck,
-        cardsToDraw,
-        [
-            lastCompletedHand.handId,
-            buildCardListKey(visibleBoard),
-            buildAccountListKey(participants.map((participant) => participant.accountId)),
-        ].join(":"),
-    );
+    return knownCardKeys;
+}
 
-    if (!boardCompletions.length) {
-        return null;
+function buildRunoutBoardScenarios(visibleBoards: Card[][], remainingDeck: Card[], seed: string): Card[][][] {
+    const missingCounts = visibleBoards.map((board) => Math.max(0, 5 - board.length));
+
+    if (missingCounts.every((count) => count === 0)) {
+        return [visibleBoards.map((board) => [...board])];
     }
 
-    const totalShares = new Map(participants.map((participant) => [participant.accountId, 0]));
+    const scenarioCount = calculateRunoutScenarioCount(remainingDeck.length, missingCounts);
 
-    for (const completion of boardCompletions) {
-        const fullBoard = [...visibleBoard, ...completion];
-        let bestHand = evaluateHoldemHand([...participants[0]!.holeCards, ...fullBoard]);
-        let winningAccountIds = [participants[0]!.accountId];
+    if (scenarioCount <= RUNOUT_EQUITY_EXACT_COMBINATION_LIMIT) {
+        return enumerateRunoutBoardScenarios(visibleBoards, remainingDeck, missingCounts);
+    }
 
-        for (let index = 1; index < participants.length; index += 1) {
-            const participant = participants[index]!;
-            const evaluatedHand = evaluateHoldemHand([...participant.holeCards, ...fullBoard]);
-            const comparison = compareEvaluatedHands(evaluatedHand, bestHand);
+    return sampleRunoutBoardScenarios(visibleBoards, remainingDeck, missingCounts, Math.min(RUNOUT_EQUITY_SAMPLE_COUNT, scenarioCount), seed);
+}
 
-            if (comparison > 0) {
-                bestHand = evaluatedHand;
-                winningAccountIds = [participant.accountId];
-                continue;
-            }
+function calculateRunoutScenarioCount(totalCards: number, missingCounts: number[]): number {
+    let remainingCards = totalCards;
+    let scenarioCount = 1;
 
-            if (comparison === 0) {
-                winningAccountIds.push(participant.accountId);
-            }
-        }
+    for (const missingCount of missingCounts) {
+        scenarioCount *= calculateCombinationCount(remainingCards, missingCount);
+        remainingCards -= missingCount;
 
-        const share = 1 / winningAccountIds.length;
-
-        for (const accountId of winningAccountIds) {
-            totalShares.set(accountId, (totalShares.get(accountId) ?? 0) + share);
+        if (scenarioCount > RUNOUT_EQUITY_EXACT_COMBINATION_LIMIT) {
+            return scenarioCount;
         }
     }
 
-    const percentByAccount = new Map(
-        participants.map((participant) => [
-            participant.accountId,
-            Math.round(((totalShares.get(participant.accountId) ?? 0) / boardCompletions.length) * 100),
-        ]),
-    );
-    const highestPercent = Math.max(...Array.from(percentByAccount.values()));
+    return scenarioCount;
+}
 
-    return {
-        percentByAccount,
-        leaderAccountIds: new Set(
-            Array.from(percentByAccount.entries())
-                .filter(([, percent]) => percent === highestPercent)
-                .map(([accountId]) => accountId),
-        ),
-    };
+function enumerateRunoutBoardScenarios(visibleBoards: Card[][], remainingDeck: Card[], missingCounts: number[]): Card[][][] {
+    const scenarios: Card[][][] = [];
+
+    function visit(boardIndex: number, nextDeck: Card[], nextBoards: Card[][]) {
+        if (boardIndex >= visibleBoards.length) {
+            scenarios.push(nextBoards.map((board) => [...board]));
+            return;
+        }
+
+        const baseBoard = visibleBoards[boardIndex] ?? [];
+        const missingCount = missingCounts[boardIndex] ?? 0;
+
+        if (missingCount <= 0) {
+            visit(boardIndex + 1, nextDeck, [...nextBoards, [...baseBoard]]);
+            return;
+        }
+
+        for (const completion of enumerateCardCombinations(nextDeck, missingCount)) {
+            visit(
+                boardIndex + 1,
+                removeCardsFromDeck(nextDeck, completion),
+                [...nextBoards, [...baseBoard, ...completion]],
+            );
+        }
+    }
+
+    visit(0, remainingDeck, []);
+    return scenarios;
+}
+
+function sampleRunoutBoardScenarios(
+    visibleBoards: Card[][],
+    remainingDeck: Card[],
+    missingCounts: number[],
+    sampleCount: number,
+    seed: string,
+): Card[][][] {
+    const random = createSeededRandom(seed);
+    const scenarios: Card[][][] = [];
+    const seen = new Set<string>();
+    const maxAttempts = sampleCount * 6;
+    let attempts = 0;
+
+    while (scenarios.length < sampleCount && attempts < maxAttempts) {
+        attempts += 1;
+        const nextDeck = [...remainingDeck];
+        const boards: Card[][] = [];
+
+        for (let boardIndex = 0; boardIndex < visibleBoards.length; boardIndex += 1) {
+            const baseBoard = visibleBoards[boardIndex] ?? [];
+            const missingCount = missingCounts[boardIndex] ?? 0;
+            const completion: Card[] = [];
+
+            for (let drawIndex = 0; drawIndex < missingCount; drawIndex += 1) {
+                const nextIndex = Math.floor(random() * nextDeck.length);
+                const [nextCard] = nextDeck.splice(nextIndex, 1);
+
+                if (!nextCard) {
+                    return scenarios;
+                }
+
+                completion.push(nextCard);
+            }
+
+            boards.push([...baseBoard, ...completion]);
+        }
+
+        const scenarioKey = boards.map((board) => buildNormalizedBoardKey(board)).join("/");
+
+        if (seen.has(scenarioKey)) {
+            continue;
+        }
+
+        seen.add(scenarioKey);
+        scenarios.push(boards);
+    }
+
+    return scenarios;
+}
+
+function removeCardsFromDeck(deck: Card[], cardsToRemove: Card[]): Card[] {
+    const cardsToRemoveByKey = new Set(cardsToRemove.map((card) => buildCardIdentity(card)));
+    return deck.filter((card) => !cardsToRemoveByKey.has(buildCardIdentity(card)));
+}
+
+function buildNormalizedBoardKey(board: Card[]): string {
+    return board.map((card) => buildCardIdentity(card)).sort().join("|");
+}
+
+function evaluateVisibleHoldemHandLabel(cards: Card[]): string {
+    if (cards.length >= 5) {
+        return evaluateHoldemHand(cards).label;
+    }
+
+    const rankCounts = Array.from(cards.reduce((counts, card) => {
+        const rank = normalizeCardRank(card.rank);
+        counts.set(rank, (counts.get(rank) ?? 0) + 1);
+        return counts;
+    }, new Map<string, number>()).values()).sort((left, right) => right - left);
+
+    if (rankCounts[0] === 4) {
+        return "Four of a kind";
+    }
+
+    if (rankCounts[0] === 3) {
+        return "Three of a kind";
+    }
+
+    if (rankCounts[0] === 2 && rankCounts[1] === 2) {
+        return "Two pair";
+    }
+
+    if (rankCounts[0] === 2) {
+        return "Pair";
+    }
+
+    return "High card";
 }
 
 function getCompletedHandBoards(lastCompletedHand: LastHandResult | null): Card[][] {
