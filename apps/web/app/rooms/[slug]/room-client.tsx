@@ -246,6 +246,81 @@ const TABLE_LAYOUTS: Record<number, ReadonlyArray<{ left: number; top: number }>
     ],
 };
 
+const PHONE_TABLE_LAYOUTS: Record<number, ReadonlyArray<{ left: number; top: number }>> = {
+    2: [
+        { left: 50, top: 88 },
+        { left: 50, top: 12 },
+    ],
+    3: [
+        { left: 50, top: 88 },
+        { left: 28, top: 18 },
+        { left: 72, top: 18 },
+    ],
+    4: [
+        { left: 50, top: 88 },
+        { left: 15, top: 49 },
+        { left: 50, top: 12 },
+        { left: 85, top: 49 },
+    ],
+    5: [
+        { left: 50, top: 88 },
+        { left: 14, top: 64 },
+        { left: 30, top: 17 },
+        { left: 70, top: 17 },
+        { left: 86, top: 64 },
+    ],
+    6: [
+        { left: 50, top: 88 },
+        { left: 14, top: 66 },
+        { left: 16, top: 30 },
+        { left: 50, top: 12 },
+        { left: 84, top: 30 },
+        { left: 86, top: 66 },
+    ],
+    7: [
+        { left: 50, top: 88 },
+        { left: 16, top: 69 },
+        { left: 16, top: 34 },
+        { left: 31, top: 16 },
+        { left: 69, top: 16 },
+        { left: 84, top: 34 },
+        { left: 84, top: 69 },
+    ],
+    8: [
+        { left: 50, top: 88 },
+        { left: 16, top: 72 },
+        { left: 12, top: 48 },
+        { left: 28, top: 18 },
+        { left: 50, top: 10 },
+        { left: 72, top: 18 },
+        { left: 88, top: 48 },
+        { left: 84, top: 72 },
+    ],
+    9: [
+        { left: 50, top: 88 },
+        { left: 16, top: 72 },
+        { left: 12, top: 52 },
+        { left: 16, top: 30 },
+        { left: 30, top: 16 },
+        { left: 70, top: 16 },
+        { left: 84, top: 30 },
+        { left: 88, top: 52 },
+        { left: 84, top: 72 },
+    ],
+    10: [
+        { left: 50, top: 88 },
+        { left: 18, top: 74 },
+        { left: 11, top: 59 },
+        { left: 11, top: 39 },
+        { left: 18, top: 24 },
+        { left: 50, top: 10 },
+        { left: 82, top: 24 },
+        { left: 89, top: 39 },
+        { left: 89, top: 59 },
+        { left: 82, top: 74 },
+    ],
+};
+
 interface SeatCardAdjustment {
     desktopX: number;
     desktopY: number;
@@ -1060,7 +1135,7 @@ export function RoomClient({
         runoutWinPercentByAccount: runoutEquityState.percentByAccount,
         runoutEquityLeaderAccountIds: runoutEquityState.leaderAccountIds,
         runoutEquityTrendByAccount: runoutEquityState.trendByAccount,
-    });
+    }, isPhoneViewport);
     const displayedBoards = currentHand
         ? [currentHand.board]
         : allInRunoutView?.visibleBoards ?? getCompletedHandBoards(latestCompletedHand);
@@ -1093,6 +1168,589 @@ export function RoomClient({
     const blindScheduleValidation = validateBlindScheduleDraft(adminOptionsDraft);
     const runoutEquityBoardKey = buildBoardCollectionKey(allInRunoutView?.visibleBoards ?? []);
     const runoutEquityAccountIdsKey = buildAccountListKey(allInRunoutView?.revealedAccountIds ?? latestCompletedHand?.allInRunout?.revealedAccountIds ?? []);
+    const tableMenuItems = [
+        { id: "seat", label: "Seat" },
+        ...(canShowRebuyMenu ? [{ id: "rebuy", label: "Rebuy" } as const] : []),
+        { id: "invite", label: "Invite" },
+        { id: "media", label: "Media" },
+        ...(isAdmin ? [{ id: "admin", label: "Admin" } as const] : []),
+    ] as const;
+
+    function renderRoomMetaPills() {
+        return (
+            <>
+                <span className="room-toolbar__pill">{currentHand ? `NLHE · ${formatNumber(currentHand.blindLevel.smallBlind)} / ${formatNumber(currentHand.blindLevel.bigBlind)}` : "NLHE · Waiting"}</span>
+                <span className="room-toolbar__pill">Owner {adminName}</span>
+                <span className="room-toolbar__pill">{tableSnapshot?.players.length ?? 0}/{snapshot?.maxPlayers ?? 0} seated</span>
+                <span className="room-toolbar__pill">{demoMode ? "Sample table" : snapshot?.visibility === "club" ? "Club table" : "Private table"}</span>
+                {isArchivedRoom ? <span className="room-toolbar__pill">Archived</span> : null}
+                <span className={`connection-pill connection-pill--${connectionState}`}>{connectionState}</span>
+                <button className="room-toolbar__pill room-toolbar__pill-button" type="button" onClick={() => setIsEngineInfoOpen(true)}>
+                    Info
+                </button>
+                {HOUSE_RULES_CONFIG.visible ? (
+                    <button className="room-toolbar__pill room-toolbar__pill-button" type="button" onClick={() => setIsHouseRulesOpen(true)}>
+                        House Rules
+                    </button>
+                ) : null}
+            </>
+        );
+    }
+
+    function renderTableMenuButtons() {
+        return (
+            <>
+                <button
+                    className={[
+                        "table-menu-cluster__button",
+                        isSessionLedgerOpen ? "table-menu-cluster__button--active" : "",
+                    ].filter(Boolean).join(" ")}
+                    type="button"
+                    onClick={() => setIsSessionLedgerOpen(true)}
+                >
+                    Ledger
+                </button>
+
+                {!isArchivedRoom ? (
+                    <>
+                        {tableMenuItems.map((item) => (
+                            <button
+                                key={item.id}
+                                className={[
+                                    "table-menu-cluster__button",
+                                    openMenuPanel === item.id ? "table-menu-cluster__button--active" : "",
+                                ].filter(Boolean).join(" ")}
+                                type="button"
+                                onClick={() => setOpenMenuPanel((current) => current === item.id ? null : item.id)}
+                            >
+                                {item.label}
+                            </button>
+                        ))}
+                    </>
+                ) : null}
+            </>
+        );
+    }
+
+    function renderTableStatusRackContent() {
+        return (
+            <>
+                {snapshot?.status === "paused" ? <span className="chip-pill">Paused</span> : null}
+                {isArchivedRoom ? <span className="chip-pill">Archived replay</span> : null}
+                <span className="chip-pill">Hand {currentHand?.handNumber ?? latestCompletedHand?.handNumber ?? snapshot?.handCount ?? 0}</span>
+                {!isArchivedRoom && snapshot?.blindState.nextLevel && blindCountdownMs !== null ? <span className="chip-pill chip-pill--timer">Next {formatBlindLevelCompact(snapshot.blindState.nextLevel)} in {formatClockCountdown(blindCountdownMs)}</span> : null}
+                {turnMetrics ? <span className="chip-pill chip-pill--timer">{turnMetrics.kind === "run-it-twice" ? "Vote" : "Turn"} {formatTurnSeconds(turnMetrics.mainSecondsRemaining)}</span> : null}
+                {turnMetrics && currentActor ? <span className="chip-pill">Action {currentActor.displayName}</span> : null}
+                {turnMetrics?.kind === "run-it-twice" ? <span className="chip-pill">Run it twice vote</span> : null}
+                {isAdmin ? (
+                    <>
+                        <button className="table-status-rack__control" type="button" onClick={() => void handlePauseToggle()} disabled={isMutating}>
+                            {snapshot?.status === "paused" ? "Resume" : "Pause"}
+                        </button>
+                        <button className="table-status-rack__control table-status-rack__control--danger" type="button" onClick={() => void handleStopTable()} disabled={isMutating || Boolean(currentHand)}>
+                            Stop
+                        </button>
+                        {canArchiveStoppedTable ? (
+                            <button className="table-status-rack__control" type="button" onClick={() => void handleArchiveTable()} disabled={isMutating}>
+                                Archive
+                            </button>
+                        ) : null}
+                    </>
+                ) : null}
+            </>
+        );
+    }
+
+    const tableMenuDrawer = !isArchivedRoom && openMenuPanel ? (
+        <div className="table-menu-drawer">
+            {openMenuPanel === "invite" ? (
+                <div className="table-menu-drawer__section">
+                    <span className="table-menu-drawer__eyebrow">Invite</span>
+                    <strong className="table-menu-drawer__title">{snapshot?.slug ?? slug}</strong>
+                    <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void handleCopyInviteLink()}>
+                        Copy invite link
+                    </button>
+                    {inviteFeedback ? <p className="muted-copy">{inviteFeedback}</p> : null}
+                </div>
+            ) : null}
+
+            {openMenuPanel === "seat" ? (
+                <div className="table-menu-drawer__section">
+                    <span className="table-menu-drawer__eyebrow">Seat</span>
+                    {session ? <p className="muted-copy">Signed in as {session.account.username}</p> : <p className="muted-copy">Pick a seat and you will be asked to sign in or create an account from this page.</p>}
+
+                    {heroPlayer ? (
+                        <div className="table-stat-list">
+                            <span className="chip-pill">Seat {heroPlayer.seatIndex + 1}</span>
+                            <span className="chip-pill">Stack {formatNumber(heroDisplayedStack)}</span>
+                            <span className="chip-pill">Bought {formatNumber(heroBuyInTotal)}</span>
+                        </div>
+                    ) : (
+                        <>
+                            {snapshot ? (
+                                <div className="table-stat-list">
+                                    <span className="chip-pill">Min {formatNumber(snapshot.buyInState.minRebuyAmount)}</span>
+                                    <span className="chip-pill">Max {formatNumber(snapshot.buyInState.maxRebuyAmount)}</span>
+                                </div>
+                            ) : null}
+                            <p className="muted-copy">Pick an open seat to set an optional display name and choose your buy-in.</p>
+                        </>
+                    )}
+
+                    {heroPendingSeatRequest ? (
+                        <p className="muted-copy">Seat request pending for Seat {heroPendingSeatRequest.seatIndex + 1} at {formatNumber(heroPendingSeatRequest.requestedStack)}.</p>
+                    ) : null}
+
+                    {canJoinProtectedRoom ? (
+                        <>
+                            <input
+                                className="control-input"
+                                type="password"
+                                value={roomPassword}
+                                onChange={(event) => setRoomPassword(event.target.value)}
+                                placeholder="room password"
+                            />
+                            <button className="button button--primary table-menu-drawer__button" type="button" onClick={() => void handleJoinRoom()} disabled={isMutating}>
+                                Join room
+                            </button>
+                        </>
+                    ) : null}
+
+                    {heroPlayer ? (
+                        <div className="seat-control-list seat-control-list--stacked">
+                            <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void handleReadyToggle()} disabled={isMutating || heroPlayer.isSittingOut}>
+                                {heroPlayer.isReady ? "Mark not ready" : "Mark ready"}
+                            </button>
+                            <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void handleSitOutToggle()} disabled={isMutating}>
+                                {heroPlayer.isSittingOut ? "Return from sit out" : "Sit out next hand"}
+                            </button>
+                            <button className="button button--danger table-menu-drawer__button" type="button" onClick={() => void handleLeaveSeat()} disabled={isMutating || heroInHand}>
+                                Leave seat
+                            </button>
+                        </div>
+                    ) : (
+                        <p className="muted-copy">Pick an open seat to enter player mode. Once seated, open chairs disappear from your view.</p>
+                    )}
+
+                    {heroInHand ? <p className="muted-copy">Leave seat and rebuy unlock once the current hand finishes.</p> : null}
+
+                    {snapshot && accountId === snapshot.adminAccountId ? (
+                        <button className="button button--primary table-menu-drawer__button" type="button" onClick={() => void handleStartHand()} disabled={isMutating || !canAdminStartHand}>
+                            {currentHand ? "Hand in progress" : readyPlayerCount >= 2 ? "Start hand" : "Need 2 ready players"}
+                        </button>
+                    ) : null}
+
+                    {nextHandCountdown ? <p className="muted-copy">{nextHandCountdown}</p> : null}
+                </div>
+            ) : null}
+
+            {openMenuPanel === "rebuy" ? (
+                <div className="table-menu-drawer__section">
+                    <span className="table-menu-drawer__eyebrow">Rebuy</span>
+                    {heroPlayer && snapshot ? (
+                        <>
+                            <div className="table-stat-list">
+                                <span className="chip-pill">Bought in {formatNumber(heroBuyInTotal)}</span>
+                                <span className="chip-pill">Rebuys {formatNumber(heroRebuyCount)}</span>
+                                <span className="chip-pill">Min {formatNumber(snapshot.buyInState.minRebuyAmount)}</span>
+                                <span className="chip-pill">Max {formatNumber(snapshot.buyInState.maxRebuyAmount)}</span>
+                            </div>
+
+                            <div className="table-utility-dock__rebuy-pills">
+                                {rebuyPresets.map((preset) => (
+                                    <button
+                                        key={`${preset.label}-${preset.amount}`}
+                                        className="button button--secondary table-utility-dock__rebuy-pill"
+                                        type="button"
+                                        onClick={() => setRebuyAmount(String(preset.amount))}
+                                    >
+                                        {preset.label} {formatNumber(preset.amount)}
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="table-utility-dock__rebuy-row">
+                                <input
+                                    className="control-input"
+                                    type="number"
+                                    min={snapshot.buyInState.minRebuyAmount}
+                                    max={snapshot.buyInState.maxRebuyAmount}
+                                    step={100}
+                                    value={rebuyAmount}
+                                    onChange={(event) => setRebuyAmount(event.target.value)}
+                                />
+                                <button className="button button--primary" type="button" onClick={() => void handleRebuy()} disabled={isMutating || heroInHand}>
+                                    {isAdmin ? "Apply rebuy" : "Request rebuy"}
+                                </button>
+                            </div>
+
+                            {heroPendingRebuyRequest ? <p className="muted-copy">Rebuy request pending for {formatNumber(heroPendingRebuyRequest.amount)}.</p> : null}
+
+                            {heroInHand ? <p className="muted-copy">Rebuy is only available between hands.</p> : null}
+                        </>
+                    ) : (
+                        <p className="muted-copy">Take a seat to adjust your buy-in and rebuy amount.</p>
+                    )}
+                </div>
+            ) : null}
+
+            {openMenuPanel === "media" ? (
+                <div className="table-menu-drawer__section">
+                    <span className="table-menu-drawer__eyebrow">Media</span>
+                    {demoMode ? (
+                        <p className="muted-copy">This sample room uses mocked camera tiles so you can size a full 10-player table without connecting LiveKit.</p>
+                    ) : !session ? (
+                        <p className="muted-copy">Sign in to connect voice and video for the table.</p>
+                    ) : !media.isConnected ? (
+                        <button
+                            className="button button--secondary table-menu-drawer__button"
+                            type="button"
+                            onClick={() => void media.handleConnectMedia()}
+                            disabled={media.mediaStatus === "connecting" || Boolean(media.environmentError)}
+                        >
+                            {media.mediaStatus === "connecting" ? "Connecting media" : "Connect media"}
+                        </button>
+                    ) : (
+                        <div className="seat-control-list seat-control-list--stacked">
+                            <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void media.handleToggleMicrophone()}>
+                                {media.microphoneEnabled ? "Mute mic" : "Unmute mic"}
+                            </button>
+                            <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void media.handleToggleCamera()}>
+                                {media.cameraEnabled ? "Stop camera" : "Start camera"}
+                            </button>
+                            <button className="button button--primary table-menu-drawer__button" type="button" onClick={media.handleDisconnectMedia}>
+                                Disconnect media
+                            </button>
+                        </div>
+                    )}
+
+                    {mediaNotice ? <p className="form-error">{mediaNotice}</p> : null}
+                </div>
+            ) : null}
+
+            {openMenuPanel === "admin" && isAdmin && snapshot ? (
+                <div className="table-menu-drawer__section">
+                    <span className="table-menu-drawer__eyebrow">Admin options</span>
+
+                    <div className="table-admin-grid">
+                        <section className="table-admin-card">
+                            <strong>Controls</strong>
+                            <div className="seat-control-list seat-control-list--stacked">
+                                <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void handlePauseToggle()} disabled={isMutating}>
+                                    {snapshot.status === "paused" ? "Resume table" : "Pause table"}
+                                </button>
+                                <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void handleStartHand()} disabled={isMutating || !canAdminStartHand || snapshot.status === "paused"}>
+                                    {readyPlayerCount >= 2 ? "Start next hand" : "Need 2 ready players"}
+                                </button>
+                                <button className="button button--danger table-menu-drawer__button" type="button" onClick={() => void handleStopTable()} disabled={isMutating || Boolean(currentHand)}>
+                                    Stop table
+                                </button>
+                                <button className="button button--primary table-menu-drawer__button" type="button" onClick={() => void handleArchiveTable()} disabled={isMutating || Boolean(currentHand) || (snapshot?.handCount ?? 0) < 1}>
+                                    Archive table
+                                </button>
+                            </div>
+                            {currentHand ? <p className="muted-copy">Stop and archive become available once the current hand is finished.</p> : null}
+                        </section>
+
+                        <section className="table-admin-card">
+                            <strong>Bots</strong>
+                            <p className="muted-copy">Fill open seats with ready bots so you can start a game before taking a seat yourself.</p>
+                            <input
+                                className="control-input"
+                                type="text"
+                                value={botDisplayName}
+                                onChange={(event) => setBotDisplayName(event.target.value)}
+                                placeholder={defaultBotDisplayName}
+                            />
+                            <input
+                                className="control-input"
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={seatRequestStack}
+                                onChange={(event) => setSeatRequestStack(event.target.value)}
+                                placeholder="bot stack"
+                            />
+
+                            {availableBotSeatIndices.length ? (
+                                <div className="table-admin-list">
+                                    {availableBotSeatIndices.map((seatIndex) => (
+                                        <article key={`bot-seat-${seatIndex}`} className="table-admin-list__item">
+                                            <div>
+                                                <strong>Seat {seatIndex + 1}</strong>
+                                                <span>{botDisplayName.trim() || defaultBotDisplayName} joins ready</span>
+                                            </div>
+                                            <button className="button button--primary" type="button" onClick={() => void handleSeatBot(seatIndex)} disabled={isMutating}>
+                                                Add bot
+                                            </button>
+                                        </article>
+                                    ))}
+                                </div>
+                            ) : snapshot.pendingSeatRequests.length ? (
+                                <p className="muted-copy">No open bot seats are available while seat requests are pending.</p>
+                            ) : (
+                                <p className="muted-copy">No open seats are available for bots right now.</p>
+                            )}
+                        </section>
+
+                        <section className="table-admin-card table-admin-card--wide">
+                            <strong>Table options</strong>
+                            <div className="table-admin-form-grid">
+                                <label className="table-admin-field">
+                                    <span>Small blind</span>
+                                    <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.smallBlind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, smallBlind: event.target.value }))} />
+                                </label>
+                                <label className="table-admin-field">
+                                    <span>Big blind</span>
+                                    <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.bigBlind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, bigBlind: event.target.value }))} />
+                                </label>
+                                <label className="table-admin-field">
+                                    <span>Ante</span>
+                                    <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.ante} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, ante: event.target.value }))} />
+                                </label>
+                                <label className="table-admin-field table-admin-field--toggle">
+                                    <input type="checkbox" checked={adminOptionsDraft.autoStartNextHand} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, autoStartNextHand: event.target.checked }))} />
+                                    <span>Auto start next hand</span>
+                                </label>
+                                <label className="table-admin-field">
+                                    <span>Showdown presentation time</span>
+                                    <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.showdownPresentationSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, showdownPresentationSeconds: event.target.value }))} />
+                                </label>
+                                <label className="table-admin-field">
+                                    <span>Decision time limit</span>
+                                    <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.decisionTimeSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, decisionTimeSeconds: event.target.value }))} placeholder="blank = no limit" />
+                                </label>
+                                <label className="table-admin-field">
+                                    <span>Time bank length</span>
+                                    <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.timeBankSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, timeBankSeconds: event.target.value }))} placeholder="blank = no time bank" />
+                                </label>
+                                <label className="table-admin-field">
+                                    <span>Hands to refill bank</span>
+                                    <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.timeBankRefillHands} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, timeBankRefillHands: event.target.value }))} placeholder="blank = disabled" />
+                                </label>
+                                <label className="table-admin-field table-admin-field--toggle">
+                                    <input type="checkbox" checked={adminOptionsDraft.isPubliclyListed} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, isPubliclyListed: event.target.checked }))} />
+                                    <span>Show this room on the public rooms page</span>
+                                </label>
+                                <label className="table-admin-field">
+                                    <span>Minimum buy-in</span>
+                                    <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.minBuyInAmount} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, minBuyInAmount: event.target.value }))} />
+                                </label>
+                                <label className="table-admin-field">
+                                    <span>Maximum buy-in rule</span>
+                                    <select className="control-input" value={adminOptionsDraft.maxBuyInRuleKind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, maxBuyInRuleKind: event.target.value as AdminOptionsDraft["maxBuyInRuleKind"] }))}>
+                                        <option value="chip_lead_percentage">Percent of chip leader</option>
+                                        <option value="fixed_amount">Fixed amount</option>
+                                    </select>
+                                </label>
+                                <label className="table-admin-field">
+                                    <span>{adminOptionsDraft.maxBuyInRuleKind === "fixed_amount" ? "Maximum buy-in" : "Chip leader percentage"}</span>
+                                    <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.maxBuyInRuleValue} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, maxBuyInRuleValue: event.target.value }))} />
+                                </label>
+                                <label className="table-admin-field table-admin-field--toggle">
+                                    <input type="checkbox" checked={adminOptionsDraft.useBlindSchedule} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, useBlindSchedule: event.target.checked }))} />
+                                    <span>Use blind schedule</span>
+                                </label>
+                                <label className="table-admin-field table-admin-field--toggle">
+                                    <input type="checkbox" checked={adminOptionsDraft.revealAllShowdownHands} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, revealAllShowdownHands: event.target.checked }))} />
+                                    <span>Reveal all hands when no more action is possible</span>
+                                </label>
+                                <label className="table-admin-field table-admin-field--toggle">
+                                    <input type="checkbox" checked={adminOptionsDraft.runItTwiceEnabled} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, runItTwiceEnabled: event.target.checked }))} />
+                                    <span>Run it twice on all-in showdowns before the river</span>
+                                </label>
+                            </div>
+
+                            <p className="muted-copy">Current buy-in window: {formatNumber(snapshot.buyInState.minRebuyAmount)} to {formatNumber(snapshot.buyInState.maxRebuyAmount)}.</p>
+
+                            {adminOptionsDraft.useBlindSchedule ? (
+                                <div className="table-admin-field table-admin-field--full table-admin-schedule">
+                                    <div className="table-admin-schedule__header">
+                                        <div>
+                                            <span>Blind schedule</span>
+                                            <small>Add one row per blind level. The final level stays in place after the schedule runs out.</small>
+                                        </div>
+                                        <button className="button button--secondary" type="button" onClick={handleAddBlindLevel} disabled={isMutating}>
+                                            Add level
+                                        </button>
+                                    </div>
+
+                                    <div className="table-admin-schedule__rows">
+                                        {adminOptionsDraft.blindLevels.map((level, index) => {
+                                            const rowValidation = blindScheduleValidation.rows[index] ?? {};
+                                            const rowErrors = Object.values(rowValidation).filter((value): value is string => Boolean(value));
+                                            const hasRowErrors = rowErrors.length > 0;
+
+                                            return (
+                                                <article key={`blind-level-${index + 1}`} className={["table-admin-schedule__row", hasRowErrors ? "table-admin-schedule__row--invalid" : ""].filter(Boolean).join(" ")}>
+                                                    <div className="table-admin-schedule__row-header">
+                                                        <strong>Level {index + 1}</strong>
+                                                        <button className="button button--secondary table-admin-schedule__remove" type="button" onClick={() => handleRemoveBlindLevel(index)} disabled={isMutating || adminOptionsDraft.blindLevels.length === 1}>
+                                                            Remove
+                                                        </button>
+                                                    </div>
+
+                                                    <div className="table-admin-schedule__inputs">
+                                                        <label className="table-admin-field">
+                                                            <span>Small blind</span>
+                                                            <input
+                                                                className={["control-input", rowValidation.smallBlind ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
+                                                                type="number"
+                                                                min={1}
+                                                                step={1}
+                                                                value={level.smallBlind}
+                                                                onChange={(event) => updateBlindLevelDraft(index, "smallBlind", event.target.value)}
+                                                                aria-invalid={rowValidation.smallBlind ? true : undefined}
+                                                            />
+                                                        </label>
+                                                        <label className="table-admin-field">
+                                                            <span>Big blind</span>
+                                                            <input
+                                                                className={["control-input", rowValidation.bigBlind ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
+                                                                type="number"
+                                                                min={1}
+                                                                step={1}
+                                                                value={level.bigBlind}
+                                                                onChange={(event) => updateBlindLevelDraft(index, "bigBlind", event.target.value)}
+                                                                aria-invalid={rowValidation.bigBlind ? true : undefined}
+                                                            />
+                                                        </label>
+                                                        <label className="table-admin-field">
+                                                            <span>Ante</span>
+                                                            <input
+                                                                className={["control-input", rowValidation.ante ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
+                                                                type="number"
+                                                                min={0}
+                                                                step={1}
+                                                                value={level.ante}
+                                                                onChange={(event) => updateBlindLevelDraft(index, "ante", event.target.value)}
+                                                                placeholder="0"
+                                                                aria-invalid={rowValidation.ante ? true : undefined}
+                                                            />
+                                                        </label>
+                                                        <label className="table-admin-field">
+                                                            <span>Minutes</span>
+                                                            <input
+                                                                className={["control-input", rowValidation.durationMinutes ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
+                                                                type="number"
+                                                                min={1}
+                                                                step={1}
+                                                                value={level.durationMinutes}
+                                                                onChange={(event) => updateBlindLevelDraft(index, "durationMinutes", event.target.value)}
+                                                                aria-invalid={rowValidation.durationMinutes ? true : undefined}
+                                                            />
+                                                        </label>
+                                                    </div>
+
+                                                    {hasRowErrors ? (
+                                                        <ul className="table-admin-schedule__errors">
+                                                            {rowErrors.map((message) => (
+                                                                <li key={`${index + 1}-${message}`}>{message}</li>
+                                                            ))}
+                                                        </ul>
+                                                    ) : null}
+                                                </article>
+                                            );
+                                        })}
+                                    </div>
+
+                                    {blindScheduleValidation.errors.length ? (
+                                        <p className="table-admin-schedule__summary">Fix the highlighted blind levels before saving.</p>
+                                    ) : null}
+                                </div>
+                            ) : null}
+
+                            <button className="button button--primary table-menu-drawer__button" type="button" onClick={() => void handleSaveAdminOptions()} disabled={isMutating || (adminOptionsDraft.useBlindSchedule && blindScheduleValidation.errors.length > 0)}>
+                                Save table options
+                            </button>
+                        </section>
+
+                        <section className="table-admin-card">
+                            <strong>Seat approvals</strong>
+                            {snapshot.pendingSeatRequests.length ? (
+                                <div className="table-admin-list">
+                                    {snapshot.pendingSeatRequests.map((request) => (
+                                        <article key={request.id} className="table-admin-list__item">
+                                            <div className="table-admin-list__meta">
+                                                <strong>{request.displayName}</strong>
+                                                <span>Seat {request.seatIndex + 1} · {formatNumber(request.requestedStack)}</span>
+                                                <input
+                                                    className="control-input table-admin-list__input"
+                                                    type="number"
+                                                    min={1}
+                                                    step={1}
+                                                    value={seatApprovalDrafts[request.id] ?? String(request.requestedStack)}
+                                                    onChange={(event) => setSeatApprovalDrafts((current) => ({ ...current, [request.id]: event.target.value }))}
+                                                    placeholder="requested stack"
+                                                />
+                                            </div>
+                                            <div className="table-admin-list__actions">
+                                                <button className="button button--secondary" type="button" onClick={() => void handleSeatRequestDecision(request.id, false)} disabled={isMutating}>No</button>
+                                                <button className="button button--primary" type="button" onClick={() => void handleSeatRequestDecision(request.id, true, seatApprovalDrafts[request.id])} disabled={isMutating}>Yes</button>
+                                            </div>
+                                        </article>
+                                    ))}
+                                </div>
+                            ) : <p className="muted-copy">No seat approvals are waiting.</p>}
+                        </section>
+
+                        <section className="table-admin-card">
+                            <strong>Rebuy approvals</strong>
+                            {snapshot.pendingRebuyRequests.length ? (
+                                <div className="table-admin-list">
+                                    {snapshot.pendingRebuyRequests.map((request) => (
+                                        <article key={request.id} className="table-admin-list__item">
+                                            <div className="table-admin-list__meta">
+                                                <strong>{request.displayName}</strong>
+                                                <span>{formatNumber(request.amount)}</span>
+                                                <input
+                                                    className="control-input table-admin-list__input"
+                                                    type="number"
+                                                    min={snapshot.buyInState.minRebuyAmount}
+                                                    max={snapshot.buyInState.maxRebuyAmount}
+                                                    step={1}
+                                                    value={rebuyApprovalDrafts[request.id] ?? String(request.amount)}
+                                                    onChange={(event) => setRebuyApprovalDrafts((current) => ({ ...current, [request.id]: event.target.value }))}
+                                                    placeholder="rebuy amount"
+                                                />
+                                            </div>
+                                            <div className="table-admin-list__actions">
+                                                <button className="button button--secondary" type="button" onClick={() => void handleRebuyRequestDecision(request.id, false)} disabled={isMutating}>No</button>
+                                                <button className="button button--primary" type="button" onClick={() => void handleRebuyRequestDecision(request.id, true, rebuyApprovalDrafts[request.id])} disabled={isMutating}>Yes</button>
+                                            </div>
+                                        </article>
+                                    ))}
+                                </div>
+                            ) : <p className="muted-copy">No rebuy approvals are waiting.</p>}
+                        </section>
+
+                        <section className="table-admin-card table-admin-card--wide">
+                            <strong>Players</strong>
+                            <div className="table-admin-list">
+                                {snapshot.players.map((player) => {
+                                    const isBotPlayer = isBotAccountId(player.accountId);
+
+                                    return (
+                                        <article key={player.accountId} className="table-admin-list__item">
+                                            <div>
+                                                <strong>{player.displayName}</strong>
+                                                <span>Seat {player.seatIndex + 1} · Stack {formatNumber(player.stack)}{isBotPlayer ? " · Bot" : ""}</span>
+                                            </div>
+                                            {player.accountId !== snapshot.adminAccountId ? (
+                                                <button className="button button--danger" type="button" onClick={() => void handleRemovePlayer(player.accountId)} disabled={isMutating || Boolean(currentHand?.playerCardCounts[player.accountId])}>
+                                                    {isBotPlayer ? "Remove bot" : "Remove"}
+                                                </button>
+                                            ) : <span className="chip-pill">Admin</span>}
+                                        </article>
+                                    );
+                                })}
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            ) : null}
+        </div>
+    ) : null;
 
     useTableSoundEffects({
         snapshot,
@@ -1246,6 +1904,12 @@ export function RoomClient({
         }
     }
 
+    function closeMobileActionMenuIfNeeded() {
+        if (isPhoneViewport) {
+            setIsMobileActionMenuOpen(false);
+        }
+    }
+
     const shouldForceOpaqueActionPad = Boolean(isActionPadDragging || heroActionState?.canAct || heroCanRespondToRunItTwice);
 
     function renderActionPanel(variant: "inline" | "dialog") {
@@ -1387,7 +2051,10 @@ export function RoomClient({
                                         "table-action-panel__queue-button",
                                     ].join(" ")}
                                     type="button"
-                                    onClick={() => setPreselectedHeroAction((current) => current === "check_or_fold" ? null : "check_or_fold")}
+                                    onClick={() => {
+                                        setPreselectedHeroAction((current) => current === "check_or_fold" ? null : "check_or_fold");
+                                        closeMobileActionMenuIfNeeded();
+                                    }}
                                     disabled={isMutating}
                                 >
                                     Check or fold
@@ -1851,6 +2518,7 @@ export function RoomClient({
         }
 
         await submitRoomMutation(`/v1/rooms/${slug}/action`, payload);
+        closeMobileActionMenuIfNeeded();
     }
 
     async function handleRunItTwiceDecision(willing: boolean) {
@@ -1862,6 +2530,7 @@ export function RoomClient({
             accountId,
             willing,
         });
+        closeMobileActionMenuIfNeeded();
     }
 
     async function handleSendChatMessage() {
@@ -2336,6 +3005,23 @@ export function RoomClient({
         return () => window.removeEventListener("keydown", handleKeyDown);
     }, [currentHand?.runItTwicePrompt?.createdAt, demoMode, heroActionState, heroInHand, isAdmin, media, preselectedHeroAction, snapshot?.status]);
 
+    const heroStatsBar = (
+        <section className={["table-hero-stats-bar", heroPlayer ? "" : "table-hero-stats-bar--empty"].filter(Boolean).join(" ")}>
+            {heroPlayer ? (
+                <>
+                    <div className="table-hero-stats-bar__item"><strong>Stack</strong><span>{formatNumber(heroDisplayedStack)}</span></div>
+                    <div className="table-hero-stats-bar__item"><strong>Committed</strong><span>{formatNumber(heroContribution)}</span></div>
+                    <div className="table-hero-stats-bar__item"><strong>Bank</strong><span>{tableSnapshot?.turnState.timeBankSeconds === null ? "Off" : formatTurnSeconds(Math.ceil(heroTimeBankMs / 1000))}</span></div>
+                    <div className="table-hero-stats-bar__item"><strong>Bought in</strong><span>{formatNumber(heroBuyInTotal)}</span></div>
+                    <div className="table-hero-stats-bar__item"><strong>Won</strong><span>{formatNumber(heroHandsWonCount)}</span></div>
+                    <div className="table-hero-stats-bar__item"><strong>Rebuys</strong><span>{formatNumber(heroRebuyCount)}</span></div>
+                </>
+            ) : (
+                <p className="table-hero-stats-bar__empty-copy">Take a seat to track your stack, bank, buy-in, wins, and rebuys.</p>
+            )}
+        </section>
+    );
+
     if (isProtectedRoomLocked) {
         return (
             <main className="room-shell room-shell--play">
@@ -2449,22 +3135,7 @@ export function RoomClient({
                     <h1 className="room-toolbar__title">{snapshot?.name ?? `Room ${slug}`}</h1>
                 </div>
 
-                <div className="room-toolbar__meta">
-                    <span className="room-toolbar__pill">{currentHand ? `NLHE · ${formatNumber(currentHand.blindLevel.smallBlind)} / ${formatNumber(currentHand.blindLevel.bigBlind)}` : "NLHE · Waiting"}</span>
-                    <span className="room-toolbar__pill">Owner {adminName}</span>
-                    <span className="room-toolbar__pill">{tableSnapshot?.players.length ?? 0}/{snapshot?.maxPlayers ?? 0} seated</span>
-                    <span className="room-toolbar__pill">{demoMode ? "Sample table" : snapshot?.visibility === "club" ? "Club table" : "Private table"}</span>
-                    {isArchivedRoom ? <span className="room-toolbar__pill">Archived</span> : null}
-                    <span className={`connection-pill connection-pill--${connectionState}`}>{connectionState}</span>
-                    <button className="room-toolbar__pill room-toolbar__pill-button" type="button" onClick={() => setIsEngineInfoOpen(true)}>
-                        Info
-                    </button>
-                    {HOUSE_RULES_CONFIG.visible ? (
-                        <button className="room-toolbar__pill room-toolbar__pill-button" type="button" onClick={() => setIsHouseRulesOpen(true)}>
-                            House Rules
-                        </button>
-                    ) : null}
-                </div>
+                {!isPhoneViewport ? <div className="room-toolbar__meta">{renderRoomMetaPills()}</div> : null}
             </header>
 
             <section className="room-play-stack">
@@ -2473,560 +3144,16 @@ export function RoomClient({
 
                 <section className="table-arena table-arena--clean">
                     <div className="table-felt">
-                        <div className="table-menu-cluster">
-                            <button
-                                className={[
-                                    "table-menu-cluster__button",
-                                    isSessionLedgerOpen ? "table-menu-cluster__button--active" : "",
-                                ].filter(Boolean).join(" ")}
-                                type="button"
-                                onClick={() => setIsSessionLedgerOpen(true)}
-                            >
-                                Ledger
-                            </button>
-
-                            {!isArchivedRoom ? (
-                                <>
-                                    {([
-                                        { id: "seat", label: "Seat" },
-                                        ...(canShowRebuyMenu ? [{ id: "rebuy", label: "Rebuy" } as const] : []),
-                                        { id: "invite", label: "Invite" },
-                                        { id: "media", label: "Media" },
-                                        ...(isAdmin ? [{ id: "admin", label: "Admin" } as const] : []),
-                                    ] as const).map((item) => (
-                                        <button
-                                            key={item.id}
-                                            className={[
-                                                "table-menu-cluster__button",
-                                                openMenuPanel === item.id ? "table-menu-cluster__button--active" : "",
-                                            ].filter(Boolean).join(" ")}
-                                            type="button"
-                                            onClick={() => setOpenMenuPanel((current) => current === item.id ? null : item.id)}
-                                        >
-                                            {item.label}
-                                        </button>
-                                    ))}
-                                </>
-                            ) : null}
-
-                            {!isArchivedRoom && openMenuPanel ? (
-                                <div className="table-menu-drawer">
-                                    {openMenuPanel === "invite" ? (
-                                        <div className="table-menu-drawer__section">
-                                            <span className="table-menu-drawer__eyebrow">Invite</span>
-                                            <strong className="table-menu-drawer__title">{snapshot?.slug ?? slug}</strong>
-                                            <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void handleCopyInviteLink()}>
-                                                Copy invite link
-                                            </button>
-                                            {inviteFeedback ? <p className="muted-copy">{inviteFeedback}</p> : null}
-                                        </div>
-                                    ) : null}
-
-                                    {openMenuPanel === "seat" ? (
-                                        <div className="table-menu-drawer__section">
-                                            <span className="table-menu-drawer__eyebrow">Seat</span>
-                                            {session ? <p className="muted-copy">Signed in as {session.account.username}</p> : <p className="muted-copy">Pick a seat and you will be asked to sign in or create an account from this page.</p>}
-
-                                            {heroPlayer ? (
-                                                <div className="table-stat-list">
-                                                    <span className="chip-pill">Seat {heroPlayer.seatIndex + 1}</span>
-                                                    <span className="chip-pill">Stack {formatNumber(heroDisplayedStack)}</span>
-                                                    <span className="chip-pill">Bought {formatNumber(heroBuyInTotal)}</span>
-                                                </div>
-                                            ) : (
-                                                <>
-                                                    {snapshot ? (
-                                                        <div className="table-stat-list">
-                                                            <span className="chip-pill">Min {formatNumber(snapshot.buyInState.minRebuyAmount)}</span>
-                                                            <span className="chip-pill">Max {formatNumber(snapshot.buyInState.maxRebuyAmount)}</span>
-                                                        </div>
-                                                    ) : null}
-                                                    <p className="muted-copy">Pick an open seat to set an optional display name and choose your buy-in.</p>
-                                                </>
-                                            )}
-
-                                            {heroPendingSeatRequest ? (
-                                                <p className="muted-copy">Seat request pending for Seat {heroPendingSeatRequest.seatIndex + 1} at {formatNumber(heroPendingSeatRequest.requestedStack)}.</p>
-                                            ) : null}
-
-                                            {canJoinProtectedRoom ? (
-                                                <>
-                                                    <input
-                                                        className="control-input"
-                                                        type="password"
-                                                        value={roomPassword}
-                                                        onChange={(event) => setRoomPassword(event.target.value)}
-                                                        placeholder="room password"
-                                                    />
-                                                    <button className="button button--primary table-menu-drawer__button" type="button" onClick={() => void handleJoinRoom()} disabled={isMutating}>
-                                                        Join room
-                                                    </button>
-                                                </>
-                                            ) : null}
-
-                                            {heroPlayer ? (
-                                                <div className="seat-control-list seat-control-list--stacked">
-                                                    <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void handleReadyToggle()} disabled={isMutating || heroPlayer.isSittingOut}>
-                                                        {heroPlayer.isReady ? "Mark not ready" : "Mark ready"}
-                                                    </button>
-                                                    <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void handleSitOutToggle()} disabled={isMutating}>
-                                                        {heroPlayer.isSittingOut ? "Return from sit out" : "Sit out next hand"}
-                                                    </button>
-                                                    <button className="button button--danger table-menu-drawer__button" type="button" onClick={() => void handleLeaveSeat()} disabled={isMutating || heroInHand}>
-                                                        Leave seat
-                                                    </button>
-                                                </div>
-                                            ) : (
-                                                <p className="muted-copy">Pick an open seat to enter player mode. Once seated, open chairs disappear from your view.</p>
-                                            )}
-
-                                            {heroInHand ? <p className="muted-copy">Leave seat and rebuy unlock once the current hand finishes.</p> : null}
-
-                                            {snapshot && accountId === snapshot.adminAccountId ? (
-                                                <button className="button button--primary table-menu-drawer__button" type="button" onClick={() => void handleStartHand()} disabled={isMutating || !canAdminStartHand}>
-                                                    {currentHand ? "Hand in progress" : readyPlayerCount >= 2 ? "Start hand" : "Need 2 ready players"}
-                                                </button>
-                                            ) : null}
-
-                                            {nextHandCountdown ? <p className="muted-copy">{nextHandCountdown}</p> : null}
-                                        </div>
-                                    ) : null}
-
-                                    {openMenuPanel === "rebuy" ? (
-                                        <div className="table-menu-drawer__section">
-                                            <span className="table-menu-drawer__eyebrow">Rebuy</span>
-                                            {heroPlayer && snapshot ? (
-                                                <>
-                                                    <div className="table-stat-list">
-                                                        <span className="chip-pill">Bought in {formatNumber(heroBuyInTotal)}</span>
-                                                        <span className="chip-pill">Rebuys {formatNumber(heroRebuyCount)}</span>
-                                                        <span className="chip-pill">Min {formatNumber(snapshot.buyInState.minRebuyAmount)}</span>
-                                                        <span className="chip-pill">Max {formatNumber(snapshot.buyInState.maxRebuyAmount)}</span>
-                                                    </div>
-
-                                                    <div className="table-utility-dock__rebuy-pills">
-                                                        {rebuyPresets.map((preset) => (
-                                                            <button
-                                                                key={`${preset.label}-${preset.amount}`}
-                                                                className="button button--secondary table-utility-dock__rebuy-pill"
-                                                                type="button"
-                                                                onClick={() => setRebuyAmount(String(preset.amount))}
-                                                            >
-                                                                {preset.label} {formatNumber(preset.amount)}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-
-                                                    <div className="table-utility-dock__rebuy-row">
-                                                        <input
-                                                            className="control-input"
-                                                            type="number"
-                                                            min={snapshot.buyInState.minRebuyAmount}
-                                                            max={snapshot.buyInState.maxRebuyAmount}
-                                                            step={100}
-                                                            value={rebuyAmount}
-                                                            onChange={(event) => setRebuyAmount(event.target.value)}
-                                                        />
-                                                        <button className="button button--primary" type="button" onClick={() => void handleRebuy()} disabled={isMutating || heroInHand}>
-                                                            {isAdmin ? "Apply rebuy" : "Request rebuy"}
-                                                        </button>
-                                                    </div>
-
-                                                    {heroPendingRebuyRequest ? <p className="muted-copy">Rebuy request pending for {formatNumber(heroPendingRebuyRequest.amount)}.</p> : null}
-
-                                                    {heroInHand ? <p className="muted-copy">Rebuy is only available between hands.</p> : null}
-                                                </>
-                                            ) : (
-                                                <p className="muted-copy">Take a seat to adjust your buy-in and rebuy amount.</p>
-                                            )}
-                                        </div>
-                                    ) : null}
-
-                                    {openMenuPanel === "media" ? (
-                                        <div className="table-menu-drawer__section">
-                                            <span className="table-menu-drawer__eyebrow">Media</span>
-                                            {demoMode ? (
-                                                <p className="muted-copy">This sample room uses mocked camera tiles so you can size a full 10-player table without connecting LiveKit.</p>
-                                            ) : !session ? (
-                                                <p className="muted-copy">Sign in to connect voice and video for the table.</p>
-                                            ) : !media.isConnected ? (
-                                                <button
-                                                    className="button button--secondary table-menu-drawer__button"
-                                                    type="button"
-                                                    onClick={() => void media.handleConnectMedia()}
-                                                    disabled={media.mediaStatus === "connecting" || Boolean(media.environmentError)}
-                                                >
-                                                    {media.mediaStatus === "connecting" ? "Connecting media" : "Connect media"}
-                                                </button>
-                                            ) : (
-                                                <div className="seat-control-list seat-control-list--stacked">
-                                                    <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void media.handleToggleMicrophone()}>
-                                                        {media.microphoneEnabled ? "Mute mic" : "Unmute mic"}
-                                                    </button>
-                                                    <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void media.handleToggleCamera()}>
-                                                        {media.cameraEnabled ? "Stop camera" : "Start camera"}
-                                                    </button>
-                                                    <button className="button button--primary table-menu-drawer__button" type="button" onClick={media.handleDisconnectMedia}>
-                                                        Disconnect media
-                                                    </button>
-                                                </div>
-                                            )}
-
-                                            {mediaNotice ? <p className="form-error">{mediaNotice}</p> : null}
-                                        </div>
-                                    ) : null}
-
-                                    {openMenuPanel === "admin" && isAdmin && snapshot ? (
-                                        <div className="table-menu-drawer__section">
-                                            <span className="table-menu-drawer__eyebrow">Admin options</span>
-
-                                            <div className="table-admin-grid">
-                                                <section className="table-admin-card">
-                                                    <strong>Controls</strong>
-                                                    <div className="seat-control-list seat-control-list--stacked">
-                                                        <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void handlePauseToggle()} disabled={isMutating}>
-                                                            {snapshot.status === "paused" ? "Resume table" : "Pause table"}
-                                                        </button>
-                                                        <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void handleStartHand()} disabled={isMutating || !canAdminStartHand || snapshot.status === "paused"}>
-                                                            {readyPlayerCount >= 2 ? "Start next hand" : "Need 2 ready players"}
-                                                        </button>
-                                                        <button className="button button--danger table-menu-drawer__button" type="button" onClick={() => void handleStopTable()} disabled={isMutating || Boolean(currentHand)}>
-                                                            Stop table
-                                                        </button>
-                                                        <button className="button button--primary table-menu-drawer__button" type="button" onClick={() => void handleArchiveTable()} disabled={isMutating || Boolean(currentHand) || (snapshot?.handCount ?? 0) < 1}>
-                                                            Archive table
-                                                        </button>
-                                                    </div>
-                                                    {currentHand ? <p className="muted-copy">Stop and archive become available once the current hand is finished.</p> : null}
-                                                </section>
-
-                                                <section className="table-admin-card">
-                                                    <strong>Bots</strong>
-                                                    <p className="muted-copy">Fill open seats with ready bots so you can start a game before taking a seat yourself.</p>
-                                                    <input
-                                                        className="control-input"
-                                                        type="text"
-                                                        value={botDisplayName}
-                                                        onChange={(event) => setBotDisplayName(event.target.value)}
-                                                        placeholder={defaultBotDisplayName}
-                                                    />
-                                                    <input
-                                                        className="control-input"
-                                                        type="number"
-                                                        min={1}
-                                                        step={1}
-                                                        value={seatRequestStack}
-                                                        onChange={(event) => setSeatRequestStack(event.target.value)}
-                                                        placeholder="bot stack"
-                                                    />
-
-                                                    {availableBotSeatIndices.length ? (
-                                                        <div className="table-admin-list">
-                                                            {availableBotSeatIndices.map((seatIndex) => (
-                                                                <article key={`bot-seat-${seatIndex}`} className="table-admin-list__item">
-                                                                    <div>
-                                                                        <strong>Seat {seatIndex + 1}</strong>
-                                                                        <span>{botDisplayName.trim() || defaultBotDisplayName} joins ready</span>
-                                                                    </div>
-                                                                    <button className="button button--primary" type="button" onClick={() => void handleSeatBot(seatIndex)} disabled={isMutating}>
-                                                                        Add bot
-                                                                    </button>
-                                                                </article>
-                                                            ))}
-                                                        </div>
-                                                    ) : snapshot.pendingSeatRequests.length ? (
-                                                        <p className="muted-copy">No open bot seats are available while seat requests are pending.</p>
-                                                    ) : (
-                                                        <p className="muted-copy">No open seats are available for bots right now.</p>
-                                                    )}
-                                                </section>
-
-                                                <section className="table-admin-card table-admin-card--wide">
-                                                    <strong>Table options</strong>
-                                                    <div className="table-admin-form-grid">
-                                                        <label className="table-admin-field">
-                                                            <span>Small blind</span>
-                                                            <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.smallBlind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, smallBlind: event.target.value }))} />
-                                                        </label>
-                                                        <label className="table-admin-field">
-                                                            <span>Big blind</span>
-                                                            <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.bigBlind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, bigBlind: event.target.value }))} />
-                                                        </label>
-                                                        <label className="table-admin-field">
-                                                            <span>Ante</span>
-                                                            <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.ante} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, ante: event.target.value }))} />
-                                                        </label>
-                                                        <label className="table-admin-field table-admin-field--toggle">
-                                                            <input type="checkbox" checked={adminOptionsDraft.autoStartNextHand} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, autoStartNextHand: event.target.checked }))} />
-                                                            <span>Auto start next hand</span>
-                                                        </label>
-                                                        <label className="table-admin-field">
-                                                            <span>Showdown presentation time</span>
-                                                            <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.showdownPresentationSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, showdownPresentationSeconds: event.target.value }))} />
-                                                        </label>
-                                                        <label className="table-admin-field">
-                                                            <span>Decision time limit</span>
-                                                            <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.decisionTimeSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, decisionTimeSeconds: event.target.value }))} placeholder="blank = no limit" />
-                                                        </label>
-                                                        <label className="table-admin-field">
-                                                            <span>Time bank length</span>
-                                                            <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.timeBankSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, timeBankSeconds: event.target.value }))} placeholder="blank = no time bank" />
-                                                        </label>
-                                                        <label className="table-admin-field">
-                                                            <span>Hands to refill bank</span>
-                                                            <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.timeBankRefillHands} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, timeBankRefillHands: event.target.value }))} placeholder="blank = disabled" />
-                                                        </label>
-                                                        <label className="table-admin-field table-admin-field--toggle">
-                                                            <input type="checkbox" checked={adminOptionsDraft.isPubliclyListed} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, isPubliclyListed: event.target.checked }))} />
-                                                            <span>Show this room on the public rooms page</span>
-                                                        </label>
-                                                        <label className="table-admin-field">
-                                                            <span>Minimum buy-in</span>
-                                                            <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.minBuyInAmount} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, minBuyInAmount: event.target.value }))} />
-                                                        </label>
-                                                        <label className="table-admin-field">
-                                                            <span>Maximum buy-in rule</span>
-                                                            <select className="control-input" value={adminOptionsDraft.maxBuyInRuleKind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, maxBuyInRuleKind: event.target.value as AdminOptionsDraft["maxBuyInRuleKind"] }))}>
-                                                                <option value="chip_lead_percentage">Percent of chip leader</option>
-                                                                <option value="fixed_amount">Fixed amount</option>
-                                                            </select>
-                                                        </label>
-                                                        <label className="table-admin-field">
-                                                            <span>{adminOptionsDraft.maxBuyInRuleKind === "fixed_amount" ? "Maximum buy-in" : "Chip leader percentage"}</span>
-                                                            <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.maxBuyInRuleValue} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, maxBuyInRuleValue: event.target.value }))} />
-                                                        </label>
-                                                        <label className="table-admin-field table-admin-field--toggle">
-                                                            <input type="checkbox" checked={adminOptionsDraft.useBlindSchedule} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, useBlindSchedule: event.target.checked }))} />
-                                                            <span>Use blind schedule</span>
-                                                        </label>
-                                                        <label className="table-admin-field table-admin-field--toggle">
-                                                            <input type="checkbox" checked={adminOptionsDraft.revealAllShowdownHands} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, revealAllShowdownHands: event.target.checked }))} />
-                                                            <span>Reveal all hands when no more action is possible</span>
-                                                        </label>
-                                                        <label className="table-admin-field table-admin-field--toggle">
-                                                            <input type="checkbox" checked={adminOptionsDraft.runItTwiceEnabled} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, runItTwiceEnabled: event.target.checked }))} />
-                                                            <span>Run it twice on all-in showdowns before the river</span>
-                                                        </label>
-                                                    </div>
-
-                                                    <p className="muted-copy">Current buy-in window: {formatNumber(snapshot.buyInState.minRebuyAmount)} to {formatNumber(snapshot.buyInState.maxRebuyAmount)}.</p>
-
-                                                    {adminOptionsDraft.useBlindSchedule ? (
-                                                        <div className="table-admin-field table-admin-field--full table-admin-schedule">
-                                                            <div className="table-admin-schedule__header">
-                                                                <div>
-                                                                    <span>Blind schedule</span>
-                                                                    <small>Add one row per blind level. The final level stays in place after the schedule runs out.</small>
-                                                                </div>
-                                                                <button className="button button--secondary" type="button" onClick={handleAddBlindLevel} disabled={isMutating}>
-                                                                    Add level
-                                                                </button>
-                                                            </div>
-
-                                                            <div className="table-admin-schedule__rows">
-                                                                {adminOptionsDraft.blindLevels.map((level, index) => {
-                                                                    const rowValidation = blindScheduleValidation.rows[index] ?? {};
-                                                                    const rowErrors = Object.values(rowValidation).filter((value): value is string => Boolean(value));
-                                                                    const hasRowErrors = rowErrors.length > 0;
-
-                                                                    return (
-                                                                        <article key={`blind-level-${index + 1}`} className={["table-admin-schedule__row", hasRowErrors ? "table-admin-schedule__row--invalid" : ""].filter(Boolean).join(" ")}>
-                                                                            <div className="table-admin-schedule__row-header">
-                                                                                <strong>Level {index + 1}</strong>
-                                                                                <button className="button button--secondary table-admin-schedule__remove" type="button" onClick={() => handleRemoveBlindLevel(index)} disabled={isMutating || adminOptionsDraft.blindLevels.length === 1}>
-                                                                                    Remove
-                                                                                </button>
-                                                                            </div>
-
-                                                                            <div className="table-admin-schedule__inputs">
-                                                                                <label className="table-admin-field">
-                                                                                    <span>Small blind</span>
-                                                                                    <input
-                                                                                        className={["control-input", rowValidation.smallBlind ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
-                                                                                        type="number"
-                                                                                        min={1}
-                                                                                        step={1}
-                                                                                        value={level.smallBlind}
-                                                                                        onChange={(event) => updateBlindLevelDraft(index, "smallBlind", event.target.value)}
-                                                                                        aria-invalid={rowValidation.smallBlind ? true : undefined}
-                                                                                    />
-                                                                                </label>
-                                                                                <label className="table-admin-field">
-                                                                                    <span>Big blind</span>
-                                                                                    <input
-                                                                                        className={["control-input", rowValidation.bigBlind ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
-                                                                                        type="number"
-                                                                                        min={1}
-                                                                                        step={1}
-                                                                                        value={level.bigBlind}
-                                                                                        onChange={(event) => updateBlindLevelDraft(index, "bigBlind", event.target.value)}
-                                                                                        aria-invalid={rowValidation.bigBlind ? true : undefined}
-                                                                                    />
-                                                                                </label>
-                                                                                <label className="table-admin-field">
-                                                                                    <span>Ante</span>
-                                                                                    <input
-                                                                                        className={["control-input", rowValidation.ante ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
-                                                                                        type="number"
-                                                                                        min={0}
-                                                                                        step={1}
-                                                                                        value={level.ante}
-                                                                                        onChange={(event) => updateBlindLevelDraft(index, "ante", event.target.value)}
-                                                                                        placeholder="0"
-                                                                                        aria-invalid={rowValidation.ante ? true : undefined}
-                                                                                    />
-                                                                                </label>
-                                                                                <label className="table-admin-field">
-                                                                                    <span>Minutes</span>
-                                                                                    <input
-                                                                                        className={["control-input", rowValidation.durationMinutes ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
-                                                                                        type="number"
-                                                                                        min={1}
-                                                                                        step={1}
-                                                                                        value={level.durationMinutes}
-                                                                                        onChange={(event) => updateBlindLevelDraft(index, "durationMinutes", event.target.value)}
-                                                                                        aria-invalid={rowValidation.durationMinutes ? true : undefined}
-                                                                                    />
-                                                                                </label>
-                                                                            </div>
-
-                                                                            {hasRowErrors ? (
-                                                                                <ul className="table-admin-schedule__errors">
-                                                                                    {rowErrors.map((message) => (
-                                                                                        <li key={`${index + 1}-${message}`}>{message}</li>
-                                                                                    ))}
-                                                                                </ul>
-                                                                            ) : null}
-                                                                        </article>
-                                                                    );
-                                                                })}
-                                                            </div>
-
-                                                            {blindScheduleValidation.errors.length ? (
-                                                                <p className="table-admin-schedule__summary">Fix the highlighted blind levels before saving.</p>
-                                                            ) : null}
-                                                        </div>
-                                                    ) : null}
-
-                                                    <button className="button button--primary table-menu-drawer__button" type="button" onClick={() => void handleSaveAdminOptions()} disabled={isMutating || (adminOptionsDraft.useBlindSchedule && blindScheduleValidation.errors.length > 0)}>
-                                                        Save table options
-                                                    </button>
-                                                </section>
-
-                                                <section className="table-admin-card">
-                                                    <strong>Seat approvals</strong>
-                                                    {snapshot.pendingSeatRequests.length ? (
-                                                        <div className="table-admin-list">
-                                                            {snapshot.pendingSeatRequests.map((request) => (
-                                                                <article key={request.id} className="table-admin-list__item">
-                                                                    <div className="table-admin-list__meta">
-                                                                        <strong>{request.displayName}</strong>
-                                                                        <span>Seat {request.seatIndex + 1} · {formatNumber(request.requestedStack)}</span>
-                                                                        <input
-                                                                            className="control-input table-admin-list__input"
-                                                                            type="number"
-                                                                            min={1}
-                                                                            step={1}
-                                                                            value={seatApprovalDrafts[request.id] ?? String(request.requestedStack)}
-                                                                            onChange={(event) => setSeatApprovalDrafts((current) => ({ ...current, [request.id]: event.target.value }))}
-                                                                            placeholder="requested stack"
-                                                                        />
-                                                                    </div>
-                                                                    <div className="table-admin-list__actions">
-                                                                        <button className="button button--secondary" type="button" onClick={() => void handleSeatRequestDecision(request.id, false)} disabled={isMutating}>No</button>
-                                                                        <button className="button button--primary" type="button" onClick={() => void handleSeatRequestDecision(request.id, true, seatApprovalDrafts[request.id])} disabled={isMutating}>Yes</button>
-                                                                    </div>
-                                                                </article>
-                                                            ))}
-                                                        </div>
-                                                    ) : <p className="muted-copy">No seat approvals are waiting.</p>}
-                                                </section>
-
-                                                <section className="table-admin-card">
-                                                    <strong>Rebuy approvals</strong>
-                                                    {snapshot.pendingRebuyRequests.length ? (
-                                                        <div className="table-admin-list">
-                                                            {snapshot.pendingRebuyRequests.map((request) => (
-                                                                <article key={request.id} className="table-admin-list__item">
-                                                                    <div className="table-admin-list__meta">
-                                                                        <strong>{request.displayName}</strong>
-                                                                        <span>{formatNumber(request.amount)}</span>
-                                                                        <input
-                                                                            className="control-input table-admin-list__input"
-                                                                            type="number"
-                                                                            min={snapshot.buyInState.minRebuyAmount}
-                                                                            max={snapshot.buyInState.maxRebuyAmount}
-                                                                            step={1}
-                                                                            value={rebuyApprovalDrafts[request.id] ?? String(request.amount)}
-                                                                            onChange={(event) => setRebuyApprovalDrafts((current) => ({ ...current, [request.id]: event.target.value }))}
-                                                                            placeholder="rebuy amount"
-                                                                        />
-                                                                    </div>
-                                                                    <div className="table-admin-list__actions">
-                                                                        <button className="button button--secondary" type="button" onClick={() => void handleRebuyRequestDecision(request.id, false)} disabled={isMutating}>No</button>
-                                                                        <button className="button button--primary" type="button" onClick={() => void handleRebuyRequestDecision(request.id, true, rebuyApprovalDrafts[request.id])} disabled={isMutating}>Yes</button>
-                                                                    </div>
-                                                                </article>
-                                                            ))}
-                                                        </div>
-                                                    ) : <p className="muted-copy">No rebuy approvals are waiting.</p>}
-                                                </section>
-
-                                                <section className="table-admin-card table-admin-card--wide">
-                                                    <strong>Players</strong>
-                                                    <div className="table-admin-list">
-                                                        {snapshot.players.map((player) => {
-                                                            const isBotPlayer = isBotAccountId(player.accountId);
-
-                                                            return (
-                                                                <article key={player.accountId} className="table-admin-list__item">
-                                                                    <div>
-                                                                        <strong>{player.displayName}</strong>
-                                                                        <span>Seat {player.seatIndex + 1} · Stack {formatNumber(player.stack)}{isBotPlayer ? " · Bot" : ""}</span>
-                                                                    </div>
-                                                                    {player.accountId !== snapshot.adminAccountId ? (
-                                                                        <button className="button button--danger" type="button" onClick={() => void handleRemovePlayer(player.accountId)} disabled={isMutating || Boolean(currentHand?.playerCardCounts[player.accountId])}>
-                                                                            {isBotPlayer ? "Remove bot" : "Remove"}
-                                                                        </button>
-                                                                    ) : <span className="chip-pill">Admin</span>}
-                                                                </article>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                </section>
-                                            </div>
-                                        </div>
-                                    ) : null}
-                                </div>
-                            ) : null}
-                        </div>
+                        {!isPhoneViewport ? (
+                            <div className="table-menu-cluster">
+                                {renderTableMenuButtons()}
+                                {tableMenuDrawer}
+                            </div>
+                        ) : null}
 
                         <VictoryConfettiCanvas active={showVictoryConfetti} />
 
-                        <div className="table-status-rack">
-                            {snapshot?.status === "paused" ? <span className="chip-pill">Paused</span> : null}
-                            {isArchivedRoom ? <span className="chip-pill">Archived replay</span> : null}
-                            <span className="chip-pill">Hand {currentHand?.handNumber ?? latestCompletedHand?.handNumber ?? snapshot?.handCount ?? 0}</span>
-                            {!isArchivedRoom && snapshot?.blindState.nextLevel && blindCountdownMs !== null ? <span className="chip-pill chip-pill--timer">Next {formatBlindLevelCompact(snapshot.blindState.nextLevel)} in {formatClockCountdown(blindCountdownMs)}</span> : null}
-                            {turnMetrics ? <span className="chip-pill chip-pill--timer">{turnMetrics.kind === "run-it-twice" ? "Vote" : "Turn"} {formatTurnSeconds(turnMetrics.mainSecondsRemaining)}</span> : null}
-                            {turnMetrics && currentActor ? <span className="chip-pill">Action {currentActor.displayName}</span> : null}
-                            {turnMetrics?.kind === "run-it-twice" ? <span className="chip-pill">Run it twice vote</span> : null}
-                            {isAdmin ? (
-                                <>
-                                    <button className="table-status-rack__control" type="button" onClick={() => void handlePauseToggle()} disabled={isMutating}>
-                                        {snapshot?.status === "paused" ? "Resume" : "Pause"}
-                                    </button>
-                                    <button className="table-status-rack__control table-status-rack__control--danger" type="button" onClick={() => void handleStopTable()} disabled={isMutating || Boolean(currentHand)}>
-                                        Stop
-                                    </button>
-                                    {canArchiveStoppedTable ? (
-                                        <button className="table-status-rack__control" type="button" onClick={() => void handleArchiveTable()} disabled={isMutating}>
-                                            Archive
-                                        </button>
-                                    ) : null}
-                                </>
-                            ) : null}
-                        </div>
+                        {!isPhoneViewport ? <div className="table-status-rack">{renderTableStatusRackContent()}</div> : null}
 
                         <div className="table-center">
                             <span className="table-center__label">{currentHand ? `Hand ${currentHand.handNumber} · ${formatStreet(currentHand.street)}` : latestCompletedHand ? "" : isArchivedRoom ? "Archived table" : "Waiting for players"}</span>
@@ -3102,6 +3229,7 @@ export function RoomClient({
                             const heroGestureEmoji = seat.isHero ? heroGesture?.emoji ?? "" : "";
                             const showSeatMediaTile = seat.isHero ? true : Boolean(mediaParticipant) && (!isPhoneViewport || isSpectating);
                             const hasVisibleRevealedCard = Boolean(seat.revealedCards?.some((card) => card !== null));
+                            const shouldRenderSeatCards = seatCards.length > 0 && (!isPhoneViewport || seat.isHero || hasVisibleRevealedCard);
                             const showHeroNotReadyNotice = Boolean(!isArchivedRoom && seat.isHero && heroPlayer && !heroPlayer.isReady && !heroPlayer.isSittingOut);
 
                             return (
@@ -3117,6 +3245,7 @@ export function RoomClient({
                                         seat.isInactive ? "table-seat--inactive" : "",
                                         seat.isOpen ? "table-seat--open" : "",
                                         seat.isWinner ? "table-seat--winner" : "",
+                                        seat.actionBubble && seat.contributionLabel ? "table-seat--dual-pills" : "",
                                         hasVisibleRevealedCard ? "table-seat--revealed" : "",
                                         showSeatMediaTile ? "table-seat--with-media" : "",
                                         isSpectating && showSeatMediaTile ? "table-seat--spectator-media" : "",
@@ -3163,7 +3292,7 @@ export function RoomClient({
                                             </div>
 
                                             <div className="table-seat__footer">
-                                                {seat.statusLabel ? <span className={`table-seat__state table-seat__state--${seat.stateTone}`}>{seat.statusLabel}</span> : null}
+                                                {seat.statusLabel && (!isPhoneViewport || Boolean(seat.pendingRequest)) ? <span className={`table-seat__state table-seat__state--${seat.stateTone}`}>{seat.statusLabel}</span> : null}
                                                 <span className="table-seat__seat-label">Seat {seat.seatIndex + 1}</span>
                                             </div>
 
@@ -3233,8 +3362,8 @@ export function RoomClient({
                                                                         <div className="table-seat__emoji-picker">
                                                                             <EmojiPicker
                                                                                 data={emojiData}
-                                                                                emojiButtonSize={34}
-                                                                                emojiSize={20}
+                                                                                emojiButtonSize={isPhoneViewport ? 24 : 34}
+                                                                                emojiSize={isPhoneViewport ? 14 : 20}
                                                                                 maxFrequentRows={1}
                                                                                 navPosition="bottom"
                                                                                 onEmojiSelect={(selection: EmojiPickerSelection) => {
@@ -3244,7 +3373,7 @@ export function RoomClient({
                                                                                         setGestureInput(nextEmoji);
                                                                                     }
                                                                                 }}
-                                                                                perLine={8}
+                                                                                perLine={isPhoneViewport ? 7 : 8}
                                                                                 previewPosition="none"
                                                                                 searchPosition="sticky"
                                                                                 set="native"
@@ -3362,7 +3491,7 @@ export function RoomClient({
                                                 </div>
                                             </div>
 
-                                            {seatCards.length > 0 ? (
+                                            {shouldRenderSeatCards ? (
                                                 <div className={[
                                                     "table-seat__cards",
                                                     hasVisibleRevealedCard ? "table-seat__cards--revealed" : "",
@@ -3409,28 +3538,39 @@ export function RoomClient({
                                 ].filter(Boolean).join(" ")}>
                                     {renderActionPanel("inline")}
                                     <button className="button button--primary table-mobile-actions__toggle" type="button" onClick={() => setIsMobileActionMenuOpen(true)}>
-                                        {heroActionState?.canAct ? "Open actions" : "Table actions"}
+                                        <span className="table-mobile-actions__label">
+                                            <span>{heroActionState?.canAct ? "Open" : "Table"}</span>
+                                            <span>Actions</span>
+                                        </span>
                                     </button>
                                 </div>
                             )}
 
-                            <section className={["table-hero-stats-bar", heroPlayer ? "" : "table-hero-stats-bar--empty"].filter(Boolean).join(" ")}>
-                                {heroPlayer ? (
-                                    <>
-                                        <div className="table-hero-stats-bar__item"><strong>Stack</strong><span>{formatNumber(heroDisplayedStack)}</span></div>
-                                        <div className="table-hero-stats-bar__item"><strong>Committed</strong><span>{formatNumber(heroContribution)}</span></div>
-                                        <div className="table-hero-stats-bar__item"><strong>Bank</strong><span>{tableSnapshot?.turnState.timeBankSeconds === null ? "Off" : formatTurnSeconds(Math.ceil(heroTimeBankMs / 1000))}</span></div>
-                                        <div className="table-hero-stats-bar__item"><strong>Bought in</strong><span>{formatNumber(heroBuyInTotal)}</span></div>
-                                        <div className="table-hero-stats-bar__item"><strong>Won</strong><span>{formatNumber(heroHandsWonCount)}</span></div>
-                                        <div className="table-hero-stats-bar__item"><strong>Rebuys</strong><span>{formatNumber(heroRebuyCount)}</span></div>
-                                    </>
-                                ) : (
-                                    <p className="table-hero-stats-bar__empty-copy">Take a seat to track your stack, bank, buy-in, wins, and rebuys.</p>
-                                )}
-                            </section>
+                            {!isPhoneViewport ? heroStatsBar : null}
                         </div>
                     </div>
                 </section>
+
+                {isPhoneViewport ? (
+                    <section className="table-mobile-overview">
+                        {heroStatsBar}
+
+                        <div className="table-mobile-controls">
+                            <div className="table-mobile-controls__row">
+                                {renderTableMenuButtons()}
+                            </div>
+                            {tableMenuDrawer}
+                        </div>
+
+                        <div className="table-status-rack table-status-rack--mobile">
+                            {renderTableStatusRackContent()}
+                        </div>
+
+                        <div className="table-mobile-meta">
+                            {renderRoomMetaPills()}
+                        </div>
+                    </section>
+                ) : null}
 
                 <section className="table-log-panel table-log-panel--below">
                     <div className="table-activity-grid">
@@ -4130,9 +4270,10 @@ function buildTableSeats(
         runoutEquityLeaderAccountIds?: ReadonlySet<string>;
         runoutEquityTrendByAccount?: ReadonlyMap<string, EquityTrend>;
     },
+    usePhoneLayout = false,
 ): TableSeatView[] {
     const totalSeats = clampSeatCount(snapshot?.maxPlayers ?? 6);
-    const layout = TABLE_LAYOUTS[totalSeats]!;
+    const layout = (usePhoneLayout ? PHONE_TABLE_LAYOUTS : TABLE_LAYOUTS)[totalSeats] ?? TABLE_LAYOUTS[totalSeats]!;
     const anchorSeat = typeof heroSeatIndex === "number" ? heroSeatIndex : 0;
     const seatOrder = Array.from({ length: totalSeats }, (_, index) => (anchorSeat + index) % totalSeats);
     const isArchivedSnapshot = snapshot?.status === "archived";
