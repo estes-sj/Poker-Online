@@ -5000,8 +5000,16 @@ button {
 }
 
 .chip-pill--timer {
+  display: inline-flex;
+  align-items: center;
   border-color: rgba(118, 238, 165, 0.18);
   color: #c9ffd8;
+  font-variant-numeric: tabular-nums;
+}
+
+.chip-pill--turn-timer {
+  justify-content: center;
+  min-width: 9ch;
 }
 
 .table-seat__timer {

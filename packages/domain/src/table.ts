@@ -152,6 +152,7 @@ export interface StartHandOptions {
   now?: Date;
   random?: () => number;
   deck?: Card[];
+  elapsedBlindMinutes?: number;
 }
 
 export interface FinishHandOptions {
@@ -490,7 +491,7 @@ export function startHand(table: TableState, options: StartHandOptions = {}): Ta
   }
 
   const sessionStartedAt = table.sessionStartedAt ?? now.toISOString();
-  const elapsedMinutes = Math.floor((now.getTime() - new Date(sessionStartedAt).getTime()) / 60000);
+  const elapsedMinutes = options.elapsedBlindMinutes ?? Math.floor((now.getTime() - new Date(sessionStartedAt).getTime()) / 60000);
   const blindLevel = getBlindLevelAtElapsedMinutes(table.blindSchedule, elapsedMinutes);
 
   const dealerSeat = getNextDealerSeat(table.buttonSeat, activePlayers);

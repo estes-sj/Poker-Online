@@ -2352,9 +2352,20 @@ export class PrismaRoomRegistry implements RoomRegistry {
     }
 
     let table: TableState;
+    const overdueBlindMs = getBlindClockOverrunMs(runtimeState, now.getTime());
 
     try {
-      table = startHand(existingTable, { now });
+      table = startHand(existingTable, {
+        now,
+        elapsedBlindMinutes: getElapsedBlindMinutes(runtimeState, now.getTime()),
+      });
+
+      if (overdueBlindMs > 0) {
+        table = {
+          ...table,
+          sessionStartedAt: shiftIsoByMs(table.sessionStartedAt, overdueBlindMs),
+        };
+      }
     } catch (error) {
       if (bustedAccountIds.length > 0) {
         await this.onRoomUpdated?.(input.slug);
@@ -4632,14 +4643,12 @@ function buildBlindState(runtimeState: PersistedRoomRuntimeState): RoomBlindStat
   }
 
   const nowMs = Date.now();
-  const currentPauseMs = runtimeState.pauseState.pausedAt ? Math.max(0, nowMs - Date.parse(runtimeState.pauseState.pausedAt)) : 0;
-  const elapsedActiveMs = Math.max(0, nowMs - sessionStartedAtMs - runtimeState.pauseState.totalPausedMs - currentPauseMs);
-  const elapsedMinutes = Math.floor(elapsedActiveMs / 60000);
-  const currentLevel = getBlindLevelAtElapsedMinutes(schedule, elapsedMinutes);
-  const currentLevelIndex = Math.max(0, schedule.findIndex((level) => level.level === currentLevel.level));
-  const nextLevel = currentLevelIndex >= 0 && currentLevelIndex + 1 < schedule.length ? schedule[currentLevelIndex + 1]! : null;
+  const elapsedActiveMs = getElapsedBlindMs(runtimeState, nowMs);
+  const currentLevel = getDisplayedBlindLevel(runtimeState, schedule) ?? schedule[0] ?? null;
+  const currentLevelIndex = Math.max(0, getBlindLevelIndex(schedule, currentLevel));
+  const nextLevel = currentLevelIndex + 1 < schedule.length ? schedule[currentLevelIndex + 1]! : null;
   const nextLevelInMs = nextLevel
-    ? Math.max(0, schedule.slice(0, currentLevelIndex + 1).reduce((total, level) => total + level.durationMinutes * 60_000, 0) - elapsedActiveMs)
+    ? Math.max(0, getBlindLevelEndMs(schedule, currentLevelIndex) - elapsedActiveMs)
     : null;
 
   return {
@@ -4651,6 +4660,86 @@ function buildBlindState(runtimeState: PersistedRoomRuntimeState): RoomBlindStat
     snapshotAt,
     pausedAt: runtimeState.pauseState.pausedAt,
   };
+}
+
+function getElapsedBlindMinutes(runtimeState: PersistedRoomRuntimeState, nowMs: number): number {
+  return Math.floor(getElapsedBlindMs(runtimeState, nowMs) / 60000);
+}
+
+function getDisplayedBlindLevel(runtimeState: PersistedRoomRuntimeState, schedule: BlindLevel[]): BlindLevel | null {
+  if (runtimeState.table.currentHand?.blindLevel) {
+    return runtimeState.table.currentHand.blindLevel;
+  }
+
+  const mostRecentAppliedLevel = runtimeState.handHistory.find((hand) => hand.blindLevel)?.blindLevel ?? null;
+
+  if (mostRecentAppliedLevel) {
+    return mostRecentAppliedLevel;
+  }
+
+  return schedule[0] ?? null;
+}
+
+function getBlindLevelIndex(schedule: BlindLevel[], targetLevel: BlindLevel | null): number {
+  if (!targetLevel) {
+    return -1;
+  }
+
+  const byLevelNumber = schedule.findIndex((level) => level.level === targetLevel.level);
+
+  if (byLevelNumber >= 0) {
+    return byLevelNumber;
+  }
+
+  return schedule.findIndex((level) => (
+    level.smallBlind === targetLevel.smallBlind
+    && level.bigBlind === targetLevel.bigBlind
+    && (level.ante ?? 0) === (targetLevel.ante ?? 0)
+    && level.durationMinutes === targetLevel.durationMinutes
+  ));
+}
+
+function getBlindLevelEndMs(schedule: BlindLevel[], levelIndex: number): number {
+  return schedule
+    .slice(0, levelIndex + 1)
+    .reduce((total, level) => total + level.durationMinutes * 60_000, 0);
+}
+
+function getElapsedBlindMs(runtimeState: PersistedRoomRuntimeState, nowMs: number): number {
+  const rawElapsedMs = getRawElapsedBlindMs(runtimeState, nowMs);
+  const schedule = runtimeState.table.blindSchedule;
+
+  if (schedule.length === 0) {
+    return rawElapsedMs;
+  }
+
+  const currentLevel = getDisplayedBlindLevel(runtimeState, schedule);
+  const currentLevelIndex = Math.max(0, getBlindLevelIndex(schedule, currentLevel));
+
+  return Math.min(rawElapsedMs, getBlindLevelEndMs(schedule, currentLevelIndex));
+}
+
+function getBlindClockOverrunMs(runtimeState: PersistedRoomRuntimeState, nowMs: number): number {
+  return Math.max(0, getRawElapsedBlindMs(runtimeState, nowMs) - getElapsedBlindMs(runtimeState, nowMs));
+}
+
+function getRawElapsedBlindMs(runtimeState: PersistedRoomRuntimeState, nowMs: number): number {
+  const sessionStartedAt = runtimeState.table.sessionStartedAt;
+
+  if (!sessionStartedAt) {
+    return 0;
+  }
+
+  const sessionStartedAtMs = Date.parse(sessionStartedAt);
+
+  if (Number.isNaN(sessionStartedAtMs)) {
+    return 0;
+  }
+
+  const pausedAtMs = runtimeState.pauseState.pausedAt ? Date.parse(runtimeState.pauseState.pausedAt) : Number.NaN;
+  const currentPauseMs = Number.isNaN(pausedAtMs) ? 0 : Math.max(0, nowMs - pausedAtMs);
+
+  return Math.max(0, nowMs - sessionStartedAtMs - runtimeState.pauseState.totalPausedMs - currentPauseMs);
 }
 
 function applyApprovedSeat(

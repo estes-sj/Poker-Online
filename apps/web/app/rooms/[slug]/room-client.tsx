@@ -213,8 +213,8 @@ const TABLE_LAYOUTS: Record<number, ReadonlyArray<{ left: number; top: number }>
     ],
     8: [
         { left: 50, top: 84 },
-        { left: 14, top: 52 },
         { left: 28, top: 78 },
+        { left: 14, top: 52 },
         { left: 24, top: 16 },
         { left: 50, top: 8 },
         { left: 76, top: 16 },
@@ -234,8 +234,8 @@ const TABLE_LAYOUTS: Record<number, ReadonlyArray<{ left: number; top: number }>
     ],
     10: [
         { left: 50, top: 84 },
-        { left: 16, top: 62 },
         { left: 30, top: 78 },
+        { left: 16, top: 62 },
         { left: 12, top: 34 },
         { left: 26, top: 14 },
         { left: 50, top: 8 },
@@ -1239,7 +1239,7 @@ export function RoomClient({
                 {isArchivedRoom ? <span className="chip-pill">Archived replay</span> : null}
                 <span className="chip-pill">Hand {currentHand?.handNumber ?? latestCompletedHand?.handNumber ?? snapshot?.handCount ?? 0}</span>
                 {!isArchivedRoom && snapshot?.blindState.nextLevel && blindCountdownMs !== null ? <span className="chip-pill chip-pill--timer">Next {formatBlindLevelCompact(snapshot.blindState.nextLevel)} in {formatClockCountdown(blindCountdownMs)}</span> : null}
-                {turnMetrics ? <span className="chip-pill chip-pill--timer">{turnMetrics.kind === "run-it-twice" ? "Vote" : "Turn"} {formatTurnSeconds(turnMetrics.mainSecondsRemaining)}</span> : null}
+                {turnMetrics ? <span className="chip-pill chip-pill--timer chip-pill--turn-timer">{turnMetrics.kind === "run-it-twice" ? "Vote" : "Turn"} {formatTurnSeconds(turnMetrics.mainSecondsRemaining)}</span> : null}
                 {turnMetrics && currentActor ? <span className="chip-pill">Action {currentActor.displayName}</span> : null}
                 {turnMetrics?.kind === "run-it-twice" ? <span className="chip-pill">Run it twice vote</span> : null}
                 {isAdmin ? (

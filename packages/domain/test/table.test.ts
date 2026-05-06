@@ -136,6 +136,40 @@ describe("table start", () => {
     expect(table.currentHand?.dealerSeat).toBe(3);
   });
 
+  it("uses explicit active blind minutes when starting a hand", () => {
+    let table = createTable({
+      slug: "paused-blinds",
+      name: "Paused Blinds",
+      adminAccountId: "admin-1",
+      visibility: "private",
+      maxPlayers: 6,
+      startingStack: 10_000,
+      blindSchedule,
+      autoStartNextHand: false,
+      autoStartDelaySeconds: 0,
+      passwordProtected: false,
+    }, new Date("2026-04-09T20:00:00.000Z"));
+
+    table = seatPlayer(table, { accountId: "a", displayName: "A", seatIndex: 0 });
+    table = seatPlayer(table, { accountId: "b", displayName: "B", seatIndex: 1 });
+    table = seatPlayer(table, { accountId: "c", displayName: "C", seatIndex: 2 });
+    table = setPlayerReady(table, "a", true);
+    table = setPlayerReady(table, "b", true);
+    table = setPlayerReady(table, "c", true);
+    table = startHand(table, {
+      now: new Date("2026-04-09T20:50:00.000Z"),
+      elapsedBlindMinutes: 10,
+      random: () => 0.42,
+    });
+
+    expect(table.currentHand?.blindLevel.level).toBe(1);
+    expect(table.currentHand?.smallBlindSeat).toBe(1);
+    expect(table.currentHand?.bigBlindSeat).toBe(2);
+    expect(table.currentHand?.pot).toBe(300);
+    expect(table.players.find((player) => player.accountId === "b")?.stack).toBe(9_900);
+    expect(table.players.find((player) => player.accountId === "c")?.stack).toBe(9_800);
+  });
+
   it("excludes disconnected players from the next hand", () => {
     let table = createTable({
       slug: "presence-check",
