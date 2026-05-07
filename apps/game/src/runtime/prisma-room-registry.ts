@@ -2374,9 +2374,10 @@ export class PrismaRoomRegistry implements RoomRegistry {
       throw error;
     }
 
-    const nextRuntimeState = syncRuntimeState(runtimeState, table, { now });
+    let persistedRuntimeState = syncRuntimeState(runtimeState, table, { now });
 
-    await this.database.$transaction(async (transaction) => {
+    try {
+      await this.database.$transaction(async (transaction) => {
       let session = await transaction.tableSession.findFirst({
         where: {
           roomId: room.id,
@@ -2395,36 +2396,69 @@ export class PrismaRoomRegistry implements RoomRegistry {
         });
       }
 
-      const hand = table.currentHand;
+        const latestPersistedHand = await transaction.hand.findFirst({
+          where: {
+            sessionId: session.id,
+          },
+          orderBy: { handNumber: "desc" },
+        });
 
-      if (!hand) {
-        throw new Error("A hand was expected after starting the table.");
+        const nextHandNumber = Math.max(
+          table.handCount,
+          latestPersistedHand?.handNumber ?? 0,
+        );
+        const persistedTable = nextHandNumber === table.handCount
+          ? table
+          : renumberStartedHand(table, nextHandNumber + 1);
+
+        persistedRuntimeState = persistedTable === table
+          ? persistedRuntimeState
+          : syncRuntimeState(runtimeState, persistedTable, { now });
+
+        const hand = persistedTable.currentHand;
+
+        if (!hand) {
+          throw new Error("A hand was expected after starting the table.");
+        }
+
+        await transaction.hand.create({
+          data: {
+            sessionId: session.id,
+            handNumber: hand.handNumber,
+            dealerSeat: hand.dealerSeat,
+            smallBlindSeat: hand.smallBlindSeat,
+            bigBlindSeat: hand.bigBlindSeat,
+            smallBlind: hand.blindLevel.smallBlind,
+            bigBlind: hand.blindLevel.bigBlind,
+            ante: hand.blindLevel.ante ?? 0,
+            street: "PREFLOP",
+            boardCards: toJsonValue(hand.board),
+            startedAt: new Date(hand.startedAt),
+          },
+        });
+
+        await transaction.room.update({
+          where: { id: room.id },
+          data: this.roomUpdatePayload(persistedRuntimeState),
+        });
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError
+        && error.code === "P2002"
+      ) {
+        const latestSnapshot = await this.getRoomSnapshot(input.slug, input.accountId);
+
+        if (latestSnapshot.currentHand) {
+          return latestSnapshot;
+        }
       }
 
-      await transaction.hand.create({
-        data: {
-          sessionId: session.id,
-          handNumber: hand.handNumber,
-          dealerSeat: hand.dealerSeat,
-          smallBlindSeat: hand.smallBlindSeat,
-          bigBlindSeat: hand.bigBlindSeat,
-          smallBlind: hand.blindLevel.smallBlind,
-          bigBlind: hand.blindLevel.bigBlind,
-          ante: hand.blindLevel.ante ?? 0,
-          street: "PREFLOP",
-          boardCards: toJsonValue(hand.board),
-          startedAt: new Date(hand.startedAt),
-        },
-      });
-
-      await transaction.room.update({
-        where: { id: room.id },
-        data: this.roomUpdatePayload(nextRuntimeState),
-      });
-    });
+      throw error;
+    }
 
     await this.onRoomUpdated?.(input.slug);
-    return this.toSnapshot(nextRuntimeState, input.accountId);
+    return this.toSnapshot(persistedRuntimeState, input.accountId);
   }
 
   async actOnHand(input: RoomActionRequest): Promise<RoomSnapshot> {
@@ -4609,6 +4643,21 @@ function shiftIsoByMs(value: string | null, offsetMs: number): string | null {
   }
 
   return new Date(parsed + offsetMs).toISOString();
+}
+
+function renumberStartedHand(table: TableState, handNumber: number): TableState {
+  if (!table.currentHand) {
+    return table;
+  }
+
+  return {
+    ...table,
+    handCount: handNumber,
+    currentHand: {
+      ...table.currentHand,
+      handNumber,
+    },
+  };
 }
 
 function buildBlindState(runtimeState: PersistedRoomRuntimeState): RoomBlindState {
