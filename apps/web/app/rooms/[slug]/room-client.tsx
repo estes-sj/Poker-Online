@@ -78,6 +78,18 @@ type VictoryConfettiParticle = {
     opacity: number;
 };
 
+type QueuedHeroAction =
+    | { type: "check_or_fold" }
+    | { type: "check" }
+    | { type: "fold" }
+    | { type: "call"; amount: number };
+
+type HandMarkerSeats = {
+    dealerSeat: number | null;
+    smallBlindSeat: number | null;
+    bigBlindSeat: number | null;
+};
+
 function VictoryConfettiCanvas({ active }: { active: boolean }) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -533,6 +545,13 @@ interface ActionPadDragState {
     lastClientY: number;
 }
 
+interface HeroChatToast {
+    id: string;
+    content: string;
+}
+
+type ChatMediaActionState = "idle" | "connecting" | "microphone" | "camera";
+
 const DEFAULT_ACTION_PAD_OFFSET: ActionPadOffset = {
     x: 0,
     y: 0,
@@ -563,9 +582,12 @@ export function RoomClient({
     const [isMutating, setIsMutating] = useState(false);
     const [nextHandCountdown, setNextHandCountdown] = useState<string | null>(null);
     const [chatDraft, setChatDraft] = useState("");
+    const [isChatExpanded, setIsChatExpanded] = useState(false);
+    const [isChatComposerOpen, setIsChatComposerOpen] = useState(false);
     const [openMenuPanel, setOpenMenuPanel] = useState<null | "invite" | "seat" | "media" | "rebuy" | "admin">(null);
     const [isReactionMenuOpen, setIsReactionMenuOpen] = useState(false);
     const [isSessionLedgerOpen, setIsSessionLedgerOpen] = useState(false);
+    const [sessionLogView, setSessionLogView] = useState<"log" | "ledger">("ledger");
     const [isEngineInfoOpen, setIsEngineInfoOpen] = useState(false);
     const [isHouseRulesOpen, setIsHouseRulesOpen] = useState(false);
     const [isPhoneViewport, setIsPhoneViewport] = useState(false);
@@ -575,7 +597,7 @@ export function RoomClient({
     const [seatRequestStack, setSeatRequestStack] = useState("");
     const [botDisplayName, setBotDisplayName] = useState("");
     const [rebuyAmount, setRebuyAmount] = useState("");
-    const [preselectedHeroAction, setPreselectedHeroAction] = useState<null | "check_or_fold">(null);
+    const [preselectedHeroAction, setPreselectedHeroAction] = useState<QueuedHeroAction | null>(null);
     const [seatRequestPrompt, setSeatRequestPrompt] = useState<SeatRequestPromptState | null>(null);
     const [requestNoticeModal, setRequestNoticeModal] = useState<RequestNoticeModalState | null>(null);
     const [pendingAuthAction, setPendingAuthAction] = useState<PendingAuthAction | null>(null);
@@ -594,13 +616,23 @@ export function RoomClient({
     const [tablePovSeatIndex, setTablePovSeatIndex] = useState<number | null>(() => initialSnapshot?.players.find((player) => player.accountId === initialAccountId)?.seatIndex ?? null);
     const [turnClockNow, setTurnClockNow] = useState(() => getSnapshotClockMs(initialSnapshot));
     const [archivedReplayStartedAt, setArchivedReplayStartedAt] = useState<number | null>(null);
+    const [lastKnownHandMarkerSeats, setLastKnownHandMarkerSeats] = useState<HandMarkerSeats>(() => ({
+        dealerSeat: initialSnapshot?.currentHand?.dealerSeat ?? null,
+        smallBlindSeat: initialSnapshot?.currentHand?.smallBlindSeat ?? null,
+        bigBlindSeat: initialSnapshot?.currentHand?.bigBlindSeat ?? null,
+    }));
+    const [heroChatToast, setHeroChatToast] = useState<HeroChatToast | null>(null);
+    const [chatMediaActionState, setChatMediaActionState] = useState<ChatMediaActionState>("idle");
     const [runoutEquityState, setRunoutEquityState] = useState<RunoutEquityViewState>(createEmptyRunoutEquityViewState);
     const [actionPadOffset, setActionPadOffset] = useState<ActionPadOffset>(DEFAULT_ACTION_PAD_OFFSET);
     const [dimActionPadWhenIdle, setDimActionPadWhenIdle] = useState(true);
     const [isActionPadDragging, setIsActionPadDragging] = useState(false);
+    const [actionPanelScreen, setActionPanelScreen] = useState<"buttons" | "betControl">("buttons");
     const reconnectTimerRef = useRef<number | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
     const chatInputRef = useRef<HTMLInputElement | null>(null);
+    const tableChatOverlayRef = useRef<HTMLElement | null>(null);
+    const tableMenuShellRef = useRef<HTMLDivElement | null>(null);
     const actionPadRef = useRef<HTMLElement | null>(null);
     const actionPadDragStateRef = useRef<ActionPadDragState | null>(null);
     const autoActionRef = useRef<string | null>(null);
@@ -778,6 +810,8 @@ export function RoomClient({
         }
 
         stopActionPadDrag();
+        setIsChatExpanded(false);
+        setIsChatComposerOpen(false);
     }, [isPhoneViewport]);
 
     useEffect(() => {
@@ -1052,6 +1086,51 @@ export function RoomClient({
         && runItTwicePrompt?.eligibleAccountIds.includes(heroPlayer.accountId)
         && !heroRunItTwiceResponse,
     );
+
+    useEffect(() => {
+        if (!currentHand) {
+            return;
+        }
+
+        setLastKnownHandMarkerSeats({
+            dealerSeat: currentHand.dealerSeat,
+            smallBlindSeat: currentHand.smallBlindSeat,
+            bigBlindSeat: currentHand.bigBlindSeat,
+        });
+    }, [currentHand?.dealerSeat, currentHand?.smallBlindSeat, currentHand?.bigBlindSeat, currentHand?.id]);
+
+    useEffect(() => {
+        if (!preselectedHeroAction) {
+            return;
+        }
+
+        if (!currentHand || !heroInHand || heroCanRespondToRunItTwice || !heroActionState || heroActionState.hasFolded || heroActionState.isAllIn) {
+            setPreselectedHeroAction(null);
+            autoActionRef.current = null;
+            return;
+        }
+
+        if (!heroActionState.canAct) {
+            const canKeepQueuedAction = preselectedHeroAction.type === "check_or_fold"
+                || preselectedHeroAction.type === "fold"
+                || (preselectedHeroAction.type === "check" && heroActionState.callAmount === 0)
+                || (preselectedHeroAction.type === "call"
+                    && heroActionState.allowedActions.includes("call")
+                    && heroActionState.callAmount === preselectedHeroAction.amount);
+
+            if (canKeepQueuedAction) {
+                return;
+            }
+        }
+
+        if (resolveQueuedHeroAction(preselectedHeroAction, heroActionState)) {
+            return;
+        }
+
+        setPreselectedHeroAction(null);
+        autoActionRef.current = null;
+    }, [currentHand, heroActionState, heroCanRespondToRunItTwice, heroInHand, preselectedHeroAction]);
+
     const viewerHasRoomAccess = Boolean(snapshot && (!snapshot.passwordProtected || snapshot.viewerHasRoomAccess));
     const isProtectedRoomLocked = Boolean(!demoMode && snapshot?.passwordProtected && !viewerHasRoomAccess);
     const canJoinProtectedRoom = Boolean(snapshot && snapshot.passwordProtected && !viewerHasRoomAccess);
@@ -1130,6 +1209,7 @@ export function RoomClient({
     const tableSeats = buildTableSeats(tableSnapshot, tablePovSeatIndex ?? heroPlayer?.seatIndex, accountId, Boolean(heroPlayer), {
         suppressWinnerHighlights: isAllInRunoutAnimating,
         completedHandReveals: archivedReplayRevealedCards ?? runoutRevealedHoleCards,
+        markerSeats: lastKnownHandMarkerSeats,
         pendingRunoutWinners,
         runoutHandLabelByAccount,
         runoutWinPercentByAccount: runoutEquityState.percentByAccount,
@@ -1171,10 +1251,27 @@ export function RoomClient({
     const tableMenuItems = [
         { id: "seat", label: "Seat" },
         ...(canShowRebuyMenu ? [{ id: "rebuy", label: "Rebuy" } as const] : []),
-        { id: "invite", label: "Invite" },
-        { id: "media", label: "Media" },
         ...(isAdmin ? [{ id: "admin", label: "Admin" } as const] : []),
     ] as const;
+
+    useEffect(() => {
+        const canOpenWagerControl = Boolean(
+            heroActionState?.canAct
+            && (heroActionState.allowedActions.includes("bet") || heroActionState.allowedActions.includes("raise")),
+        );
+
+        if (!canOpenWagerControl || heroCanRespondToRunItTwice) {
+            setActionPanelScreen("buttons");
+        }
+    }, [
+        actionPanelScreen,
+        heroActionState?.canAct,
+        heroActionState?.allowedActions,
+        heroActionState?.minRaiseTo,
+        heroActionState?.maxRaiseTo,
+        heroCanRespondToRunItTwice,
+        snapshot?.currentHand?.handNumber,
+    ]);
 
     function renderRoomMetaPills() {
         return (
@@ -1197,20 +1294,15 @@ export function RoomClient({
         );
     }
 
+    function openSessionActivityModal(nextView: "log" | "ledger" = "ledger") {
+        setSessionLogView(nextView);
+        setIsSessionLedgerOpen(true);
+        setOpenMenuPanel(null);
+    }
+
     function renderTableMenuButtons() {
         return (
             <>
-                <button
-                    className={[
-                        "table-menu-cluster__button",
-                        isSessionLedgerOpen ? "table-menu-cluster__button--active" : "",
-                    ].filter(Boolean).join(" ")}
-                    type="button"
-                    onClick={() => setIsSessionLedgerOpen(true)}
-                >
-                    Ledger
-                </button>
-
                 {!isArchivedRoom ? (
                     <>
                         {tableMenuItems.map((item) => (
@@ -1218,6 +1310,7 @@ export function RoomClient({
                                 key={item.id}
                                 className={[
                                     "table-menu-cluster__button",
+                                    `table-menu-cluster__button--${item.id}`,
                                     openMenuPanel === item.id ? "table-menu-cluster__button--active" : "",
                                 ].filter(Boolean).join(" ")}
                                 type="button"
@@ -1228,22 +1321,62 @@ export function RoomClient({
                         ))}
                     </>
                 ) : null}
+
+                <button
+                    className="table-menu-cluster__button table-menu-cluster__button--info"
+                    type="button"
+                    onClick={() => {
+                        setOpenMenuPanel(null);
+                        setIsEngineInfoOpen(true);
+                    }}
+                >
+                    Info
+                </button>
+
+                {HOUSE_RULES_CONFIG.visible ? (
+                    <button
+                        className="table-menu-cluster__button table-menu-cluster__button--rules"
+                        type="button"
+                        onClick={() => {
+                            setOpenMenuPanel(null);
+                            setIsHouseRulesOpen(true);
+                        }}
+                    >
+                        Rules
+                    </button>
+                ) : null}
             </>
         );
     }
 
     function renderTableStatusRackContent() {
+        const currentBlindLevel = currentHand?.blindLevel ?? snapshot?.blindState.currentLevel ?? null;
+        const currentBlindLabel = currentBlindLevel ? formatBlindLevelCompact(currentBlindLevel) : "Waiting";
+        const nextBlindSummary = !isArchivedRoom && snapshot?.blindState.nextLevel && blindCountdownMs !== null
+            ? `Next ${formatBlindLevelCompact(snapshot.blindState.nextLevel)} in ${formatClockCountdown(blindCountdownMs)}`
+            : null;
+
         return (
             <>
-                {snapshot?.status === "paused" ? <span className="chip-pill">Paused</span> : null}
-                {isArchivedRoom ? <span className="chip-pill">Archived replay</span> : null}
-                <span className="chip-pill">Hand {currentHand?.handNumber ?? latestCompletedHand?.handNumber ?? snapshot?.handCount ?? 0}</span>
-                {!isArchivedRoom && snapshot?.blindState.nextLevel && blindCountdownMs !== null ? <span className="chip-pill chip-pill--timer">Next {formatBlindLevelCompact(snapshot.blindState.nextLevel)} in {formatClockCountdown(blindCountdownMs)}</span> : null}
-                {turnMetrics ? <span className="chip-pill chip-pill--timer chip-pill--turn-timer">{turnMetrics.kind === "run-it-twice" ? "Vote" : "Turn"} {formatTurnSeconds(turnMetrics.mainSecondsRemaining)}</span> : null}
-                {turnMetrics && currentActor ? <span className="chip-pill">Action {currentActor.displayName}</span> : null}
-                {turnMetrics?.kind === "run-it-twice" ? <span className="chip-pill">Run it twice vote</span> : null}
+                <div className="table-status-rack__summary">
+                    <span className="table-status-rack__eyebrow">{snapshot?.name ?? `Room ${slug}`}</span>
+                    <div className="table-status-rack__blind-line">
+                        <span className="table-status-rack__current-blind">{currentBlindLabel}</span>
+                        {nextBlindSummary ? <span className="table-status-rack__next-blind">{nextBlindSummary}</span> : null}
+                    </div>
+                </div>
+
+                <div className="table-status-rack__badges">
+                    {snapshot?.status === "paused" ? <span className="chip-pill">Paused</span> : null}
+                    {isArchivedRoom ? <span className="chip-pill">Archived replay</span> : null}
+                    <span className="chip-pill">Hand {currentHand?.handNumber ?? latestCompletedHand?.handNumber ?? snapshot?.handCount ?? 0}</span>
+                    {turnMetrics ? <span className="chip-pill chip-pill--timer chip-pill--turn-timer">{turnMetrics.kind === "run-it-twice" ? "Vote" : "Turn"} {formatTurnSeconds(turnMetrics.mainSecondsRemaining)}</span> : null}
+                    {turnMetrics && currentActor ? <span className="chip-pill">Action {currentActor.displayName}</span> : null}
+                    {turnMetrics?.kind === "run-it-twice" ? <span className="chip-pill">Run it twice vote</span> : null}
+                </div>
+
                 {isAdmin ? (
-                    <>
+                    <div className="table-status-rack__controls">
                         <button className="table-status-rack__control" type="button" onClick={() => void handlePauseToggle()} disabled={isMutating}>
                             {snapshot?.status === "paused" ? "Resume" : "Pause"}
                         </button>
@@ -1255,7 +1388,7 @@ export function RoomClient({
                                 Archive
                             </button>
                         ) : null}
-                    </>
+                    </div>
                 ) : null}
             </>
         );
@@ -1825,6 +1958,71 @@ export function RoomClient({
         }
     }, [canShowRebuyMenu, openMenuPanel]);
 
+    useEffect(() => {
+        if (typeof window === "undefined" || (!openMenuPanel && !isChatComposerOpen && !isChatExpanded)) {
+            return;
+        }
+
+        const handlePointerDown = (event: PointerEvent) => {
+            const target = event.target;
+
+            if (!(target instanceof Node)) {
+                return;
+            }
+
+            if (openMenuPanel && tableMenuShellRef.current && !tableMenuShellRef.current.contains(target)) {
+                setOpenMenuPanel(null);
+            }
+
+            if ((isChatComposerOpen || isChatExpanded) && tableChatOverlayRef.current && !tableChatOverlayRef.current.contains(target)) {
+                setIsChatComposerOpen(false);
+                setIsChatExpanded(false);
+            }
+        };
+
+        window.addEventListener("pointerdown", handlePointerDown);
+        return () => window.removeEventListener("pointerdown", handlePointerDown);
+    }, [isChatComposerOpen, isChatExpanded, openMenuPanel]);
+
+    useEffect(() => {
+        if (typeof window === "undefined" || (!openMenuPanel && !isChatComposerOpen && !isSessionLedgerOpen)) {
+            return;
+        }
+
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key !== "Escape") {
+                return;
+            }
+
+            setOpenMenuPanel(null);
+            setIsChatComposerOpen(false);
+            setIsSessionLedgerOpen(false);
+        };
+
+        window.addEventListener("keydown", handleEscape);
+        return () => window.removeEventListener("keydown", handleEscape);
+    }, [isChatComposerOpen, isSessionLedgerOpen, openMenuPanel]);
+
+    useEffect(() => {
+        if (!isChatComposerOpen) {
+            return;
+        }
+
+        chatInputRef.current?.focus();
+    }, [isChatComposerOpen]);
+
+    useEffect(() => {
+        if (!heroChatToast || typeof window === "undefined") {
+            return;
+        }
+
+        const timerId = window.setTimeout(() => {
+            setHeroChatToast((current) => current?.id === heroChatToast.id ? null : current);
+        }, 4200);
+
+        return () => window.clearTimeout(timerId);
+    }, [heroChatToast]);
+
     const recentCompletedHands = isArchivedRoom
         ? archivedHands
         : snapshot?.recentCompletedHands.length
@@ -1910,11 +2108,166 @@ export function RoomClient({
         }
     }
 
+    function toggleQueuedHeroAction(nextQueuedAction: QueuedHeroAction) {
+        setPreselectedHeroAction((current) => areQueuedHeroActionsEqual(current, nextQueuedAction) ? null : nextQueuedAction);
+        closeMobileActionMenuIfNeeded();
+    }
+
+    function handleQueuedOrImmediateCall() {
+        if (!heroActionState?.allowedActions.includes("call")) {
+            return;
+        }
+
+        if (heroActionState.canAct) {
+            void handlePlayerAction("call");
+            return;
+        }
+
+        toggleQueuedHeroAction({ type: "call", amount: heroActionState.callAmount });
+    }
+
+    function handleQueuedOrImmediateCheck() {
+        if (!heroActionState) {
+            return;
+        }
+
+        if (heroActionState.canAct) {
+            if (!heroActionState.allowedActions.includes("check")) {
+                return;
+            }
+
+            void handlePlayerAction("check");
+            return;
+        }
+
+        if (!heroInHand || heroActionState.hasFolded || heroActionState.isAllIn || heroActionState.callAmount > 0) {
+            return;
+        }
+
+        toggleQueuedHeroAction({ type: "check" });
+    }
+
+    function handleQueuedOrImmediateFold() {
+        if (!heroActionState) {
+            return;
+        }
+
+        if (heroActionState.canAct) {
+            if (!heroActionState.allowedActions.includes("fold")) {
+                return;
+            }
+
+            void handlePlayerAction("fold");
+            return;
+        }
+
+        if (!heroInHand || heroActionState.hasFolded || heroActionState.isAllIn) {
+            return;
+        }
+
+        toggleQueuedHeroAction({ type: "fold" });
+    }
+
+    function handleChatPanelActivate(event?: ReactMouseEvent<HTMLElement>) {
+        const target = event?.target;
+
+        if (target instanceof HTMLElement && target.closest("button, input, textarea, a, label")) {
+            return;
+        }
+
+        setIsChatExpanded(true);
+
+        if (canChat) {
+            setIsChatComposerOpen(true);
+            return;
+        }
+
+        setIsChatComposerOpen(false);
+    }
+
+    function handleQueuedOrImmediateCheckOrFold() {
+        if (heroActionState?.canAct) {
+            const immediateAction = heroActionState ? resolveQueuedHeroAction({ type: "check_or_fold" }, heroActionState) : null;
+
+            if (immediateAction) {
+                void handlePlayerAction(immediateAction);
+            }
+
+            return;
+        }
+
+        if (!heroInHand || heroActionState?.hasFolded || heroActionState?.isAllIn) {
+            return;
+        }
+
+        toggleQueuedHeroAction({ type: "check_or_fold" });
+    }
+
     const shouldForceOpaqueActionPad = Boolean(isActionPadDragging || heroActionState?.canAct || heroCanRespondToRunItTwice);
 
     function renderActionPanel(variant: "inline" | "dialog") {
         const isInline = variant === "inline";
         const isIdleDimmable = isInline && dimActionPadWhenIdle && !shouldForceOpaqueActionPad;
+        const hasWagerControl = Boolean(
+            heroActionState
+            && heroWagerInputConfig
+            && (heroActionState.allowedActions.includes("bet") || heroActionState.allowedActions.includes("raise")),
+        );
+        const canOpenWagerControl = Boolean(heroActionState?.canAct && hasWagerControl);
+        const wagerActionType = heroActionState?.allowedActions.includes("raise") ? "raise" : "bet";
+        const parsedRaiseAmount = heroActionState && heroWagerInputConfig
+            ? parseWholeNumberInput(raiseTarget)
+            : null;
+        const currentRaiseAmount = heroActionState && heroWagerInputConfig
+            ? Math.max(
+                heroWagerInputConfig.minInputAmount,
+                Math.min(
+                    heroWagerInputConfig.maxInputAmount,
+                    parsedRaiseAmount ?? getDefaultWagerInputValue(heroActionState),
+                ),
+            )
+            : null;
+        const targetContribution = heroActionState && heroWagerInputConfig && currentRaiseAmount !== null
+            ? getWagerTargetContribution(wagerActionType, String(currentRaiseAmount), heroActionState)
+            : null;
+        const minimumWagerTarget = heroActionState && heroWagerInputConfig
+            ? getWagerTargetContribution(wagerActionType, String(heroWagerInputConfig.minInputAmount), heroActionState)
+            : null;
+        const midpointRaiseAmount = heroWagerInputConfig
+            ? Math.max(
+                heroWagerInputConfig.minInputAmount,
+                Math.min(
+                    heroWagerInputConfig.maxInputAmount,
+                    Math.round((heroWagerInputConfig.minInputAmount + heroWagerInputConfig.maxInputAmount) / 2),
+                ),
+            )
+            : null;
+        const showStandaloneAllIn = Boolean(heroActionState?.canAct && heroActionState.allowedActions.includes("all_in") && !canOpenWagerControl);
+        const hasQuickCallButton = Boolean(heroActionState?.allowedActions.includes("call"));
+        const hasQuickBetButton = Boolean(!hasQuickCallButton && heroActionState?.allowedActions.includes("bet") && minimumWagerTarget !== null);
+        const canQueueCheck = Boolean(heroActionState && !heroActionState.canAct && heroActionState.callAmount === 0 && !heroActionState.hasFolded && !heroActionState.isAllIn);
+        const queuedCheckOrFold = preselectedHeroAction?.type === "check_or_fold";
+        const queuedCall = Boolean(
+            preselectedHeroAction?.type === "call"
+            && heroActionState?.allowedActions.includes("call")
+            && preselectedHeroAction.amount === heroActionState.callAmount,
+        );
+        const queuedCheck = preselectedHeroAction?.type === "check";
+        const queuedFold = preselectedHeroAction?.type === "fold";
+        const canQueueFold = Boolean(heroActionState && !heroActionState.canAct && heroInHand && !heroActionState.hasFolded && !heroActionState.isAllIn);
+
+        const setClampedRaiseAmount = (nextValue: number) => {
+            if (!heroActionState || !heroWagerInputConfig) {
+                return;
+            }
+
+            const clampedValue = Math.max(
+                heroWagerInputConfig.minInputAmount,
+                Math.min(heroWagerInputConfig.maxInputAmount, Math.round(nextValue)),
+            );
+
+            setRaiseTarget(String(clampedValue));
+        };
 
         return (
             <section
@@ -1927,206 +2280,735 @@ export function RoomClient({
                 ].filter(Boolean).join(" ")}
                 style={isInline ? { transform: `translate(${actionPadOffset.x}px, ${actionPadOffset.y}px)` } : undefined}
             >
-                <div className="table-action-panel__topbar">
-                    <div className="table-action-panel__header">
-                        <span className="table-action-panel__eyebrow">Action pad</span>
-                        <strong className="table-action-panel__title">{heroPlayer ? heroPlayer.displayName : "Waiting for seat"}</strong>
+                <div className={["game-decisions-ctn", shouldForceOpaqueActionPad ? "" : "low"].filter(Boolean).join(" ")}>
+                    {heroCanRespondToRunItTwice ? (
+                        <>
+                            <div className="table-action-panel__status-copy">
+                                <strong>Run it twice?</strong>
+                                <span>Everyone in the showdown has to agree.</span>
+                            </div>
+
+                            <div className="action-buttons">
+                                <button className="table-action-panel__button button-1 action-button green highlighted" type="button" onClick={() => void handleRunItTwiceDecision(true)} disabled={isMutating}>
+                                    Yes
+                                </button>
+                                <button className="table-action-panel__button button-1 action-button red highlighted" type="button" onClick={() => void handleRunItTwiceDecision(false)} disabled={isMutating}>
+                                    No
+                                </button>
+                            </div>
+                        </>
+                    ) : heroActionState?.canAct ? (
+                        canOpenWagerControl && actionPanelScreen === "betControl" && heroWagerInputConfig && currentRaiseAmount !== null && targetContribution !== null ? (
+                            <form
+                                className="raise-controller-form"
+                                noValidate
+                                onSubmit={(event) => {
+                                    event.preventDefault();
+                                    void handlePlayerAction(wagerActionType);
+                                }}
+                            >
+                                <div className="raise-bet-value">
+                                    <p className="label">{wagerActionType === "raise" ? "Raise by" : "Your bet"}</p>
+                                    <div className="value-input-ctn">
+                                        <strong className="value">{formatNumber(currentRaiseAmount)}</strong>
+                                        <span className="table-action-panel__raise-target-copy">
+                                            {wagerActionType === "raise" ? `To ${formatNumber(targetContribution)}` : `${formatNumber(targetContribution)} total`}
+                                        </span>
+                                    </div>
+                                    <input
+                                        className="control-input value-input"
+                                        type="number"
+                                        min={heroWagerInputConfig.minInputAmount}
+                                        max={heroWagerInputConfig.maxInputAmount}
+                                        step={1}
+                                        value={raiseTarget}
+                                        onChange={(event) => setRaiseTarget(event.target.value)}
+                                        disabled={isMutating}
+                                    />
+                                </div>
+
+                                <div className="raise-controller">
+                                    <div className="default-bet-buttons">
+                                        <button className="table-action-panel__preset-button" type="button" onClick={() => setClampedRaiseAmount(heroWagerInputConfig.minInputAmount)} disabled={isMutating}>
+                                            Min
+                                        </button>
+                                        {midpointRaiseAmount !== null ? (
+                                            <button className="table-action-panel__preset-button" type="button" onClick={() => setClampedRaiseAmount(midpointRaiseAmount)} disabled={isMutating}>
+                                                Mid
+                                            </button>
+                                        ) : null}
+                                        <button className="table-action-panel__preset-button" type="button" onClick={() => setClampedRaiseAmount(heroWagerInputConfig.maxInputAmount)} disabled={isMutating}>
+                                            Max
+                                        </button>
+                                    </div>
+
+                                    <div className="slider" aria-hidden="true" />
+
+                                    <div className="table-action-panel__slider-controls">
+                                        <button className="control-button decrease" type="button" onClick={() => setClampedRaiseAmount(currentRaiseAmount - 1)} disabled={isMutating || currentRaiseAmount <= heroWagerInputConfig.minInputAmount}>
+                                            -
+                                        </button>
+                                        <input
+                                            className="slider-control"
+                                            type="range"
+                                            min={heroWagerInputConfig.minInputAmount}
+                                            max={heroWagerInputConfig.maxInputAmount}
+                                            step={1}
+                                            value={currentRaiseAmount}
+                                            onChange={(event) => setRaiseTarget(event.target.value)}
+                                            disabled={isMutating}
+                                        />
+                                        <button className="control-button increase" type="button" onClick={() => setClampedRaiseAmount(currentRaiseAmount + 1)} disabled={isMutating || currentRaiseAmount >= heroWagerInputConfig.maxInputAmount}>
+                                            +
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="action-buttons">
+                                    <input
+                                        type="submit"
+                                        className={[
+                                            "table-action-panel__button",
+                                            "button-1",
+                                            "action-button",
+                                            "green",
+                                            "highlighted",
+                                            "bet",
+                                            !isPhoneViewport ? "with-tip" : "",
+                                        ].filter(Boolean).join(" ")}
+                                        data-hotkey={!isPhoneViewport ? "enter" : undefined}
+                                        value={wagerActionType === "raise" ? `Raise to ${formatNumber(targetContribution)}` : `Bet ${formatNumber(targetContribution)}`}
+                                        disabled={isMutating}
+                                    />
+                                    <button
+                                        className={[
+                                            "table-action-panel__button",
+                                            "button-1",
+                                            "action-button",
+                                            "gray",
+                                            "highlighted",
+                                            !isPhoneViewport ? "with-tip" : "",
+                                            "back",
+                                        ].filter(Boolean).join(" ")}
+                                        data-hotkey={!isPhoneViewport ? "esc" : undefined}
+                                        type="button"
+                                        onClick={() => setActionPanelScreen("buttons")}
+                                        disabled={isMutating}
+                                    >
+                                        Back
+                                    </button>
+                                </div>
+                            </form>
+                        ) : (
+                            <div className="action-buttons">
+                                {hasQuickCallButton ? (
+                                    <button
+                                        className={[
+                                            "table-action-panel__button",
+                                            "button-1",
+                                            "action-button",
+                                            "call",
+                                            "green",
+                                            !isPhoneViewport ? "with-tip" : "",
+                                        ].filter(Boolean).join(" ")}
+                                        data-hotkey={!isPhoneViewport ? "c" : undefined}
+                                        type="button"
+                                        onClick={handleQueuedOrImmediateCall}
+                                        disabled={isMutating}
+                                    >
+                                        Call {formatNumber(heroActionState.callAmount)}
+                                    </button>
+                                ) : null}
+
+                                {hasQuickBetButton ? (
+                                    <button
+                                        className={[
+                                            "table-action-panel__button",
+                                            "button-1",
+                                            "action-button",
+                                            "bet",
+                                            "green",
+                                            !isPhoneViewport ? "with-tip" : "",
+                                        ].filter(Boolean).join(" ")}
+                                        data-hotkey={!isPhoneViewport ? "b" : undefined}
+                                        type="button"
+                                        onClick={() => void handlePlayerAction("bet")}
+                                        disabled={isMutating}
+                                    >
+                                        Bet {formatNumber(minimumWagerTarget ?? 0)}
+                                    </button>
+                                ) : null}
+
+                                {hasWagerControl ? (
+                                    <button
+                                        className={[
+                                            "table-action-panel__button",
+                                            "button-1",
+                                            "action-button",
+                                            "raise",
+                                            "green",
+                                            !isPhoneViewport ? "with-tip" : "",
+                                        ].filter(Boolean).join(" ")}
+                                        data-hotkey={!isPhoneViewport ? "r" : undefined}
+                                        type="button"
+                                        onClick={() => setActionPanelScreen("betControl")}
+                                        disabled={isMutating || !heroActionState.canAct}
+                                    >
+                                        Raise
+                                    </button>
+                                ) : null}
+
+                                {heroActionState.allowedActions.includes("check") ? (
+                                    <button
+                                        className={[
+                                            "table-action-panel__button",
+                                            "button-1",
+                                            "action-button",
+                                            "check",
+                                            "green",
+                                            !isPhoneViewport ? "with-tip" : "",
+                                        ].filter(Boolean).join(" ")}
+                                        data-hotkey={!isPhoneViewport ? "k" : undefined}
+                                        type="button"
+                                        onClick={handleQueuedOrImmediateCheck}
+                                        disabled={isMutating}
+                                    >
+                                        Check
+                                    </button>
+                                ) : null}
+
+                                {showStandaloneAllIn ? (
+                                    <button
+                                        className="table-action-panel__button button-1 action-button raise green"
+                                        type="button"
+                                        onClick={() => void handlePlayerAction("all_in")}
+                                        disabled={isMutating}
+                                    >
+                                        All-in {formatNumber(heroPlayer?.stack ?? 0)}
+                                    </button>
+                                ) : null}
+
+                                {heroActionState.allowedActions.includes("fold") ? (
+                                    <button
+                                        className={[
+                                            "table-action-panel__button",
+                                            "button-1",
+                                            "action-button",
+                                            "fold",
+                                            "red",
+                                            !isPhoneViewport ? "with-tip" : "",
+                                        ].filter(Boolean).join(" ")}
+                                        data-hotkey={!isPhoneViewport ? "f" : undefined}
+                                        type="button"
+                                        onClick={handleQueuedOrImmediateFold}
+                                        disabled={isMutating}
+                                    >
+                                        Fold
+                                    </button>
+                                ) : null}
+                            </div>
+                        )
+                    ) : (
+                        <div className="table-action-panel__idle-stack">
+                            {runItTwicePrompt ? (
+                                <div className="table-action-panel__status-copy table-action-panel__status-copy--waiting">
+                                    <strong>Run it twice vote</strong>
+                                    <span>{describeRunItTwiceVoteState(runItTwicePrompt, heroPlayer)}</span>
+                                </div>
+                            ) : null}
+
+                            {!runItTwicePrompt && heroInHand && !heroActionState?.hasFolded && !heroActionState?.isAllIn ? (
+                                <>
+                                    <div className="table-action-panel__queue-row">
+                                        <button
+                                            className={[
+                                                "table-action-panel__button",
+                                                "button-1",
+                                                "action-button",
+                                                "gray",
+                                                !isPhoneViewport ? "with-tip" : "",
+                                                "check-fold",
+                                                queuedCheckOrFold ? "highlighted" : "",
+                                                queuedCheckOrFold ? "table-action-panel__button--queued" : "",
+                                            ].filter(Boolean).join(" ")}
+                                            data-hotkey={!isPhoneViewport ? "i" : undefined}
+                                            type="button"
+                                            onClick={handleQueuedOrImmediateCheckOrFold}
+                                            disabled={isMutating}
+                                            aria-pressed={queuedCheckOrFold}
+                                        >
+                                            Check or Fold
+                                        </button>
+                                    </div>
+
+                                    <div className="action-buttons">
+                                        {hasQuickCallButton ? (
+                                            <button
+                                                className={[
+                                                    "table-action-panel__button",
+                                                    "button-1",
+                                                    "action-button",
+                                                    "call",
+                                                    "green",
+                                                    !isPhoneViewport ? "with-tip" : "",
+                                                    queuedCall ? "highlighted" : "",
+                                                    queuedCall ? "table-action-panel__button--queued" : "",
+                                                ].filter(Boolean).join(" ")}
+                                                data-hotkey={!isPhoneViewport ? "c" : undefined}
+                                                type="button"
+                                                onClick={handleQueuedOrImmediateCall}
+                                                disabled={isMutating}
+                                                aria-pressed={queuedCall}
+                                            >
+                                                Call {formatNumber(heroActionState?.callAmount ?? 0)}
+                                            </button>
+                                        ) : null}
+
+                                        {hasQuickBetButton ? (
+                                            <button
+                                                className={[
+                                                    "table-action-panel__button",
+                                                    "button-1",
+                                                    "action-button",
+                                                    "bet",
+                                                    "green",
+                                                    !isPhoneViewport ? "with-tip" : "",
+                                                ].filter(Boolean).join(" ")}
+                                                data-hotkey={!isPhoneViewport ? "b" : undefined}
+                                                type="button"
+                                                disabled
+                                            >
+                                                Bet {formatNumber(minimumWagerTarget ?? 0)}
+                                            </button>
+                                        ) : null}
+
+                                        {hasWagerControl ? (
+                                            <button
+                                                className={[
+                                                    "table-action-panel__button",
+                                                    "button-1",
+                                                    "action-button",
+                                                    "raise",
+                                                    "green",
+                                                    !isPhoneViewport ? "with-tip" : "",
+                                                ].filter(Boolean).join(" ")}
+                                                data-hotkey={!isPhoneViewport ? "r" : undefined}
+                                                type="button"
+                                                disabled
+                                            >
+                                                Raise
+                                            </button>
+                                        ) : null}
+
+                                        <button
+                                            className={[
+                                                "table-action-panel__button",
+                                                "button-1",
+                                                "action-button",
+                                                canQueueCheck ? "green" : "gray",
+                                                "check",
+                                                !isPhoneViewport ? "with-tip" : "",
+                                                queuedCheck ? "highlighted" : "",
+                                                queuedCheck ? "table-action-panel__button--queued" : "",
+                                            ].filter(Boolean).join(" ")}
+                                            data-hotkey={!isPhoneViewport ? "k" : undefined}
+                                            type="button"
+                                            onClick={handleQueuedOrImmediateCheck}
+                                            disabled={isMutating || !canQueueCheck}
+                                            aria-pressed={queuedCheck}
+                                        >
+                                            Check
+                                        </button>
+
+                                        <button
+                                            className={[
+                                                "table-action-panel__button",
+                                                "button-1",
+                                                "action-button",
+                                                canQueueFold ? "red" : "gray",
+                                                "fold",
+                                                !isPhoneViewport ? "with-tip" : "",
+                                                queuedFold ? "highlighted" : "",
+                                                queuedFold ? "table-action-panel__button--queued" : "",
+                                            ].filter(Boolean).join(" ")}
+                                            data-hotkey={!isPhoneViewport ? "f" : undefined}
+                                            type="button"
+                                            onClick={handleQueuedOrImmediateFold}
+                                            disabled={isMutating || !canQueueFold}
+                                            aria-pressed={queuedFold}
+                                        >
+                                            Fold
+                                        </button>
+                                    </div>
+                                </>
+                            ) : null}
+
+                            {!runItTwicePrompt && activeLastCompletedHandRevealState && !activeLastCompletedHandRevealState.forced ? (
+                                <div className="table-action-panel__reveal-block">
+                                    <div className="table-action-panel__reveal-cards">
+                                        {([0, 1] as const).map((cardIndex) => (
+                                            <button
+                                                key={cardIndex}
+                                                className={[
+                                                    "table-action-panel__reveal-card-button",
+                                                    heroLastCompletedRevealedCards?.[cardIndex] ? "table-action-panel__reveal-card-button--active" : "",
+                                                ].filter(Boolean).join(" ")}
+                                                type="button"
+                                                onClick={() => void handleRevealCards(toggleRevealMode(activeLastCompletedHandRevealState.currentMode, cardIndex))}
+                                                disabled={isMutating}
+                                            >
+                                                <PokerCard
+                                                    card={heroLastCompletedRevealedCards?.[cardIndex] ?? null}
+                                                    isFaceUp={Boolean(heroLastCompletedRevealedCards?.[cardIndex])}
+                                                    size="compact"
+                                                    backLabel={cardIndex === 0 ? "Left" : "Right"}
+                                                />
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <div className="table-action-panel__reveal-controls">
+                                        <button
+                                            className={[
+                                                "table-action-panel__button",
+                                                "button-1",
+                                                "action-button",
+                                                activeLastCompletedHandRevealState.currentMode === "both" ? "green highlighted" : "gray",
+                                                "table-action-panel__reveal-button",
+                                            ].join(" ")}
+                                            type="button"
+                                            onClick={() => void handleRevealCards("both")}
+                                            disabled={isMutating}
+                                        >
+                                            Show all
+                                        </button>
+                                        <button
+                                            className={[
+                                                "table-action-panel__button",
+                                                "button-1",
+                                                "action-button",
+                                                activeLastCompletedHandRevealState.currentMode === "none" ? "green highlighted" : "gray",
+                                                "table-action-panel__reveal-button",
+                                            ].join(" ")}
+                                            type="button"
+                                            onClick={() => void handleRevealCards("none")}
+                                            disabled={isMutating}
+                                        >
+                                            Hide all
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : null}
+                        </div>
+                    )}
+                </div>
+            </section>
+        );
+    }
+
+    async function handleChatMediaToggle(kind: "microphone" | "camera") {
+        if (demoMode) {
+            return;
+        }
+
+        if (!canConnectMedia) {
+            setActionError("Sign in to connect voice and video for this table.");
+            return;
+        }
+
+        if (!media.isConnected) {
+            setChatMediaActionState("connecting");
+
+            try {
+                await media.handleConnectMedia();
+            } finally {
+                setChatMediaActionState("idle");
+            }
+
+            return;
+        }
+
+        if (kind === "microphone") {
+            setChatMediaActionState("microphone");
+
+            try {
+                await media.handleToggleMicrophone();
+            } finally {
+                setChatMediaActionState("idle");
+            }
+
+            return;
+        }
+
+        setChatMediaActionState("camera");
+
+        try {
+            await media.handleToggleCamera();
+        } finally {
+            setChatMediaActionState("idle");
+        }
+    }
+
+    function renderTableChatPanel(variant: "overlay" | "surface") {
+        const isOverlay = variant === "overlay";
+        const showComposer = !isOverlay || isChatComposerOpen;
+        const canControlMediaFromChat = demoMode || canConnectMedia;
+        const isMicActionPending = chatMediaActionState === "connecting" || chatMediaActionState === "microphone";
+        const isCamActionPending = chatMediaActionState === "connecting" || chatMediaActionState === "camera";
+
+        return (
+            <section className={[
+                "table-chat-panel",
+                variant === "overlay" ? "table-chat-panel--overlay" : "table-chat-panel--surface",
+                isOverlay && isChatExpanded ? "table-chat-panel--expanded" : "",
+                showComposer ? "table-chat-panel--composer-open" : "",
+            ].join(" ")}
+                ref={isOverlay ? tableChatOverlayRef : undefined}
+                onClick={isOverlay ? handleChatPanelActivate : undefined}
+            >
+                <div className="table-chat-panel__toolbar">
+                    <div className="table-chat-panel__title-block">
+                        <span className="table-log-panel__eyebrow">Chat</span>
+                        <strong>{snapshot?.name ?? slug}</strong>
                     </div>
 
-                    <div className="table-action-panel__controls">
+                    <div className="table-chat-panel__action-buttons" aria-label="Chat and media controls">
                         <button
                             className={[
-                                "table-action-panel__visibility-toggle",
-                                dimActionPadWhenIdle ? "table-action-panel__visibility-toggle--dimmed" : "table-action-panel__visibility-toggle--visible",
+                                "table-chat-panel__action-button",
+                                isChatComposerOpen ? "table-chat-panel__action-button--active" : "",
                             ].filter(Boolean).join(" ")}
                             type="button"
-                            onClick={() => setDimActionPadWhenIdle((current) => !current)}
-                            aria-label={dimActionPadWhenIdle ? "Keep the action pad opaque when idle" : "Let the action pad dim when idle"}
-                            aria-pressed={!dimActionPadWhenIdle}
-                            title={dimActionPadWhenIdle ? "Action pad dims when idle" : "Action pad stays opaque"}
-                        >
-                            <span className="table-action-panel__visibility-eye" aria-hidden="true" />
-                        </button>
+                            onClick={() => {
+                                if (!canChat) {
+                                    setActionError("Join the room and sign in before chatting.");
+                                    return;
+                                }
 
-                        {isInline && !isPhoneViewport ? (
+                                if (isOverlay) {
+                                    setIsChatComposerOpen((current) => !current);
+                                    setIsChatExpanded(true);
+                                    return;
+                                }
+
+                                chatInputRef.current?.focus();
+                            }}
+                            title={canChat ? "Open the message composer" : "Join the room to chat"}
+                        >
+                            Chat
+                        </button>
+                        <button
+                            className={[
+                                "table-chat-panel__action-button",
+                                isMicActionPending ? "table-chat-panel__action-button--loading" : "",
+                                media.isConnected && media.microphoneEnabled ? "table-chat-panel__action-button--active" : "",
+                            ].filter(Boolean).join(" ")}
+                            type="button"
+                            onClick={() => void handleChatMediaToggle("microphone")}
+                            disabled={!canControlMediaFromChat || chatMediaActionState !== "idle"}
+                            title={media.isConnected
+                                ? media.microphoneEnabled
+                                    ? "Mute microphone"
+                                    : "Unmute microphone"
+                                : "Connect table audio"}
+                            aria-busy={isMicActionPending}
+                        >
+                            Mic
+                        </button>
+                        <button
+                            className={[
+                                "table-chat-panel__action-button",
+                                isCamActionPending ? "table-chat-panel__action-button--loading" : "",
+                                media.isConnected && media.cameraEnabled ? "table-chat-panel__action-button--active" : "",
+                            ].filter(Boolean).join(" ")}
+                            type="button"
+                            onClick={() => void handleChatMediaToggle("camera")}
+                            disabled={!canControlMediaFromChat || chatMediaActionState !== "idle"}
+                            title={media.isConnected
+                                ? media.cameraEnabled
+                                    ? "Stop camera"
+                                    : "Start camera"
+                                : "Connect table video"}
+                            aria-busy={isCamActionPending}
+                        >
+                            Cam
+                        </button>
+                        {isOverlay ? (
                             <button
-                                className="table-action-panel__drag-handle"
+                                className={[
+                                    "table-chat-panel__action-button",
+                                    isChatExpanded ? "table-chat-panel__action-button--active" : "",
+                                ].filter(Boolean).join(" ")}
                                 type="button"
-                                onPointerDown={handleActionPadPointerDown}
-                                aria-label="Drag action pad"
-                                aria-grabbed={isActionPadDragging}
+                                onClick={() => {
+                                    setIsChatExpanded((current) => {
+                                        if (current) {
+                                            setIsChatComposerOpen(false);
+                                        }
+
+                                        return !current;
+                                    });
+                                }}
+                                title={isChatExpanded ? "Collapse chat" : "Expand chat"}
                             >
-                                Move
+                                {isChatExpanded ? "Less" : "More"}
                             </button>
                         ) : null}
                     </div>
                 </div>
 
-                {heroCanRespondToRunItTwice ? (
-                    <>
-                        <div className="table-action-panel__vote-block">
-                            <div className="table-action-panel__vote-header">
-                                <span className="table-action-panel__eyebrow">Run it twice?</span>
-                                <strong>Everyone in the showdown has to agree.</strong>
-                            </div>
+                <div className="table-chat-panel__messages">
+                    {snapshot?.chatMessages.length ? snapshot.chatMessages.slice(-20).reverse().map((message) => (
+                        <article key={message.id} className="table-chat-panel__message">
+                            <strong className="table-chat-panel__author">{message.displayName}</strong>
+                            <p className="table-chat-panel__message-copy">{message.content}</p>
+                            <span className="table-chat-panel__timestamp">{formatChatTimestamp(message.createdAt)}</span>
+                        </article>
+                    )) : <p className="muted-copy">Chat is quiet.</p>}
+                </div>
 
-                            <div className="table-action-panel__grid table-action-panel__grid--vote">
-                                <button className="table-action-panel__button table-action-panel__button--yes" type="button" onClick={() => void handleRunItTwiceDecision(true)} disabled={isMutating}>
-                                    Yes
-                                </button>
-                                <button className="table-action-panel__button table-action-panel__button--no" type="button" onClick={() => void handleRunItTwiceDecision(false)} disabled={isMutating}>
-                                    No
-                                </button>
-                            </div>
+                {showComposer ? (
+                    <div className="table-chat-panel__composer">
+                        <input
+                            ref={chatInputRef}
+                            className="control-input"
+                            type="text"
+                            value={chatDraft}
+                            onChange={(event) => setChatDraft(event.target.value)}
+                            placeholder={canChat ? "Type a table message" : "Join the room to chat"}
+                            maxLength={240}
+                            disabled={!canChat || isMutating}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    void handleSendChatMessage();
+                                }
+                            }}
+                        />
+                        <button className="button button--primary table-chat-panel__send" type="button" onClick={() => void handleSendChatMessage()} disabled={!canChat || isMutating || chatDraft.trim().length === 0}>
+                            Send
+                        </button>
+                    </div>
+                ) : null}
+            </section>
+        );
+    }
 
-                            <p className="muted-copy table-action-panel__vote-copy">Your vote stays visible on your seat until the decision is complete.</p>
+    function renderTableLogContent() {
+        return (
+            <section className="table-ledger-panel table-ledger-panel--modal">
+                <div className="table-log-panel__header">
+                    <span className="table-log-panel__eyebrow">Log</span>
+                    <strong>{currentHand ? `Hand ${currentHand.handNumber}` : selectedCompletedHand ? `Hand ${selectedCompletedHand.handNumber}` : snapshot?.slug ?? slug}</strong>
+                </div>
+
+                {currentHand?.actions.length ? (
+                    <div className="table-ledger-panel__live">
+                        <span className="table-ledger-panel__section-label">Current hand</span>
+                        <ul className="action-log">
+                            {currentHand.actions.slice(-12).reverse().map((action) => (
+                                <li key={`${action.orderIndex}-${action.createdAt}`} className="action-log__item">
+                                    <strong>{resolveRoomDisplayName(snapshot, action.actorAccountId)}</strong>
+                                    <span>{formatActionSummary(action)}</span>
+                                    <span>{formatStreet(action.street)}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                ) : null}
+
+                {recentCompletedHands.length ? (
+                    <div className="table-ledger-panel__history-strip">
+                        {recentCompletedHands.map((hand) => (
+                            <button
+                                key={hand.handId}
+                                className={[
+                                    "table-ledger-panel__history-button",
+                                    selectedCompletedHand?.handId === hand.handId ? "table-ledger-panel__history-button--active" : "",
+                                ].filter(Boolean).join(" ")}
+                                type="button"
+                                onClick={() => handleSelectHistoryHand(hand.handId)}
+                            >
+                                Hand {hand.handNumber}
+                            </button>
+                        ))}
+                    </div>
+                ) : null}
+
+                {selectedCompletedHand ? (
+                    <div className="table-ledger-panel__recap">
+                        <div className="table-ledger-panel__recap-header">
+                            <strong>Hand {selectedCompletedHand.handNumber}</strong>
+                            <span>{selectedCompletedHandRunout?.isActive ? selectedCompletedHandAdditionalBoards.length > 0 ? "Running it twice" : "Running board" : selectedCompletedHand.winningReason === "showdown" ? "Showdown" : "Won before showdown"}</span>
                         </div>
-                    </>
-                ) : heroActionState?.canAct ? (
-                    <>
-                        <div className="table-action-panel__grid">
-                            {heroActionState.allowedActions.includes("check") ? (
-                                <button className="table-action-panel__button table-action-panel__button--check" type="button" onClick={() => void handlePlayerAction("check")} disabled={isMutating}>
-                                    Check
-                                </button>
-                            ) : heroActionState.allowedActions.includes("call") ? (
-                                <button className="table-action-panel__button table-action-panel__button--call" type="button" onClick={() => void handlePlayerAction("call")} disabled={isMutating}>
-                                    Call {formatNumber(heroActionState.callAmount)}
-                                </button>
-                            ) : (
-                                <div className="table-action-panel__button table-action-panel__button--ghost">No call</div>
-                            )}
 
-                            {heroActionState.allowedActions.includes("fold") ? (
-                                <button className="table-action-panel__button table-action-panel__button--fold" type="button" onClick={() => void handlePlayerAction("fold")} disabled={isMutating}>
-                                    Fold
-                                </button>
-                            ) : (
-                                <div className="table-action-panel__button table-action-panel__button--ghost">Stay in</div>
-                            )}
-
-                            {heroActionState.allowedActions.includes("all_in") ? (
-                                <button className="table-action-panel__button table-action-panel__button--allin" type="button" onClick={() => void handlePlayerAction("all_in")} disabled={isMutating}>
-                                    All-in {formatNumber(heroPlayer?.stack ?? 0)}
-                                </button>
-                            ) : (
-                                <div className="table-action-panel__button table-action-panel__button--ghost">No shove</div>
-                            )}
-                        </div>
-
-                        {heroActionState.allowedActions.includes("bet") || heroActionState.allowedActions.includes("raise") ? (
-                            <div className="table-action-panel__raise-row">
-                                <input
-                                    className="control-input"
-                                    type="number"
-                                    min={heroWagerInputConfig?.minInputAmount}
-                                    max={heroWagerInputConfig?.maxInputAmount}
-                                    step={1}
-                                    value={raiseTarget}
-                                    onChange={(event) => setRaiseTarget(event.target.value)}
-                                />
-                                <button
-                                    className="table-action-panel__raise-button"
-                                    type="button"
-                                    onClick={() => void handlePlayerAction(heroActionState.allowedActions.includes("raise") ? "raise" : "bet")}
-                                    disabled={isMutating}
-                                >
-                                    {heroWagerInputConfig?.buttonLabel ?? (heroActionState.allowedActions.includes("raise") ? "Raise by" : "Bet")}
-                                </button>
-                            </div>
-                        ) : null}
-
-                        {!isPhoneViewport ? <p className="muted-copy table-action-panel__hotkeys">Hotkeys: Q check/fold, C check, F fold, B bet/raise, L ledger, / chat, M mic, V camera{isAdmin ? ", P pause" : ""}.</p> : null}
-                    </>
-                ) : (
-                    <>
-                        <p className="muted-copy table-action-panel__waiting-copy">{runItTwicePrompt ? describeRunItTwiceVoteState(runItTwicePrompt, heroPlayer) : describeHeroState(heroActionState, heroPlayer)}</p>
-
-                        {!runItTwicePrompt && heroInHand && !heroActionState?.hasFolded && !heroActionState?.isAllIn ? (
-                            <div className="table-action-panel__queue-row">
-                                <button
-                                    className={[
-                                        "button",
-                                        preselectedHeroAction === "check_or_fold" ? "button--primary" : "button--secondary",
-                                        "table-action-panel__queue-button",
-                                    ].join(" ")}
-                                    type="button"
-                                    onClick={() => {
-                                        setPreselectedHeroAction((current) => current === "check_or_fold" ? null : "check_or_fold");
-                                        closeMobileActionMenuIfNeeded();
-                                    }}
-                                    disabled={isMutating}
-                                >
-                                    Check or fold
-                                </button>
-                                {!isPhoneViewport ? <p className="muted-copy table-action-panel__hotkeys">Hotkeys: Q queue check/fold, L ledger, / chat, M mic, V camera{isAdmin ? ", P pause" : ""}.</p> : null}
-                            </div>
-                        ) : null}
-
-                        {!runItTwicePrompt && activeLastCompletedHandRevealState ? (
-                            <div className="table-action-panel__reveal-block">
-                                <div className="table-action-panel__reveal-header">
-                                    <span className="table-action-panel__eyebrow">Show cards</span>
-                                    <strong>{activeLastCompletedHandRevealState.forced ? "Auto-shown" : "Reveal options"}</strong>
+                        {selectedCompletedHandBoards.map((board, boardIndex) => (
+                            <div key={`history-hand-${selectedCompletedHand.handId}-board-${boardIndex}`} className="table-ledger-panel__runout-block">
+                                {selectedCompletedHandBoards.length > 1 ? <span className="table-ledger-panel__section-label">Run {boardIndex + 1}</span> : null}
+                                <div className="table-board table-board--compact table-ledger-panel__board">
+                                    {buildBoardSlots(board).map((slot, index) => (
+                                        <PokerCard key={`history-hand-${selectedCompletedHand.handId}-${boardIndex}-${index}`} card={slot.card} isFaceUp={slot.isFaceUp} size="compact" backLabel={slot.backLabel} />
+                                    ))}
                                 </div>
 
-                                {activeLastCompletedHandRevealState.forced ? (
-                                    <p className="muted-copy table-action-panel__reveal-copy">Auto-revealed showdown cards stay visible in the ledger.</p>
-                                ) : (
-                                    <>
-                                        <div className="table-action-panel__reveal-cards">
-                                            {([0, 1] as const).map((cardIndex) => (
-                                                <button
-                                                    key={cardIndex}
-                                                    className={[
-                                                        "table-action-panel__reveal-card-button",
-                                                        heroLastCompletedRevealedCards?.[cardIndex] ? "table-action-panel__reveal-card-button--active" : "",
-                                                    ].filter(Boolean).join(" ")}
-                                                    type="button"
-                                                    onClick={() => void handleRevealCards(toggleRevealMode(activeLastCompletedHandRevealState.currentMode, cardIndex))}
-                                                    disabled={isMutating}
-                                                >
-                                                    <PokerCard
-                                                        card={heroLastCompletedRevealedCards?.[cardIndex] ?? null}
-                                                        isFaceUp={Boolean(heroLastCompletedRevealedCards?.[cardIndex])}
-                                                        size="compact"
-                                                        backLabel={cardIndex === 0 ? "Left" : "Right"}
-                                                    />
-                                                </button>
+                                {!selectedCompletedHandRunout?.isActive && selectedCompletedHandRunoutResults.length > 1 && selectedCompletedHandRunoutResults[boardIndex]?.winners.length ? (
+                                    <ul className="winner-list table-ledger-panel__runout-winners">
+                                        {selectedCompletedHandRunoutResults[boardIndex]!.winners.map((winner) => (
+                                            <li key={`${selectedCompletedHand.handId}-${boardIndex}-${winner.accountId}`}>
+                                                🏆 {resolveRoomDisplayName(snapshot, winner.accountId)} won {formatNumber(winner.amountWon)}
+                                                {winner.handLabel ? ` with ${winner.handLabel}` : ""}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                ) : null}
+                            </div>
+                        ))}
+
+                        {selectedCompletedHand.actions.length ? (
+                            <ul className="action-log table-ledger-panel__action-log">
+                                {selectedCompletedHand.actions.map((action) => (
+                                    <li key={`${selectedCompletedHand.handId}-${action.orderIndex}`} className="action-log__item">
+                                        <strong>{resolveRoomDisplayName(snapshot, action.actorAccountId)}</strong>
+                                        <span>{formatActionSummary(action)}</span>
+                                        <span>{formatStreet(action.street)}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : null}
+
+                        {selectedCompletedHandRevealEntries.length ? (
+                            <div className="table-ledger-panel__reveals">
+                                {selectedCompletedHandRevealEntries.map(([accountId, cards]) => (
+                                    <article key={`${selectedCompletedHand.handId}-${accountId}`} className="table-ledger-panel__reveal">
+                                        <strong>{resolveRoomDisplayName(snapshot, accountId)}</strong>
+                                        <div className="table-ledger-panel__reveal-cards">
+                                            {cards.filter((card): card is Card => card !== null).map((card, index) => (
+                                                <PokerCard key={`${selectedCompletedHand.handId}-${accountId}-${index}`} card={card} isFaceUp size="compact" backLabel="Reveal" />
                                             ))}
                                         </div>
-
-                                        <div className="table-action-panel__reveal-controls">
-                                            <button
-                                                className={[
-                                                    "button",
-                                                    activeLastCompletedHandRevealState.currentMode === "both" ? "button--primary" : "button--secondary",
-                                                    "table-action-panel__reveal-button",
-                                                ].join(" ")}
-                                                type="button"
-                                                onClick={() => void handleRevealCards("both")}
-                                                disabled={isMutating}
-                                            >
-                                                Show both
-                                            </button>
-                                            <button
-                                                className={[
-                                                    "button",
-                                                    activeLastCompletedHandRevealState.currentMode === "none" ? "button--primary" : "button--secondary",
-                                                    "table-action-panel__reveal-button",
-                                                ].join(" ")}
-                                                type="button"
-                                                onClick={() => void handleRevealCards("none")}
-                                                disabled={isMutating}
-                                            >
-                                                Hide all
-                                            </button>
-                                        </div>
-                                    </>
-                                )}
+                                    </article>
+                                ))}
                             </div>
                         ) : null}
-                    </>
+
+                        {selectedCompletedHandRunout?.isActive ? (
+                            <p className="muted-copy">Board is still running before the showdown result locks in.</p>
+                        ) : (
+                            <>
+                                {selectedCompletedHandRunoutResults.length > 1 ? <span className="table-ledger-panel__section-label">Overall payout</span> : null}
+                                <ul className="winner-list">
+                                    {selectedCompletedHandWinners.map((winner) => (
+                                        <li key={`${selectedCompletedHand.handId}-${winner.accountId}`}>
+                                            🏆 {resolveRoomDisplayName(snapshot, winner.accountId)} won {formatNumber(winner.amountWon)}
+                                            {winner.handLabel ? ` with ${winner.handLabel}` : ""}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </>
+                        )}
+                    </div>
+                ) : currentHand?.actions.length ? null : (
+                    <p className="muted-copy">Start a hand to populate the action log and hand recap history.</p>
                 )}
             </section>
         );
@@ -2518,6 +3400,7 @@ export function RoomClient({
         }
 
         await submitRoomMutation(`/v1/rooms/${slug}/action`, payload);
+        setActionPanelScreen("buttons");
         closeMobileActionMenuIfNeeded();
     }
 
@@ -2550,7 +3433,46 @@ export function RoomClient({
             displayName: displayName.trim() || heroPlayer?.displayName || session?.account.username,
             content,
         });
+        setHeroChatToast({
+            id: `${accountId}:${Date.now()}`,
+            content,
+        });
         setChatDraft("");
+        setIsChatComposerOpen(false);
+    }
+
+    function handleDownloadSessionLedgerCsv() {
+        if (typeof window === "undefined" || sessionLedgerRows.length === 0) {
+            return;
+        }
+
+        const fileSlug = slug.replace(/[^a-z0-9-_]+/gi, "-").replace(/^-+|-+$/g, "") || "table";
+        const csvRows = [
+            ["Player", "Handle", "Buy-in", "Buy-out", "Stack", "Wins", "Rebuys", "Net"],
+            ...sessionLedgerRows.map((row) => [
+                row.displayName,
+                formatSessionLedgerHandle(row.accountId),
+                String(row.buyIn),
+                String(row.buyOut),
+                String(row.stack),
+                String(row.wins),
+                String(row.rebuys),
+                String(row.net),
+            ]),
+        ];
+        const csvContent = csvRows.map((row) => row.map(escapeCsvValue).join(",")).join("\n");
+        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+        const objectUrl = window.URL.createObjectURL(blob);
+        const downloadLink = document.createElement("a");
+
+        downloadLink.href = objectUrl;
+        downloadLink.download = `${fileSlug}-ledger.csv`;
+        document.body.append(downloadLink);
+        downloadLink.click();
+        downloadLink.remove();
+        window.setTimeout(() => {
+            window.URL.revokeObjectURL(objectUrl);
+        }, 0);
     }
 
     async function handleSendReaction(emoji: string) {
@@ -2872,21 +3794,17 @@ export function RoomClient({
     }
 
     useEffect(() => {
-        if (preselectedHeroAction !== "check_or_fold" || !heroActionState?.canAct || isMutating || !currentHand) {
+        if (!preselectedHeroAction || !heroActionState?.canAct || isMutating || !currentHand) {
             return;
         }
 
-        const actionType = heroActionState.allowedActions.includes("check")
-            ? "check"
-            : heroActionState.allowedActions.includes("fold")
-                ? "fold"
-                : null;
+        const actionType = resolveQueuedHeroAction(preselectedHeroAction, heroActionState);
 
         if (!actionType) {
             return;
         }
 
-        const actionKey = `${currentHand.id}:${currentHand.street}:${actionType}`;
+        const actionKey = `${currentHand.id}:${currentHand.street}:${actionType}:${preselectedHeroAction.type === "call" ? heroActionState.callAmount : ""}`;
 
         if (autoActionRef.current === actionKey) {
             return;
@@ -2959,51 +3877,87 @@ export function RoomClient({
                 return;
             }
 
-            if (key === "q" && heroInHand && !heroActionState?.hasFolded && !heroActionState?.isAllIn) {
+            if ((key === "i" || key === "q") && heroInHand && !heroActionState?.hasFolded && !heroActionState?.isAllIn) {
                 event.preventDefault();
+                handleQueuedOrImmediateCheckOrFold();
+                return;
+            }
 
-                if (heroActionState?.canAct) {
-                    const actionType = heroActionState.allowedActions.includes("check")
-                        ? "check"
-                        : heroActionState.allowedActions.includes("fold")
-                            ? "fold"
-                            : null;
+            if (!heroActionState) {
+                return;
+            }
 
-                    if (actionType) {
-                        void handlePlayerAction(actionType);
-                    }
-                } else {
-                    setPreselectedHeroAction((current) => current === "check_or_fold" ? null : "check_or_fold");
+            const canOpenWagerControl = heroActionState.allowedActions.includes("bet") || heroActionState.allowedActions.includes("raise");
+
+            if (!heroActionState.canAct) {
+                if (key === "c" && heroActionState.allowedActions.includes("call")) {
+                    event.preventDefault();
+                    handleQueuedOrImmediateCall();
+                    return;
+                }
+
+                if (key === "k" && heroActionState.callAmount === 0) {
+                    event.preventDefault();
+                    handleQueuedOrImmediateCheck();
+                    return;
+                }
+
+                if (key === "f" && !heroActionState.hasFolded && !heroActionState.isAllIn) {
+                    event.preventDefault();
+                    handleQueuedOrImmediateFold();
                 }
 
                 return;
             }
 
-            if (!heroActionState?.canAct) {
+            if (key === "escape" && actionPanelScreen === "betControl") {
+                event.preventDefault();
+                setActionPanelScreen("buttons");
                 return;
             }
 
-            if (key === "c" && heroActionState.allowedActions.includes("check")) {
+            if (key === "enter" && actionPanelScreen === "betControl" && canOpenWagerControl) {
                 event.preventDefault();
-                void handlePlayerAction("check");
+                void handlePlayerAction(heroActionState.allowedActions.includes("raise") ? "raise" : "bet");
+                return;
+            }
+
+            if (key === "c") {
+                event.preventDefault();
+
+                if (heroActionState.allowedActions.includes("call")) {
+                    handleQueuedOrImmediateCall();
+                    return;
+                }
+
+                if (heroActionState.allowedActions.includes("check")) {
+                    handleQueuedOrImmediateCheck();
+                }
+
+                return;
+            }
+
+            if (key === "k" && heroActionState.allowedActions.includes("check")) {
+                event.preventDefault();
+                handleQueuedOrImmediateCheck();
                 return;
             }
 
             if (key === "f" && heroActionState.allowedActions.includes("fold")) {
                 event.preventDefault();
-                void handlePlayerAction("fold");
+                handleQueuedOrImmediateFold();
                 return;
             }
 
-            if (key === "b" && (heroActionState.allowedActions.includes("bet") || heroActionState.allowedActions.includes("raise"))) {
+            if ((key === "r" || key === "b") && canOpenWagerControl) {
                 event.preventDefault();
-                void handlePlayerAction(heroActionState.allowedActions.includes("raise") ? "raise" : "bet");
+                setActionPanelScreen("betControl");
             }
         };
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [currentHand?.runItTwicePrompt?.createdAt, demoMode, heroActionState, heroInHand, isAdmin, media, preselectedHeroAction, snapshot?.status]);
+    }, [actionPanelScreen, currentHand?.runItTwicePrompt?.createdAt, demoMode, heroActionState, heroInHand, isAdmin, media, preselectedHeroAction, snapshot?.status]);
 
     const heroStatsBar = (
         <section className={["table-hero-stats-bar", heroPlayer ? "" : "table-hero-stats-bar--empty"].filter(Boolean).join(" ")}>
@@ -3145,7 +4099,7 @@ export function RoomClient({
                 <section className="table-arena table-arena--clean">
                     <div className="table-felt">
                         {!isPhoneViewport ? (
-                            <div className="table-menu-cluster">
+                            <div className="table-menu-cluster" ref={tableMenuShellRef}>
                                 {renderTableMenuButtons()}
                                 {tableMenuDrawer}
                             </div>
@@ -3154,6 +4108,23 @@ export function RoomClient({
                         <VictoryConfettiCanvas active={showVictoryConfetti} />
 
                         {!isPhoneViewport ? <div className="table-status-rack">{renderTableStatusRackContent()}</div> : null}
+                        {!isPhoneViewport ? (
+                            <div className="table-chat-floater">
+                                <button
+                                    className={[
+                                        "table-menu-cluster__button",
+                                        "table-menu-cluster__button--solo",
+                                        "table-menu-cluster__button--log",
+                                        isSessionLedgerOpen ? "table-menu-cluster__button--active" : "",
+                                    ].filter(Boolean).join(" ")}
+                                    type="button"
+                                    onClick={() => openSessionActivityModal("ledger")}
+                                >
+                                    Log / Ledger
+                                </button>
+                                {renderTableChatPanel("overlay")}
+                            </div>
+                        ) : null}
 
                         <div className="table-center">
                             <span className="table-center__label">{currentHand ? `Hand ${currentHand.handNumber} · ${formatStreet(currentHand.street)}` : latestCompletedHand ? "" : isArchivedRoom ? "Archived table" : "Waiting for players"}</span>
@@ -3223,14 +4194,46 @@ export function RoomClient({
                                     ? mediaByAccountId.get(seat.player.accountId) ?? media.localParticipant ?? null
                                     : mediaByAccountId.get(seat.player.accountId) ?? null
                                 : null;
+                            const mediaBadge = mediaParticipant ? describeMediaBadge(mediaParticipant) : null;
                             const seatCards = buildSeatCardSlots(seat);
                             const seatReaction = seat.player ? activeSeatReactions.get(seat.player.accountId) ?? null : null;
                             const seatGesture = seat.player ? seatGesturesByAccountId.get(seat.player.accountId) ?? null : null;
                             const heroGestureEmoji = seat.isHero ? heroGesture?.emoji ?? "" : "";
-                            const showSeatMediaTile = seat.isHero ? true : Boolean(mediaParticipant) && (!isPhoneViewport || isSpectating);
+                            const showSeatMediaTile = !seat.player
+                                ? false
+                                : isPhoneViewport
+                                    ? seat.isHero || (isSpectating && Boolean(mediaParticipant))
+                                    : true;
+                            const dealerMarker = !isPhoneViewport
+                                ? seat.markers.find((marker) => marker.tone === "dealer") ?? null
+                                : null;
+                            const blindMarkers = !isPhoneViewport
+                                ? seat.markers.filter((marker) => marker.tone === "blind")
+                                : [];
+                            const inlineMarkers = isPhoneViewport
+                                ? seat.markers
+                                : seat.markers.filter((marker) => marker.tone === "admin");
                             const hasVisibleRevealedCard = Boolean(seat.revealedCards?.some((card) => card !== null));
                             const shouldRenderSeatCards = seatCards.length > 0 && (!isPhoneViewport || seat.isHero || hasVisibleRevealedCard);
                             const showHeroNotReadyNotice = Boolean(!isArchivedRoom && seat.isHero && heroPlayer && !heroPlayer.isReady && !heroPlayer.isSittingOut);
+                            const showWinnerStrip = Boolean(!isPhoneViewport && seat.actionBubble && seat.isWinner && !currentHand);
+                            const showLiveActionBubble = Boolean(
+                                seat.actionBubble
+                                && !showWinnerStrip
+                                && (isPhoneViewport || !seat.contributionLabel)
+                            );
+                            const showHeroChatToast = Boolean(seat.isHero && heroChatToast?.content);
+                            const showPinnedHandLabel = Boolean(!isPhoneViewport && seat.statusLabel && (seat.runoutWinPercent !== null || seat.isWinner));
+                            const actionBubbleTone = seat.actionBubble === "Fold"
+                                ? "fold"
+                                : seat.actionBubble === "Check"
+                                    ? "check"
+                                    : "default";
+                            const activeSeatTurnMetrics = seat.isActive
+                                && turnMetrics?.kind === "turn"
+                                && turnMetrics.actorAccountId === seat.player?.accountId
+                                ? turnMetrics
+                                : null;
 
                             return (
                                 <article
@@ -3257,6 +4260,23 @@ export function RoomClient({
                                     onClick={seat.player ? (event) => handleSeatPerspectiveClick(event, seat) : undefined}
                                 >
                                     {showHeroNotReadyNotice ? <div className="table-seat__notice table-seat__notice--warning">Not ready</div> : null}
+                                    {dealerMarker ? (
+                                        <div className={["table-seat__dealer-button", `table-seat__dealer-button--${seat.mediaPlacement}`].join(" ")} aria-hidden="true">
+                                            <span className="table-seat__dealer-button-chip">{dealerMarker.label}</span>
+                                        </div>
+                                    ) : null}
+                                    {blindMarkers.length ? (
+                                        <div className={["table-seat__blind-badges", `table-seat__blind-badges--${seat.mediaPlacement}`].join(" ")} aria-hidden="true">
+                                            {blindMarkers.map((marker) => (
+                                                <span key={`${seat.seatIndex}-${marker.label}`} className={["table-seat__blind-badge", `table-seat__blind-badge--${marker.label.toLowerCase()}`].join(" ")}>
+                                                    {marker.label}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    ) : null}
+                                    {showPinnedHandLabel ? (
+                                        <div className={["table-seat__showdown-label", `table-seat__showdown-label--${seat.stateTone}`].join(" ")}>{seat.statusLabel}</div>
+                                    ) : null}
                                     {seat.runoutWinPercent !== null ? (
                                         <div
                                             className={[
@@ -3273,14 +4293,22 @@ export function RoomClient({
                                     ) : null}
                                     {!seat.isHero && seatGesture ? <div className={["table-seat__gesture", `table-seat__gesture--${seat.mediaPlacement}`].join(" ")}>{seatGesture.emoji}</div> : null}
                                     {seatReaction ? <div className="table-seat__reaction">{seatReaction.emoji}</div> : null}
-                                    {seat.actionBubble ? <div className="table-seat__bubble">{seat.actionBubble}</div> : null}
-                                    {seat.contributionLabel ? <div className="table-seat__chips">{seat.contributionLabel}</div> : null}
-                                    {seat.isActive && turnMetrics ? (
-                                        <div className={["table-seat__timer", turnMetrics.isUsingTimeBank ? "table-seat__timer--timebank" : ""].filter(Boolean).join(" ")}>
-                                            {turnMetrics.isUsingTimeBank ? `TB ${formatTurnSeconds(turnMetrics.timeBankSecondsRemaining)}` : formatTurnSeconds(turnMetrics.mainSecondsRemaining)}
-                                        </div>
+                                    {showHeroChatToast ? (
+                                        <div className={[
+                                            "table-seat__bubble",
+                                            "table-seat__bubble--chat",
+                                        ].join(" ")}>{heroChatToast?.content}</div>
                                     ) : null}
-
+                                    {showWinnerStrip ? <div className="table-seat__bubble table-seat__bubble--winner">{seat.actionBubble}</div> : null}
+                                    {showLiveActionBubble ? (
+                                        <div className={[
+                                            "table-seat__bubble",
+                                            "table-seat__bubble--live",
+                                            `table-seat__bubble--${seat.mediaPlacement}`,
+                                            `table-seat__bubble--${actionBubbleTone}`,
+                                        ].join(" ")}>{seat.actionBubble}</div>
+                                    ) : null}
+                                    {seat.contributionLabel ? <div className={["table-seat__chips", `table-seat__chips--${seat.mediaPlacement}`].join(" ")}>{seat.contributionLabel}</div> : null}
                                     {seat.isOpen ? (
                                         <>
                                             <div className="table-seat__header">
@@ -3312,6 +4340,8 @@ export function RoomClient({
                                             "table-seat__visuals",
                                             showSeatMediaTile ? "table-seat__visuals--with-media" : "table-seat__visuals--cards-only",
                                         ].filter(Boolean).join(" ")}>
+                                            {seat.isHero && heroHandLabel ? <div className="table-seat__hero-hand">{heroHandLabel}</div> : null}
+
                                             {showSeatMediaTile ? (
                                                 <div className="table-seat__media-wrap">
                                                     {seat.isHero ? (
@@ -3427,30 +4457,35 @@ export function RoomClient({
                                                     ) : null}
 
                                                     {mediaParticipant ? (
-                                                        <div className={[
-                                                            "table-seat__media",
-                                                            mediaParticipant.isSpeaking ? "table-seat__media--speaking" : "",
-                                                            mediaParticipant.demoSurface ? "table-seat__media--demo" : "",
-                                                        ].filter(Boolean).join(" ")}>
-                                                            <ParticipantCameraSurface
-                                                                participant={mediaParticipant}
-                                                                className="table-seat__media-surface"
-                                                                emptyLabel={mediaParticipant.isLocal ? "Your camera is off" : `${mediaParticipant.name} camera is off`}
-                                                            />
-                                                            <span className="table-seat__media-badge">{describeMediaBadge(mediaParticipant)}</span>
-                                                        </div>
+                                                        <>
+                                                            <div className={[
+                                                                "table-seat__media",
+                                                                mediaParticipant.isSpeaking ? "table-seat__media--speaking" : "",
+                                                                mediaParticipant.demoSurface ? "table-seat__media--demo" : "",
+                                                            ].filter(Boolean).join(" ")}>
+                                                                <ParticipantCameraSurface
+                                                                    participant={mediaParticipant}
+                                                                    className="table-seat__media-surface"
+                                                                    emptyLabel={mediaParticipant.isLocal ? "Your camera is off" : `${mediaParticipant.name} camera is off`}
+                                                                />
+                                                            </div>
+                                                            <span className={[
+                                                                "table-seat__media-badge",
+                                                                `table-seat__media-badge--${mediaBadge?.tone ?? "joined"}`,
+                                                            ].join(" ")}>{mediaBadge?.label ?? "Joined"}</span>
+                                                        </>
                                                     ) : (
-                                                        <div className="table-seat__media table-seat__media--fallback">
-                                                            <span className="table-seat__media-fallback-avatar">{seat.avatarLabel}</span>
-                                                            <span className="table-seat__media-badge">Awaiting camera</span>
-                                                        </div>
+                                                        <>
+                                                            <div className="table-seat__media table-seat__media--fallback">
+                                                                <span className="table-seat__media-fallback-avatar">{seat.avatarLabel}</span>
+                                                            </div>
+                                                            <span className="table-seat__media-badge table-seat__media-badge--awaiting">Awaiting camera</span>
+                                                        </>
                                                     )}
                                                 </div>
                                             ) : null}
 
                                             <div className="table-seat__content">
-                                                {seat.isHero && heroHandLabel ? <div className="table-seat__hero-hand">{heroHandLabel}</div> : null}
-
                                                 <div className="table-seat__identity">
                                                     <strong>{seat.name}</strong>
                                                     <span>{seat.stackLabel}</span>
@@ -3458,9 +4493,9 @@ export function RoomClient({
 
                                                 {!seat.isHero && seatGesture ? <span className="table-seat__mobile-gesture">{seatGesture.emoji}</span> : null}
 
-                                                {seat.markers.length ? (
+                                                {inlineMarkers.length ? (
                                                     <div className="table-seat__markers">
-                                                        {seat.markers.map((marker) => (
+                                                        {inlineMarkers.map((marker) => (
                                                             <span key={`${seat.seatIndex}-${marker.label}`} className={`table-seat__marker table-seat__marker--${marker.tone}`}>
                                                                 {marker.label}
                                                             </span>
@@ -3486,10 +4521,31 @@ export function RoomClient({
                                                 </div>
 
                                                 <div className="table-seat__footer">
-                                                    {seat.statusLabel ? <span className={`table-seat__state table-seat__state--${seat.stateTone}`}>{seat.statusLabel}</span> : null}
+                                                    {seat.statusLabel && !showPinnedHandLabel ? <span className={`table-seat__state table-seat__state--${seat.stateTone}`}>{seat.statusLabel}</span> : null}
                                                     <span className="table-seat__seat-label">Seat {seat.seatIndex + 1}</span>
                                                 </div>
                                             </div>
+
+                                            {activeSeatTurnMetrics ? (
+                                                <div className="table-seat__turn-bar" aria-hidden="true">
+                                                    <span
+                                                        className={[
+                                                            "table-seat__turn-bar-fill",
+                                                            "table-seat__turn-bar-fill--timebank",
+                                                            activeSeatTurnMetrics.isTimeBankLow ? "table-seat__turn-bar-fill--low" : "",
+                                                        ].filter(Boolean).join(" ")}
+                                                        style={{ width: `${activeSeatTurnMetrics.timeBankPercentRemaining}%` }}
+                                                    />
+                                                    <span
+                                                        className={[
+                                                            "table-seat__turn-bar-fill",
+                                                            "table-seat__turn-bar-fill--main",
+                                                            activeSeatTurnMetrics.isMainLow ? "table-seat__turn-bar-fill--low" : "",
+                                                        ].filter(Boolean).join(" ")}
+                                                        style={{ width: `${activeSeatTurnMetrics.mainPercentRemaining}%` }}
+                                                    />
+                                                </div>
+                                            ) : null}
 
                                             {shouldRenderSeatCards ? (
                                                 <div className={[
@@ -3555,7 +4611,7 @@ export function RoomClient({
                     <section className="table-mobile-overview">
                         {heroStatsBar}
 
-                        <div className="table-mobile-controls">
+                        <div className="table-mobile-controls" ref={tableMenuShellRef}>
                             <div className="table-mobile-controls__row">
                                 {renderTableMenuButtons()}
                             </div>
@@ -3572,166 +4628,13 @@ export function RoomClient({
                     </section>
                 ) : null}
 
-                <section className="table-log-panel table-log-panel--below">
-                    <div className="table-activity-grid">
-                        <section className="table-ledger-panel">
-                            <div className="table-log-panel__header">
-                                <span className="table-log-panel__eyebrow">Log</span>
-                                <strong>{currentHand ? `Hand ${currentHand.handNumber}` : selectedCompletedHand ? `Hand ${selectedCompletedHand.handNumber}` : snapshot?.slug ?? slug}</strong>
-                            </div>
-
-                            {currentHand?.actions.length ? (
-                                <div className="table-ledger-panel__live">
-                                    <span className="table-ledger-panel__section-label">Current hand</span>
-                                    <ul className="action-log">
-                                        {currentHand.actions.slice(-12).reverse().map((action) => (
-                                            <li key={`${action.orderIndex}-${action.createdAt}`} className="action-log__item">
-                                                <strong>{resolveRoomDisplayName(snapshot, action.actorAccountId)}</strong>
-                                                <span>{formatActionSummary(action)}</span>
-                                                <span>{formatStreet(action.street)}</span>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </div>
-                            ) : null}
-
-                            {recentCompletedHands.length ? (
-                                <div className="table-ledger-panel__history-strip">
-                                    {recentCompletedHands.map((hand) => (
-                                        <button
-                                            key={hand.handId}
-                                            className={[
-                                                "table-ledger-panel__history-button",
-                                                selectedCompletedHand?.handId === hand.handId ? "table-ledger-panel__history-button--active" : "",
-                                            ].filter(Boolean).join(" ")}
-                                            type="button"
-                                            onClick={() => handleSelectHistoryHand(hand.handId)}
-                                        >
-                                            Hand {hand.handNumber}
-                                        </button>
-                                    ))}
-                                </div>
-                            ) : null}
-
-                            {selectedCompletedHand ? (
-                                <div className="table-ledger-panel__recap">
-                                    <div className="table-ledger-panel__recap-header">
-                                        <strong>Hand {selectedCompletedHand.handNumber}</strong>
-                                        <span>{selectedCompletedHandRunout?.isActive ? selectedCompletedHandAdditionalBoards.length > 0 ? "Running it twice" : "Running board" : selectedCompletedHand.winningReason === "showdown" ? "Showdown" : "Won before showdown"}</span>
-                                    </div>
-
-                                    {selectedCompletedHandBoards.map((board, boardIndex) => (
-                                        <div key={`history-hand-${selectedCompletedHand.handId}-board-${boardIndex}`} className="table-ledger-panel__runout-block">
-                                            {selectedCompletedHandBoards.length > 1 ? <span className="table-ledger-panel__section-label">Run {boardIndex + 1}</span> : null}
-                                            <div className="table-board table-board--compact table-ledger-panel__board">
-                                                {buildBoardSlots(board).map((slot, index) => (
-                                                    <PokerCard key={`history-hand-${selectedCompletedHand.handId}-${boardIndex}-${index}`} card={slot.card} isFaceUp={slot.isFaceUp} size="compact" backLabel={slot.backLabel} />
-                                                ))}
-                                            </div>
-
-                                            {!selectedCompletedHandRunout?.isActive && selectedCompletedHandRunoutResults.length > 1 && selectedCompletedHandRunoutResults[boardIndex]?.winners.length ? (
-                                                <ul className="winner-list table-ledger-panel__runout-winners">
-                                                    {selectedCompletedHandRunoutResults[boardIndex]!.winners.map((winner) => (
-                                                        <li key={`${selectedCompletedHand.handId}-${boardIndex}-${winner.accountId}`}>
-                                                            🏆 {resolveRoomDisplayName(snapshot, winner.accountId)} won {formatNumber(winner.amountWon)}
-                                                            {winner.handLabel ? ` with ${winner.handLabel}` : ""}
-                                                        </li>
-                                                    ))}
-                                                </ul>
-                                            ) : null}
-                                        </div>
-                                    ))}
-
-                                    {selectedCompletedHand.actions.length ? (
-                                        <ul className="action-log table-ledger-panel__action-log">
-                                            {selectedCompletedHand.actions.map((action) => (
-                                                <li key={`${selectedCompletedHand.handId}-${action.orderIndex}`} className="action-log__item">
-                                                    <strong>{resolveRoomDisplayName(snapshot, action.actorAccountId)}</strong>
-                                                    <span>{formatActionSummary(action)}</span>
-                                                    <span>{formatStreet(action.street)}</span>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    ) : null}
-
-                                    {selectedCompletedHandRevealEntries.length ? (
-                                        <div className="table-ledger-panel__reveals">
-                                            {selectedCompletedHandRevealEntries.map(([accountId, cards]) => (
-                                                <article key={`${selectedCompletedHand.handId}-${accountId}`} className="table-ledger-panel__reveal">
-                                                    <strong>{resolveRoomDisplayName(snapshot, accountId)}</strong>
-                                                    <div className="table-ledger-panel__reveal-cards">
-                                                        {cards.filter((card): card is Card => card !== null).map((card, index) => (
-                                                            <PokerCard key={`${selectedCompletedHand.handId}-${accountId}-${index}`} card={card} isFaceUp size="compact" backLabel="Reveal" />
-                                                        ))}
-                                                    </div>
-                                                </article>
-                                            ))}
-                                        </div>
-                                    ) : null}
-
-                                    {selectedCompletedHandRunout?.isActive ? (
-                                        <p className="muted-copy">Board is still running before the showdown result locks in.</p>
-                                    ) : (
-                                        <>
-                                            {selectedCompletedHandRunoutResults.length > 1 ? <span className="table-ledger-panel__section-label">Overall payout</span> : null}
-                                            <ul className="winner-list">
-                                                {selectedCompletedHandWinners.map((winner) => (
-                                                    <li key={`${selectedCompletedHand.handId}-${winner.accountId}`}>
-                                                        🏆 {resolveRoomDisplayName(snapshot, winner.accountId)} won {formatNumber(winner.amountWon)}
-                                                        {winner.handLabel ? ` with ${winner.handLabel}` : ""}
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        </>
-                                    )}
-                                </div>
-                            ) : currentHand?.actions.length ? null : (
-                                <p className="muted-copy">Start a hand to populate the action log and hand recap history.</p>
-                            )}
-                        </section>
-
-                        <section className="table-chat-panel table-chat-panel--surface">
-                            <div className="table-log-panel__header">
-                                <span className="table-log-panel__eyebrow">Chat</span>
-                                <strong>{snapshot?.name ?? slug}</strong>
-                            </div>
-
-                            <div className="table-chat-panel__messages">
-                                {snapshot?.chatMessages.length ? snapshot.chatMessages.slice(-20).reverse().map((message) => (
-                                    <article key={message.id} className="table-chat-panel__message">
-                                        <div className="table-chat-panel__meta">
-                                            <strong>{message.displayName}</strong>
-                                            <span>{formatChatTimestamp(message.createdAt)}</span>
-                                        </div>
-                                        <p>{message.content}</p>
-                                    </article>
-                                )) : <p className="muted-copy">Table chat is empty. Say something before the next hand starts.</p>}
-                            </div>
-
-                            <div className="table-chat-panel__composer">
-                                <input
-                                    ref={chatInputRef}
-                                    className="control-input"
-                                    type="text"
-                                    value={chatDraft}
-                                    onChange={(event) => setChatDraft(event.target.value)}
-                                    placeholder={canChat ? "Type a table message" : "Join the room to chat"}
-                                    maxLength={240}
-                                    disabled={!canChat || isMutating}
-                                    onKeyDown={(event) => {
-                                        if (event.key === "Enter") {
-                                            event.preventDefault();
-                                            void handleSendChatMessage();
-                                        }
-                                    }}
-                                />
-                                <button className="button button--primary table-chat-panel__send" type="button" onClick={() => void handleSendChatMessage()} disabled={!canChat || isMutating || chatDraft.trim().length === 0}>
-                                    Send
-                                </button>
-                            </div>
-                        </section>
-                    </div>
-                </section>
+                {isPhoneViewport ? (
+                    <section className="table-log-panel table-log-panel--below">
+                        <div className="table-activity-grid table-activity-grid--ledger-only">
+                            {renderTableChatPanel("surface")}
+                        </div>
+                    </section>
+                ) : null}
 
                 <MediaAudioRack participants={demoMode ? [] : effectiveRemoteParticipants} />
             </section>
@@ -4061,60 +4964,108 @@ export function RoomClient({
             ) : null}
 
             {isSessionLedgerOpen ? (
-                <div className="session-ledger-modal" role="dialog" aria-modal="true" aria-label="Session ledger">
+                <div className="session-ledger-modal" role="dialog" aria-modal="true" aria-label="Table log and ledger">
                     <button className="session-ledger-modal__backdrop" type="button" aria-label="Close session ledger" onClick={() => setIsSessionLedgerOpen(false)} />
-                    <section className="session-ledger-modal__panel">
+                    <section className="session-ledger-modal__panel session-ledger-modal__panel--log">
                         <header className="session-ledger-modal__header">
                             <div>
-                                <h2>Session Ledger</h2>
-                                <p>Current session ranking by net result.</p>
+                                <h2>Log / Ledger</h2>
+                                <p>Compact hand history with the session ledger up front.</p>
                             </div>
-                            <button className="session-ledger-modal__close" type="button" onClick={() => setIsSessionLedgerOpen(false)} aria-label="Close session ledger">
-                                ×
-                            </button>
+                            <div className="session-ledger-modal__header-actions">
+                                {sessionLogView === "ledger" ? (
+                                    <button className="button button--secondary session-ledger-modal__download" type="button" onClick={handleDownloadSessionLedgerCsv}>
+                                        Download CSV
+                                    </button>
+                                ) : null}
+                                <button className="session-ledger-modal__close" type="button" onClick={() => setIsSessionLedgerOpen(false)} aria-label="Close session ledger">
+                                    ×
+                                </button>
+                            </div>
                         </header>
 
-                        <div className="session-ledger-modal__table-wrap">
-                            <div className="session-ledger-modal__table">
-                                <div className="session-ledger-modal__row session-ledger-modal__row--header">
-                                    <span>Player</span>
-                                    <span>Buy-in</span>
-                                    <span>Buy-out</span>
-                                    <span>Stack</span>
-                                    <span>Wins</span>
-                                    <span>Rebuys</span>
-                                    <span>Net</span>
-                                </div>
+                        <div className="session-ledger-modal__controls">
+                            <div className="table-log-panel__tabs" role="tablist" aria-label="Log and ledger views">
+                                <button
+                                    className={[
+                                        "table-log-panel__tab",
+                                        sessionLogView === "ledger" ? "table-log-panel__tab--active" : "",
+                                    ].filter(Boolean).join(" ")}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={sessionLogView === "ledger"}
+                                    onClick={() => setSessionLogView("ledger")}
+                                >
+                                    Ledger
+                                </button>
+                                <button
+                                    className={[
+                                        "table-log-panel__tab",
+                                        sessionLogView === "log" ? "table-log-panel__tab--active" : "",
+                                    ].filter(Boolean).join(" ")}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={sessionLogView === "log"}
+                                    onClick={() => setSessionLogView("log")}
+                                >
+                                    Log
+                                </button>
+                            </div>
 
-                                {sessionLedgerRows.map((row) => (
-                                    <div key={row.accountId} className="session-ledger-modal__row">
-                                        <div className="session-ledger-modal__player-cell">
-                                            <strong>{row.displayName}</strong>
-                                            <span>{formatSessionLedgerHandle(row.accountId)}</span>
+                            <span className="session-ledger-modal__summary-pill">
+                                {sessionLogView === "log"
+                                    ? currentHand
+                                        ? `Hand ${currentHand.handNumber} live`
+                                        : selectedCompletedHand
+                                            ? `Hand ${selectedCompletedHand.handNumber} selected`
+                                            : "Waiting for next hand"
+                                    : `${sessionLedgerRows.length} ${sessionLedgerRows.length === 1 ? "player" : "players"}`}
+                            </span>
+                        </div>
+
+                        <div className="session-ledger-modal__table-wrap">
+                            {sessionLogView === "log" ? renderTableLogContent() : (
+                                <div className="session-ledger-modal__table session-ledger-modal__table--compact">
+                                    <div className="session-ledger-modal__row session-ledger-modal__row--header">
+                                        <span>Player</span>
+                                        <span>Buy-in</span>
+                                        <span>Buy-out</span>
+                                        <span>Stack</span>
+                                        <span>Wins</span>
+                                        <span>Rebuys</span>
+                                        <span>Net</span>
+                                    </div>
+
+                                    {sessionLedgerRows.map((row) => (
+                                        <div key={row.accountId} className="session-ledger-modal__row">
+                                            <div className="session-ledger-modal__player-cell">
+                                                <strong>{row.displayName}</strong>
+                                                <span>{formatSessionLedgerHandle(row.accountId)}</span>
+                                            </div>
+                                            <span>{formatNumber(row.buyIn)}</span>
+                                            <span>{formatNumber(row.buyOut)}</span>
+                                            <span>{formatNumber(row.stack)}</span>
+                                            <span>{formatNumber(row.wins)}</span>
+                                            <span>{formatNumber(row.rebuys)}</span>
+                                            <span className={row.net >= 0 ? "session-ledger-modal__net session-ledger-modal__net--positive" : "session-ledger-modal__net session-ledger-modal__net--negative"}>
+                                                {row.net >= 0 ? "+" : ""}{formatNumber(row.net)}
+                                            </span>
                                         </div>
-                                        <span>{formatNumber(row.buyIn)}</span>
-                                        <span>{formatNumber(row.buyOut)}</span>
-                                        <span>{formatNumber(row.stack)}</span>
-                                        <span>{formatNumber(row.wins)}</span>
-                                        <span>{formatNumber(row.rebuys)}</span>
-                                        <span className={row.net >= 0 ? "session-ledger-modal__net session-ledger-modal__net--positive" : "session-ledger-modal__net session-ledger-modal__net--negative"}>
-                                            {row.net >= 0 ? "+" : ""}{formatNumber(row.net)}
+                                    ))}
+
+                                    <div className="session-ledger-modal__row session-ledger-modal__row--footer">
+                                        <span>Table total</span>
+                                        <span>{formatNumber(sessionLedgerTotals.buyIn)}</span>
+                                        <span>{formatNumber(sessionLedgerTotals.buyOut)}</span>
+                                        <span>{formatNumber(sessionLedgerTotals.stack)}</span>
+                                        <span>{formatNumber(sessionLedgerTotals.wins)}</span>
+                                        <span>{formatNumber(sessionLedgerTotals.rebuys)}</span>
+                                        <span className={sessionLedgerTotals.net >= 0 ? "session-ledger-modal__net session-ledger-modal__net--positive" : "session-ledger-modal__net session-ledger-modal__net--negative"}>
+                                            {sessionLedgerTotals.net >= 0 ? "+" : ""}{formatNumber(sessionLedgerTotals.net)}
                                         </span>
                                     </div>
-                                ))}
-
-                                <div className="session-ledger-modal__row session-ledger-modal__row--footer">
-                                    <span>Table total</span>
-                                    <span>{formatNumber(sessionLedgerTotals.buyIn)}</span>
-                                    <span>{formatNumber(sessionLedgerTotals.buyOut)}</span>
-                                    <span>{formatNumber(sessionLedgerTotals.stack)}</span>
-                                    <span>{formatNumber(sessionLedgerTotals.wins)}</span>
-                                    <span>{formatNumber(sessionLedgerTotals.rebuys)}</span>
-                                    <span className={sessionLedgerTotals.net >= 0 ? "session-ledger-modal__net session-ledger-modal__net--positive" : "session-ledger-modal__net session-ledger-modal__net--negative"}>
-                                        {sessionLedgerTotals.net >= 0 ? "+" : ""}{formatNumber(sessionLedgerTotals.net)}
-                                    </span>
                                 </div>
-                            </div>
+                            )}
                         </div>
                     </section>
                 </div>
@@ -4264,6 +5215,7 @@ function buildTableSeats(
     options?: {
         suppressWinnerHighlights?: boolean;
         completedHandReveals?: Record<string, [Card | null, Card | null]> | null;
+        markerSeats?: HandMarkerSeats;
         pendingRunoutWinners?: ReadonlyMap<string, LastHandResult["winners"][number]>;
         runoutHandLabelByAccount?: ReadonlyMap<string, string>;
         runoutWinPercentByAccount?: ReadonlyMap<string, number>;
@@ -4372,7 +5324,7 @@ function buildTableSeats(
                                 ? "ready"
                                 : "waiting",
             avatarLabel: player ? getAvatarLabel(player.displayName) : pendingSeatRequest ? getAvatarLabel(pendingSeatRequest.displayName) : "+",
-            markers: buildSeatMarkers(snapshot, player),
+            markers: buildSeatMarkers(snapshot, player, options?.markerSeats),
             actionBubble: player && currentHand
                 ? formatSeatActionBubble(currentHand.actions, player.accountId, currentHand.street)
                 : winningEntry
@@ -4447,36 +5399,29 @@ function getDisplayedHandsWonCount(
     return Math.max(0, handsWonCount - (pendingRunoutWinners.has(accountId) ? 1 : 0));
 }
 
-function buildSeatMarkers(snapshot: RoomSnapshot | null, player: RoomPlayer | null): Array<{ label: string; tone: "dealer" | "blind" | "admin" }> {
-    if (!snapshot?.currentHand || !player) {
-        if (!player) {
-            return [];
-        }
-
-        const markers: Array<{ label: string; tone: "dealer" | "blind" | "admin" }> = [];
-
-        if (isBotAccountId(player.accountId)) {
-            markers.push({ label: "Bot", tone: "admin" });
-        }
-
-        if (player.accountId === snapshot?.adminAccountId) {
-            markers.push({ label: "Admin", tone: "admin" });
-        }
-
-        return markers;
+function buildSeatMarkers(
+    snapshot: RoomSnapshot | null,
+    player: RoomPlayer | null,
+    markerSeats?: HandMarkerSeats,
+): Array<{ label: string; tone: "dealer" | "blind" | "admin" }> {
+    if (!player) {
+        return [];
     }
 
+    const dealerSeat = snapshot?.currentHand?.dealerSeat ?? markerSeats?.dealerSeat ?? null;
+    const smallBlindSeat = snapshot?.currentHand?.smallBlindSeat ?? markerSeats?.smallBlindSeat ?? null;
+    const bigBlindSeat = snapshot?.currentHand?.bigBlindSeat ?? markerSeats?.bigBlindSeat ?? null;
     const markers: Array<{ label: string; tone: "dealer" | "blind" | "admin" }> = [];
 
-    if (snapshot.currentHand.dealerSeat === player.seatIndex) {
+    if (dealerSeat === player.seatIndex) {
         markers.push({ label: "D", tone: "dealer" });
     }
 
-    if (snapshot.currentHand.smallBlindSeat === player.seatIndex) {
+    if (smallBlindSeat === player.seatIndex) {
         markers.push({ label: "SB", tone: "blind" });
     }
 
-    if (snapshot.currentHand.bigBlindSeat === player.seatIndex) {
+    if (bigBlindSeat === player.seatIndex) {
         markers.push({ label: "BB", tone: "blind" });
     }
 
@@ -4484,7 +5429,7 @@ function buildSeatMarkers(snapshot: RoomSnapshot | null, player: RoomPlayer | nu
         markers.push({ label: "Bot", tone: "admin" });
     }
 
-    if (player.accountId === snapshot.adminAccountId) {
+    if (player.accountId === snapshot?.adminAccountId) {
         markers.push({ label: "Admin", tone: "admin" });
     }
 
@@ -4967,6 +5912,14 @@ function getCompletedHandBoards(lastCompletedHand: LastHandResult | null): Card[
 
 function getCompletedHandRunoutResults(lastCompletedHand: LastHandResult | null): NonNullable<NonNullable<LastHandResult["allInRunout"]>["runouts"]> {
     return lastCompletedHand?.allInRunout?.runouts ?? [];
+}
+
+function escapeCsvValue(value: string): string {
+    if (/[",\n]/.test(value)) {
+        return `"${value.replace(/"/g, '""')}"`;
+    }
+
+    return value;
 }
 
 function buildArchivedReplayRoomSnapshot(
@@ -5607,6 +6560,10 @@ function buildTurnMetrics(snapshot: RoomSnapshot | null, nowMs: number): null | 
     isUsingTimeBank: boolean;
     mainSecondsRemaining: number;
     timeBankSecondsRemaining: number;
+    mainPercentRemaining: number;
+    timeBankPercentRemaining: number;
+    isMainLow: boolean;
+    isTimeBankLow: boolean;
 } {
     if (!snapshot?.currentHand || !snapshot.turnState.currentTurnStartedAt || snapshot.turnState.turnSeconds === null) {
         return null;
@@ -5627,6 +6584,10 @@ function buildTurnMetrics(snapshot: RoomSnapshot | null, nowMs: number): null | 
             isUsingTimeBank: false,
             mainSecondsRemaining: Math.max(0, Math.ceil(mainRemainingMs / 1000)),
             timeBankSecondsRemaining: 0,
+            mainPercentRemaining: 100,
+            timeBankPercentRemaining: 0,
+            isMainLow: false,
+            isTimeBankLow: false,
         };
     }
 
@@ -5642,13 +6603,19 @@ function buildTurnMetrics(snapshot: RoomSnapshot | null, nowMs: number): null | 
     const mainRemainingMs = Math.max(0, mainBudgetMs - elapsedMs);
     const overflowMs = Math.max(0, elapsedMs - mainBudgetMs);
     const timeBankRemainingMs = Math.max(0, actorTimeBankMs - overflowMs);
+    const timeBankBudgetMs = actorTimeBankMs + overflowMs;
+    const totalBudgetMs = Math.max(1, mainBudgetMs + timeBankBudgetMs);
 
     return {
         actorAccountId: snapshot.currentHand.actorAccountId,
         kind: "turn",
-        isUsingTimeBank: mainRemainingMs === 0 && timeBankRemainingMs < actorTimeBankMs,
+        isUsingTimeBank: mainRemainingMs === 0 && timeBankBudgetMs > 0 && timeBankRemainingMs < timeBankBudgetMs,
         mainSecondsRemaining: Math.max(0, Math.ceil(mainRemainingMs / 1000)),
         timeBankSecondsRemaining: Math.max(0, Math.ceil(timeBankRemainingMs / 1000)),
+        mainPercentRemaining: Math.max(0, Math.min(100, (mainRemainingMs / totalBudgetMs) * 100)),
+        timeBankPercentRemaining: Math.max(0, Math.min(100, (timeBankRemainingMs / totalBudgetMs) * 100)),
+        isMainLow: mainBudgetMs > 0 && mainRemainingMs / mainBudgetMs <= 0.3,
+        isTimeBankLow: timeBankBudgetMs > 0 && timeBankRemainingMs / timeBankBudgetMs <= 0.3,
     };
 }
 
@@ -5808,23 +6775,83 @@ function getWagerTargetContribution(
     return inputAmount;
 }
 
-function describeMediaBadge(participant: MediaParticipantState): string {
+function areQueuedHeroActionsEqual(left: QueuedHeroAction | null, right: QueuedHeroAction | null): boolean {
+    if (left === right) {
+        return true;
+    }
+
+    if (!left || !right || left.type !== right.type) {
+        return false;
+    }
+
+    if (left.type !== "call") {
+        return true;
+    }
+
+    return right.type === "call" && left.amount === right.amount;
+}
+
+function resolveQueuedHeroAction(
+    queuedHeroAction: QueuedHeroAction,
+    heroActionState: HeroActionState,
+): Extract<HeroActionState["allowedActions"][number], "call" | "check" | "fold"> | null {
+    switch (queuedHeroAction.type) {
+        case "check_or_fold":
+            if (heroActionState.allowedActions.includes("check")) {
+                return "check";
+            }
+
+            return heroActionState.allowedActions.includes("fold") ? "fold" : null;
+        case "check":
+            return heroActionState.allowedActions.includes("check") ? "check" : null;
+        case "fold":
+            return heroActionState.allowedActions.includes("fold") ? "fold" : null;
+        case "call":
+            return heroActionState.allowedActions.includes("call") && heroActionState.callAmount === queuedHeroAction.amount
+                ? "call"
+                : null;
+    }
+}
+
+function describeMediaBadge(participant: MediaParticipantState): {
+    label: string;
+    tone: "awaiting" | "joined" | "live" | "mic" | "muted-mic" | "no-cam";
+} {
     const cameraOn = participant.cameraEnabled;
     const microphoneOn = participant.microphoneEnabled;
 
+    if (cameraOn && microphoneOn && participant.isSpeaking) {
+        return {
+            label: participant.isLocal ? "You live" : "Live",
+            tone: "live",
+        };
+    }
+
     if (cameraOn && microphoneOn) {
-        return participant.isLocal ? "You live" : "Live";
+        return {
+            label: "Mic on",
+            tone: "mic",
+        };
     }
 
     if (cameraOn) {
-        return "Camera on";
+        return {
+            label: "Mic muted",
+            tone: "muted-mic",
+        };
     }
 
     if (microphoneOn) {
-        return "Mic on";
+        return {
+            label: "Cam off",
+            tone: "no-cam",
+        };
     }
 
-    return "Joined";
+    return {
+        label: "Joined",
+        tone: "joined",
+    };
 }
 
 function PokerCard({

@@ -47,19 +47,19 @@ const TABLE_SOUND_EFFECTS: Record<TableSoundName, TableSoundEffectSpec> = {
         volume: 0.55,
     },
     handDealt: {
-        src: "/sounds/table/chips-action.ogg",
+        src: "/sounds/table/chip-action.mp3",
         volume: 0.45,
     },
     check: {
-        src: "/sounds/table/check.ogg",
+        src: "/sounds/table/check.mp3",
         volume: 0.45,
     },
     fold: {
-        src: "/sounds/table/fold.ogg",
+        src: "/sounds/table/fold.mp3",
         volume: 0.6,
     },
     chipAction: {
-        src: "/sounds/table/chips-action.ogg",
+        src: "/sounds/table/chip-action.mp3",
         volume: 0.45,
     },
     yourTurn: {
@@ -67,11 +67,11 @@ const TABLE_SOUND_EFFECTS: Record<TableSoundName, TableSoundEffectSpec> = {
         volume: 0.6,
     },
     cardReveal: {
-        src: "/sounds/table/card-reveal.ogg",
+        src: "/sounds/table/card-reveal.mp3",
         volume: 0.5,
     },
     flopReveal: {
-        src: "/sounds/table/flop-reveal.ogg",
+        src: "/sounds/table/flop-reveal.mp3",
         volume: 0.5,
     },
     victory: {
