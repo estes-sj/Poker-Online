@@ -4310,31 +4310,51 @@ export function RoomClient({
                                     ) : null}
                                     {seat.contributionLabel ? <div className={["table-seat__chips", `table-seat__chips--${seat.mediaPlacement}`].join(" ")}>{seat.contributionLabel}</div> : null}
                                     {seat.isOpen ? (
-                                        <>
-                                            <div className="table-seat__header">
-                                                <div className="table-seat__avatar">{seat.avatarLabel}</div>
+                                        <div className="table-seat__visuals table-seat__visuals--with-media table-seat__visuals--open">
+                                            <div className="table-seat__media-wrap">
+                                                <div className="table-seat__media table-seat__media--fallback table-seat__media--open">
+                                                    {heroPlayer === null ? (
+                                                        <button
+                                                            className="table-seat__media-fallback-avatar table-seat__media-fallback-avatar--button"
+                                                            type="button"
+                                                            onClick={() => handleSeatClick(seat.seatIndex)}
+                                                            disabled={isMutating || Boolean(seat.pendingRequest)}
+                                                        >
+                                                            {seat.avatarLabel}
+                                                        </button>
+                                                    ) : (
+                                                        <div className="table-seat__media-fallback-avatar">{seat.avatarLabel}</div>
+                                                    )}
+                                                    {seat.pendingRequest ? (
+                                                        <span className="table-seat__media-badge table-seat__media-badge--awaiting">
+                                                            Pending
+                                                        </span>
+                                                    ) : null}
+                                                </div>
+                                            </div>
+
+                                            <div className="table-seat__content table-seat__content--open">
                                                 <div className="table-seat__identity">
                                                     <strong>{seat.pendingRequest ? "Pending" : seat.name}</strong>
                                                     <span>{seat.pendingRequest ? `${seat.pendingRequest.displayName} · ${formatNumber(seat.pendingRequest.requestedStack)}` : seat.stackLabel}</span>
                                                 </div>
-                                            </div>
 
-                                            <div className="table-seat__footer">
-                                                {seat.statusLabel && (!isPhoneViewport || Boolean(seat.pendingRequest)) ? <span className={`table-seat__state table-seat__state--${seat.stateTone}`}>{seat.statusLabel}</span> : null}
-                                                <span className="table-seat__seat-label">Seat {seat.seatIndex + 1}</span>
-                                            </div>
+                                                <div className="table-seat__stats table-seat__stats--open">
+                                                    <span className="table-seat__stat-pill table-seat__stat-pill--open-label">Seat {seat.seatIndex + 1}</span>
+                                                </div>
 
-                                            {heroPlayer === null ? (
-                                                <button
-                                                    className="button button--secondary table-seat__button"
-                                                    type="button"
-                                                    onClick={() => handleSeatClick(seat.seatIndex)}
-                                                    disabled={isMutating || Boolean(seat.pendingRequest)}
-                                                >
-                                                    {seat.pendingRequest ? "Pending" : heroPendingSeatRequest ? "Move request" : "Take seat"}
-                                                </button>
-                                            ) : null}
-                                        </>
+                                                {heroPlayer === null ? (
+                                                    <button
+                                                        className="button button--secondary table-seat__button table-seat__button--open"
+                                                        type="button"
+                                                        onClick={() => handleSeatClick(seat.seatIndex)}
+                                                        disabled={isMutating || Boolean(seat.pendingRequest)}
+                                                    >
+                                                        {seat.pendingRequest ? "Pending" : heroPendingSeatRequest ? "Move request" : "Take seat"}
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                        </div>
                                     ) : (
                                         <div className={[
                                             "table-seat__visuals",
