@@ -14,7 +14,7 @@ import { useTableSoundEffects } from "./table-sound-effects";
 import { MediaAudioRack, ParticipantCameraSurface, useTableMedia } from "./table-media";
 import type { ArchivedHandRecord, Card, HandActionRecord, HeroActionState, LastHandResult, RevealMode, RoomPlayer, RoomSnapshot, SessionState } from "./room-types";
 
-const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
+const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 900px)";
 const MOBILE_LAYOUT_RECOMMENDATION_STORAGE_KEY = "river-club-mobile-layout-recommendation-dismissed";
 const ACTION_PAD_IDLE_DIM_STORAGE_KEY = "river-club-action-pad-idle-dim";
 const ACTION_PAD_VIEWPORT_MARGIN = 16;
@@ -270,66 +270,66 @@ const PHONE_TABLE_LAYOUTS: Record<number, ReadonlyArray<{ left: number; top: num
     ],
     4: [
         { left: 50, top: 88 },
-        { left: 15, top: 49 },
-        { left: 50, top: 12 },
-        { left: 85, top: 49 },
+        { left: 21, top: 51 },
+        { left: 50, top: 14 },
+        { left: 79, top: 51 },
     ],
     5: [
         { left: 50, top: 88 },
-        { left: 14, top: 64 },
-        { left: 30, top: 17 },
-        { left: 70, top: 17 },
-        { left: 86, top: 64 },
+        { left: 20, top: 66 },
+        { left: 33, top: 20 },
+        { left: 67, top: 20 },
+        { left: 80, top: 66 },
     ],
     6: [
         { left: 50, top: 88 },
-        { left: 14, top: 66 },
-        { left: 16, top: 30 },
-        { left: 50, top: 12 },
-        { left: 84, top: 30 },
-        { left: 86, top: 66 },
+        { left: 20, top: 68 },
+        { left: 19, top: 34 },
+        { left: 50, top: 14 },
+        { left: 81, top: 34 },
+        { left: 80, top: 68 },
     ],
     7: [
         { left: 50, top: 88 },
-        { left: 16, top: 69 },
-        { left: 16, top: 34 },
-        { left: 31, top: 16 },
-        { left: 69, top: 16 },
-        { left: 84, top: 34 },
-        { left: 84, top: 69 },
+        { left: 21, top: 70 },
+        { left: 20, top: 38 },
+        { left: 35, top: 18 },
+        { left: 65, top: 18 },
+        { left: 80, top: 38 },
+        { left: 79, top: 70 },
     ],
     8: [
         { left: 50, top: 88 },
-        { left: 16, top: 72 },
-        { left: 12, top: 48 },
-        { left: 28, top: 18 },
-        { left: 50, top: 10 },
-        { left: 72, top: 18 },
-        { left: 88, top: 48 },
-        { left: 84, top: 72 },
+        { left: 22, top: 73 },
+        { left: 17, top: 50 },
+        { left: 33, top: 20 },
+        { left: 50, top: 13 },
+        { left: 67, top: 20 },
+        { left: 83, top: 50 },
+        { left: 78, top: 73 },
     ],
     9: [
         { left: 50, top: 88 },
-        { left: 16, top: 72 },
-        { left: 12, top: 52 },
-        { left: 16, top: 30 },
-        { left: 30, top: 16 },
-        { left: 70, top: 16 },
-        { left: 84, top: 30 },
-        { left: 88, top: 52 },
-        { left: 84, top: 72 },
+        { left: 22, top: 73 },
+        { left: 16, top: 55 },
+        { left: 20, top: 34 },
+        { left: 34, top: 18 },
+        { left: 66, top: 18 },
+        { left: 80, top: 34 },
+        { left: 84, top: 55 },
+        { left: 78, top: 73 },
     ],
     10: [
         { left: 50, top: 88 },
-        { left: 18, top: 74 },
-        { left: 11, top: 59 },
-        { left: 11, top: 39 },
-        { left: 18, top: 24 },
-        { left: 50, top: 10 },
-        { left: 82, top: 24 },
-        { left: 89, top: 39 },
-        { left: 89, top: 59 },
-        { left: 82, top: 74 },
+        { left: 24, top: 75 },
+        { left: 16, top: 62 },
+        { left: 16, top: 42 },
+        { left: 24, top: 26 },
+        { left: 50, top: 12 },
+        { left: 76, top: 26 },
+        { left: 84, top: 42 },
+        { left: 84, top: 62 },
+        { left: 76, top: 75 },
     ],
 };
 
@@ -557,6 +557,8 @@ const DEFAULT_ACTION_PAD_OFFSET: ActionPadOffset = {
     y: 0,
 };
 
+const MAX_RECONNECT_ATTEMPTS_BEFORE_REFRESH = 6;
+
 export function RoomClient({
     slug,
     initialSnapshot,
@@ -587,12 +589,14 @@ export function RoomClient({
     const [openMenuPanel, setOpenMenuPanel] = useState<null | "invite" | "seat" | "media" | "rebuy" | "admin">(null);
     const [isReactionMenuOpen, setIsReactionMenuOpen] = useState(false);
     const [isSessionLedgerOpen, setIsSessionLedgerOpen] = useState(false);
+    const reactionMenuRef = useRef<HTMLDivElement>(null);
     const [sessionLogView, setSessionLogView] = useState<"log" | "ledger">("ledger");
     const [isEngineInfoOpen, setIsEngineInfoOpen] = useState(false);
     const [isHouseRulesOpen, setIsHouseRulesOpen] = useState(false);
     const [isPhoneViewport, setIsPhoneViewport] = useState(false);
     const [isMobileRecommendationOpen, setIsMobileRecommendationOpen] = useState(false);
-    const [isMobileActionMenuOpen, setIsMobileActionMenuOpen] = useState(false);
+    const [hasUnreadMobileChat, setHasUnreadMobileChat] = useState(false);
+    const [lastSeenChatMessageId, setLastSeenChatMessageId] = useState<string | null>(null);
     const [gestureInput, setGestureInput] = useState("");
     const [seatRequestStack, setSeatRequestStack] = useState("");
     const [botDisplayName, setBotDisplayName] = useState("");
@@ -632,6 +636,7 @@ export function RoomClient({
     const socketRef = useRef<WebSocket | null>(null);
     const chatInputRef = useRef<HTMLInputElement | null>(null);
     const tableChatOverlayRef = useRef<HTMLElement | null>(null);
+    const tableChatDockRef = useRef<HTMLDivElement | null>(null);
     const tableMenuShellRef = useRef<HTMLDivElement | null>(null);
     const actionPadRef = useRef<HTMLElement | null>(null);
     const actionPadDragStateRef = useRef<ActionPadDragState | null>(null);
@@ -815,6 +820,68 @@ export function RoomClient({
     }, [isPhoneViewport]);
 
     useEffect(() => {
+        if (!isPhoneViewport || !isChatExpanded) {
+            return;
+        }
+
+        if (!snapshot?.currentHand?.heroActionState?.canAct) {
+            return;
+        }
+
+        setIsChatExpanded(false);
+        setIsChatComposerOpen(false);
+    }, [isPhoneViewport, isChatExpanded, snapshot?.currentHand?.heroActionState?.canAct, snapshot?.currentHand?.id]);
+
+    useEffect(() => {
+        const latestMessage = snapshot?.chatMessages.at(-1);
+
+        if (!latestMessage) {
+            setHasUnreadMobileChat(false);
+            setLastSeenChatMessageId(null);
+            return;
+        }
+
+        if (lastSeenChatMessageId === null) {
+            setLastSeenChatMessageId(latestMessage.id);
+            return;
+        }
+
+        if (isPhoneViewport && isChatExpanded && latestMessage.id !== lastSeenChatMessageId) {
+            setLastSeenChatMessageId(latestMessage.id);
+            setHasUnreadMobileChat(false);
+            return;
+        }
+
+        if (isPhoneViewport && !isChatExpanded && latestMessage.id !== lastSeenChatMessageId) {
+            setHasUnreadMobileChat(true);
+        }
+    }, [snapshot?.chatMessages, lastSeenChatMessageId, isPhoneViewport, isChatExpanded]);
+
+    useEffect(() => {
+        if (!isPhoneViewport || !isChatExpanded) {
+            return;
+        }
+
+        const handlePointerDown = (event: PointerEvent) => {
+            const target = event.target;
+
+            if (!(target instanceof Node)) {
+                return;
+            }
+
+            if (tableChatOverlayRef.current?.contains(target) || tableChatDockRef.current?.contains(target)) {
+                return;
+            }
+
+            setIsChatExpanded(false);
+            setIsChatComposerOpen(false);
+        };
+
+        window.addEventListener("pointerdown", handlePointerDown);
+        return () => window.removeEventListener("pointerdown", handlePointerDown);
+    }, [isPhoneViewport, isChatExpanded]);
+
+    useEffect(() => {
         const heroActionState = snapshot?.currentHand?.heroActionState;
 
         if (!heroActionState) {
@@ -934,8 +1001,14 @@ export function RoomClient({
                 }
 
                 socketRef.current = null;
-                setConnectionState("reconnecting");
                 reconnectAttempts += 1;
+
+                if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS_BEFORE_REFRESH) {
+                    setConnectionState("disconnected");
+                    return;
+                }
+
+                setConnectionState("reconnecting");
                 const retryDelayMs = Math.min(5000, 500 * 2 ** Math.min(reconnectAttempts - 1, 4));
                 reconnectTimerRef.current = window.setTimeout(connect, retryDelayMs);
             });
@@ -1135,6 +1208,7 @@ export function RoomClient({
     const isProtectedRoomLocked = Boolean(!demoMode && snapshot?.passwordProtected && !viewerHasRoomAccess);
     const canJoinProtectedRoom = Boolean(snapshot && snapshot.passwordProtected && !viewerHasRoomAccess);
     const canChat = Boolean(snapshot && accountId && session && viewerHasRoomAccess && !demoMode && !isArchivedRoom);
+    const isMobileChatTemporarilyBlocked = Boolean(isPhoneViewport && heroActionState?.canAct);
     const canConnectMedia = Boolean(session && snapshot && viewerHasRoomAccess && !demoMode && !isArchivedRoom);
     const media = useTableMedia({
         slug,
@@ -1959,6 +2033,30 @@ export function RoomClient({
     }, [canShowRebuyMenu, openMenuPanel]);
 
     useEffect(() => {
+        if (!isReactionMenuOpen) {
+            return;
+        }
+
+        const handleClickAway = (event: PointerEvent) => {
+            const target = event.target;
+
+            if (!(target instanceof Node)) {
+                return;
+            }
+
+            if (reactionMenuRef.current && !reactionMenuRef.current.contains(target)) {
+                setIsReactionMenuOpen(false);
+            }
+        };
+
+        document.addEventListener("pointerdown", handleClickAway);
+
+        return () => {
+            document.removeEventListener("pointerdown", handleClickAway);
+        };
+    }, [isReactionMenuOpen]);
+
+    useEffect(() => {
         if (typeof window === "undefined" || (!openMenuPanel && !isChatComposerOpen && !isChatExpanded)) {
             return;
         }
@@ -2069,7 +2167,6 @@ export function RoomClient({
     useEffect(() => {
         if (!isPhoneViewport) {
             setIsMobileRecommendationOpen(false);
-            setIsMobileActionMenuOpen(false);
             return;
         }
 
@@ -2102,15 +2199,8 @@ export function RoomClient({
         }
     }
 
-    function closeMobileActionMenuIfNeeded() {
-        if (isPhoneViewport) {
-            setIsMobileActionMenuOpen(false);
-        }
-    }
-
     function toggleQueuedHeroAction(nextQueuedAction: QueuedHeroAction) {
         setPreselectedHeroAction((current) => areQueuedHeroActionsEqual(current, nextQueuedAction) ? null : nextQueuedAction);
-        closeMobileActionMenuIfNeeded();
     }
 
     function handleQueuedOrImmediateCall() {
@@ -2183,6 +2273,33 @@ export function RoomClient({
         }
 
         setIsChatComposerOpen(false);
+    }
+
+    function markMobileChatSeen() {
+        const latestMessage = snapshot?.chatMessages.at(-1);
+
+        if (latestMessage) {
+            setLastSeenChatMessageId(latestMessage.id);
+        }
+
+        setHasUnreadMobileChat(false);
+    }
+
+    function handleMobileChatToggle() {
+        setIsChatExpanded((current) => {
+            const nextOpen = !current;
+
+            if (nextOpen) {
+                markMobileChatSeen();
+                if (canChat) {
+                    setIsChatComposerOpen(true);
+                }
+            } else {
+                setIsChatComposerOpen(false);
+            }
+
+            return nextOpen;
+        });
     }
 
     function handleQueuedOrImmediateCheckOrFold() {
@@ -3401,7 +3518,6 @@ export function RoomClient({
 
         await submitRoomMutation(`/v1/rooms/${slug}/action`, payload);
         setActionPanelScreen("buttons");
-        closeMobileActionMenuIfNeeded();
     }
 
     async function handleRunItTwiceDecision(willing: boolean) {
@@ -3413,7 +3529,6 @@ export function RoomClient({
             accountId,
             willing,
         });
-        closeMobileActionMenuIfNeeded();
     }
 
     async function handleSendChatMessage() {
@@ -3963,18 +4078,39 @@ export function RoomClient({
         <section className={["table-hero-stats-bar", heroPlayer ? "" : "table-hero-stats-bar--empty"].filter(Boolean).join(" ")}>
             {heroPlayer ? (
                 <>
-                    <div className="table-hero-stats-bar__item"><strong>Stack</strong><span>{formatNumber(heroDisplayedStack)}</span></div>
-                    <div className="table-hero-stats-bar__item"><strong>Committed</strong><span>{formatNumber(heroContribution)}</span></div>
-                    <div className="table-hero-stats-bar__item"><strong>Bank</strong><span>{tableSnapshot?.turnState.timeBankSeconds === null ? "Off" : formatTurnSeconds(Math.ceil(heroTimeBankMs / 1000))}</span></div>
-                    <div className="table-hero-stats-bar__item"><strong>Bought in</strong><span>{formatNumber(heroBuyInTotal)}</span></div>
-                    <div className="table-hero-stats-bar__item"><strong>Won</strong><span>{formatNumber(heroHandsWonCount)}</span></div>
-                    <div className="table-hero-stats-bar__item"><strong>Rebuys</strong><span>{formatNumber(heroRebuyCount)}</span></div>
+                    <div className="table-hero-stats-bar__item table-hero-stats-bar__item--stack"><strong>Stack</strong><span>{formatNumber(heroDisplayedStack)}</span></div>
+                    <div className="table-hero-stats-bar__item table-hero-stats-bar__item--committed"><strong>Committed</strong><span>{formatNumber(heroContribution)}</span></div>
+                    <div className="table-hero-stats-bar__item table-hero-stats-bar__item--bank"><strong>Bank</strong><span>{tableSnapshot?.turnState.timeBankSeconds === null ? "Off" : formatTurnSeconds(Math.ceil(heroTimeBankMs / 1000))}</span></div>
+                    <div className="table-hero-stats-bar__item table-hero-stats-bar__item--bought-in"><strong>Bought in</strong><span>{formatNumber(heroBuyInTotal)}</span></div>
+                    <div className="table-hero-stats-bar__item table-hero-stats-bar__item--won"><strong>Won</strong><span>{formatNumber(heroHandsWonCount)}</span></div>
+                    <div className="table-hero-stats-bar__item table-hero-stats-bar__item--rebuys"><strong>Rebuys</strong><span>{formatNumber(heroRebuyCount)}</span></div>
                 </>
             ) : (
                 <p className="table-hero-stats-bar__empty-copy">Take a seat to track your stack, bank, buy-in, wins, and rebuys.</p>
             )}
         </section>
     );
+
+    const showConnectionRefreshModal = connectionState === "disconnected";
+    const connectionRefreshModal = showConnectionRefreshModal ? (
+        <div className="table-dialog table-dialog--connection-alert" role="alertdialog" aria-modal="true" aria-label="Connection lost">
+            <div className="table-dialog__backdrop" aria-hidden="true" />
+            <section className="table-dialog__panel table-dialog__panel--connection-alert">
+                <header className="table-dialog__header">
+                    <div>
+                        <span className="table-menu-drawer__eyebrow">Connection error</span>
+                        <h2>Connection lost</h2>
+                        <p>You have been disconnected from the table. Refresh the page to reconnect.</p>
+                    </div>
+                </header>
+                <div className="table-dialog__actions">
+                    <button className="button button--primary" type="button" onClick={() => window.location.reload()}>
+                        Refresh page
+                    </button>
+                </div>
+            </section>
+        </div>
+    ) : null;
 
     if (isProtectedRoomLocked) {
         return (
@@ -4074,23 +4210,27 @@ export function RoomClient({
                         </section>
                     </div>
                 ) : null}
+
+                {connectionRefreshModal}
             </main>
         );
     }
 
     return (
         <main className={["room-shell", "room-shell--play", isPhoneViewport ? "room-shell--phone" : ""].filter(Boolean).join(" ")}>
-            <header className="room-toolbar room-toolbar--compact">
-                <div>
-                    <Link className="room-toolbar__brand" href="/">
-                        <img className="room-toolbar__brand-mark" src="/poker.svg" alt="Poker Poker logo" />
-                        <span>Poker Poker Table</span>
-                    </Link>
-                    <h1 className="room-toolbar__title">{snapshot?.name ?? `Room ${slug}`}</h1>
-                </div>
+            {!isPhoneViewport ? (
+                <header className="room-toolbar room-toolbar--compact">
+                    <div>
+                        <Link className="room-toolbar__brand" href="/">
+                            <img className="room-toolbar__brand-mark" src="/poker.svg" alt="Poker Poker logo" />
+                            <span>Poker Poker Table</span>
+                        </Link>
+                        <h1 className="room-toolbar__title">{snapshot?.name ?? `Room ${slug}`}</h1>
+                    </div>
 
-                {!isPhoneViewport ? <div className="room-toolbar__meta">{renderRoomMetaPills()}</div> : null}
-            </header>
+                    <div className="room-toolbar__meta">{renderRoomMetaPills()}</div>
+                </header>
+            ) : null}
 
             <section className="room-play-stack">
                 {actionError ? <p className="form-error room-play-stack__error">{actionError}</p> : null}
@@ -4098,33 +4238,93 @@ export function RoomClient({
 
                 <section className="table-arena table-arena--clean">
                     <div className="table-felt">
-                        {!isPhoneViewport ? (
-                            <div className="table-menu-cluster" ref={tableMenuShellRef}>
-                                {renderTableMenuButtons()}
-                                {tableMenuDrawer}
-                            </div>
-                        ) : null}
+                        <div className="table-menu-cluster" ref={tableMenuShellRef}>
+                            {renderTableMenuButtons()}
+                            {tableMenuDrawer}
+                        </div>
 
                         <VictoryConfettiCanvas active={showVictoryConfetti} />
 
-                        {!isPhoneViewport ? <div className="table-status-rack">{renderTableStatusRackContent()}</div> : null}
-                        {!isPhoneViewport ? (
-                            <div className="table-chat-floater">
-                                <button
-                                    className={[
-                                        "table-menu-cluster__button",
-                                        "table-menu-cluster__button--solo",
-                                        "table-menu-cluster__button--log",
-                                        isSessionLedgerOpen ? "table-menu-cluster__button--active" : "",
-                                    ].filter(Boolean).join(" ")}
-                                    type="button"
-                                    onClick={() => openSessionActivityModal("ledger")}
-                                >
-                                    Log / Ledger
-                                </button>
-                                {renderTableChatPanel("overlay")}
-                            </div>
-                        ) : null}
+                        <div className="table-status-rack">{renderTableStatusRackContent()}</div>
+                        <div className={["table-chat-floater", isPhoneViewport ? "table-chat-floater--mobile" : ""].filter(Boolean).join(" ")}>
+                            {isPhoneViewport ? (
+                                <>
+                                    <div className="table-chat-mobile-dock" ref={tableChatDockRef}>
+                                        <button
+                                            className={[
+                                                "table-chat-mobile-dock__button",
+                                                "table-chat-mobile-dock__button--log",
+                                                isSessionLedgerOpen ? "table-chat-mobile-dock__button--active" : "",
+                                            ].filter(Boolean).join(" ")}
+                                            type="button"
+                                            onClick={() => openSessionActivityModal("ledger")}
+                                        >
+                                            Log
+                                        </button>
+                                        <button
+                                            className={[
+                                                "table-chat-mobile-dock__button",
+                                                "table-chat-mobile-dock__button--chat",
+                                                isChatExpanded ? "table-chat-mobile-dock__button--active" : "",
+                                                hasUnreadMobileChat ? "table-chat-mobile-dock__button--unread" : "",
+                                                isMobileChatTemporarilyBlocked ? "table-chat-mobile-dock__button--disabled-turn" : "",
+                                            ].filter(Boolean).join(" ")}
+                                            type="button"
+                                            onClick={handleMobileChatToggle}
+                                            disabled={isMobileChatTemporarilyBlocked}
+                                        >
+                                            Chat
+                                        </button>
+                                        <button
+                                            className={[
+                                                "table-chat-mobile-dock__button",
+                                                "table-chat-mobile-dock__button--mic",
+                                                chatMediaActionState === "connecting" || chatMediaActionState === "microphone" ? "table-chat-mobile-dock__button--loading" : "",
+                                                media.isConnected && media.microphoneEnabled ? "table-chat-mobile-dock__button--active" : "",
+                                            ].filter(Boolean).join(" ")}
+                                            type="button"
+                                            onClick={() => void handleChatMediaToggle("microphone")}
+                                            disabled={!(demoMode || canConnectMedia) || chatMediaActionState !== "idle"}
+                                            aria-busy={chatMediaActionState === "connecting" || chatMediaActionState === "microphone"}
+                                        >
+                                            Mic
+                                        </button>
+                                        <button
+                                            className={[
+                                                "table-chat-mobile-dock__button",
+                                                "table-chat-mobile-dock__button--cam",
+                                                chatMediaActionState === "connecting" || chatMediaActionState === "camera" ? "table-chat-mobile-dock__button--loading" : "",
+                                                media.isConnected && media.cameraEnabled ? "table-chat-mobile-dock__button--active" : "",
+                                            ].filter(Boolean).join(" ")}
+                                            type="button"
+                                            onClick={() => void handleChatMediaToggle("camera")}
+                                            disabled={!(demoMode || canConnectMedia) || chatMediaActionState !== "idle"}
+                                            aria-busy={chatMediaActionState === "connecting" || chatMediaActionState === "camera"}
+                                        >
+                                            Cam
+                                        </button>
+                                    </div>
+
+                                    {isChatExpanded ? renderTableChatPanel("overlay") : null}
+                                </>
+                            ) : (
+                                <>
+                                    <button
+                                        className={[
+                                            "table-menu-cluster__button",
+                                            "table-menu-cluster__button--solo",
+                                            "table-menu-cluster__button--log",
+                                            isSessionLedgerOpen ? "table-menu-cluster__button--active" : "",
+                                        ].filter(Boolean).join(" ")}
+                                        type="button"
+                                        onClick={() => openSessionActivityModal("ledger")}
+                                    >
+                                        Log / Ledger
+                                    </button>
+                                    {renderTableChatPanel("overlay")}
+                                </>
+                            )}
+                        </div>
 
                         <div className="table-center">
                             <span className="table-center__label">{currentHand ? `Hand ${currentHand.handNumber} · ${formatStreet(currentHand.street)}` : latestCompletedHand ? "" : isArchivedRoom ? "Archived table" : "Waiting for players"}</span>
@@ -4199,24 +4399,14 @@ export function RoomClient({
                             const seatReaction = seat.player ? activeSeatReactions.get(seat.player.accountId) ?? null : null;
                             const seatGesture = seat.player ? seatGesturesByAccountId.get(seat.player.accountId) ?? null : null;
                             const heroGestureEmoji = seat.isHero ? heroGesture?.emoji ?? "" : "";
-                            const showSeatMediaTile = !seat.player
-                                ? false
-                                : isPhoneViewport
-                                    ? seat.isHero || (isSpectating && Boolean(mediaParticipant))
-                                    : true;
-                            const dealerMarker = !isPhoneViewport
-                                ? seat.markers.find((marker) => marker.tone === "dealer") ?? null
-                                : null;
-                            const blindMarkers = !isPhoneViewport
-                                ? seat.markers.filter((marker) => marker.tone === "blind")
-                                : [];
-                            const inlineMarkers = isPhoneViewport
-                                ? seat.markers
-                                : seat.markers.filter((marker) => marker.tone === "admin");
+                            const showSeatMediaTile = Boolean(seat.player);
+                            const dealerMarker = seat.markers.find((marker) => marker.tone === "dealer") ?? null;
+                            const blindMarkers = seat.markers.filter((marker) => marker.tone === "blind");
+                            const inlineMarkers = seat.markers.filter((marker) => marker.tone === "admin");
                             const hasVisibleRevealedCard = Boolean(seat.revealedCards?.some((card) => card !== null));
-                            const shouldRenderSeatCards = seatCards.length > 0 && (!isPhoneViewport || seat.isHero || hasVisibleRevealedCard);
+                            const shouldRenderSeatCards = seatCards.length > 0;
                             const showHeroNotReadyNotice = Boolean(!isArchivedRoom && seat.isHero && heroPlayer && !heroPlayer.isReady && !heroPlayer.isSittingOut);
-                            const showWinnerStrip = Boolean(!isPhoneViewport && seat.actionBubble && seat.isWinner && !currentHand);
+                            const showWinnerStrip = Boolean(seat.actionBubble && seat.isWinner && !currentHand);
                             const showLiveActionBubble = Boolean(
                                 seat.actionBubble
                                 && !showWinnerStrip
@@ -4234,6 +4424,16 @@ export function RoomClient({
                                 && turnMetrics.actorAccountId === seat.player?.accountId
                                 ? turnMetrics
                                 : null;
+                            const useCompactMobileMediaFallback = Boolean(
+                                isPhoneViewport
+                                && (
+                                    !mediaParticipant
+                                    || (
+                                        !mediaParticipant.demoSurface
+                                        && (!mediaParticipant.cameraEnabled || !mediaParticipant.videoPublication)
+                                    )
+                                )
+                            );
 
                             return (
                                 <article
@@ -4365,7 +4565,7 @@ export function RoomClient({
                                             {showSeatMediaTile ? (
                                                 <div className="table-seat__media-wrap">
                                                     {seat.isHero ? (
-                                                        <div className="table-seat__reaction-control">
+                                                        <div ref={reactionMenuRef} className="table-seat__reaction-control">
                                                             <button
                                                                 className={[
                                                                     "table-seat__reaction-toggle",
@@ -4476,7 +4676,7 @@ export function RoomClient({
                                                         </div>
                                                     ) : null}
 
-                                                    {mediaParticipant ? (
+                                                    {mediaParticipant && !useCompactMobileMediaFallback ? (
                                                         <>
                                                             <div className={[
                                                                 "table-seat__media",
@@ -4499,7 +4699,7 @@ export function RoomClient({
                                                             <div className="table-seat__media table-seat__media--fallback">
                                                                 <span className="table-seat__media-fallback-avatar">{seat.avatarLabel}</span>
                                                             </div>
-                                                            <span className="table-seat__media-badge table-seat__media-badge--awaiting">Awaiting camera</span>
+                                                            {!isPhoneViewport ? <span className="table-seat__media-badge table-seat__media-badge--awaiting">Awaiting camera</span> : null}
                                                         </>
                                                     )}
                                                 </div>
@@ -4528,15 +4728,27 @@ export function RoomClient({
                                                         "table-seat__stat-pill",
                                                         seat.handsWonCount > 0 ? "table-seat__stat-pill--wins" : "table-seat__stat-pill--muted",
                                                     ].join(" ")}>
-                                                        <span className="table-seat__stat-pill-label">W</span>
-                                                        <span>{seat.handsWonCount}</span>
+                                                        {isPhoneViewport ? (
+                                                            <span className="table-seat__stat-pill-label">{seat.handsWonCount}</span>
+                                                        ) : (
+                                                            <>
+                                                                <span className="table-seat__stat-pill-label">W</span>
+                                                                <span>{seat.handsWonCount}</span>
+                                                            </>
+                                                        )}
                                                     </span>
                                                     <span className={[
                                                         "table-seat__stat-pill",
                                                         seat.rebuyCount > 0 ? "table-seat__stat-pill--rebuys" : "table-seat__stat-pill--muted",
                                                     ].join(" ")}>
-                                                        <span className="table-seat__stat-pill-label">R</span>
-                                                        <span>{seat.rebuyCount}</span>
+                                                        {isPhoneViewport ? (
+                                                            <span className="table-seat__stat-pill-label">{seat.rebuyCount}</span>
+                                                        ) : (
+                                                            <>
+                                                                <span className="table-seat__stat-pill-label">R</span>
+                                                                <span>{seat.rebuyCount}</span>
+                                                            </>
+                                                        )}
                                                     </span>
                                                 </div>
 
@@ -4613,48 +4825,13 @@ export function RoomClient({
                                     isActionPadDragging ? "table-command-deck__action-wrap--dragging" : "",
                                 ].filter(Boolean).join(" ")}>
                                     {renderActionPanel("inline")}
-                                    <button className="button button--primary table-mobile-actions__toggle" type="button" onClick={() => setIsMobileActionMenuOpen(true)}>
-                                        <span className="table-mobile-actions__label">
-                                            <span>{heroActionState?.canAct ? "Open" : "Table"}</span>
-                                            <span>Actions</span>
-                                        </span>
-                                    </button>
                                 </div>
                             )}
 
-                            {!isPhoneViewport ? heroStatsBar : null}
+                            {heroStatsBar}
                         </div>
                     </div>
                 </section>
-
-                {isPhoneViewport ? (
-                    <section className="table-mobile-overview">
-                        {heroStatsBar}
-
-                        <div className="table-mobile-controls" ref={tableMenuShellRef}>
-                            <div className="table-mobile-controls__row">
-                                {renderTableMenuButtons()}
-                            </div>
-                            {tableMenuDrawer}
-                        </div>
-
-                        <div className="table-status-rack table-status-rack--mobile">
-                            {renderTableStatusRackContent()}
-                        </div>
-
-                        <div className="table-mobile-meta">
-                            {renderRoomMetaPills()}
-                        </div>
-                    </section>
-                ) : null}
-
-                {isPhoneViewport ? (
-                    <section className="table-log-panel table-log-panel--below">
-                        <div className="table-activity-grid table-activity-grid--ledger-only">
-                            {renderTableChatPanel("surface")}
-                        </div>
-                    </section>
-                ) : null}
 
                 <MediaAudioRack participants={demoMode ? [] : effectiveRemoteParticipants} />
             </section>
@@ -5185,21 +5362,6 @@ export function RoomClient({
                 </div>
             ) : null}
 
-            {isPhoneViewport && isMobileActionMenuOpen ? (
-                <div className="table-dialog" role="dialog" aria-modal="true" aria-label="Action menu">
-                    <button className="table-dialog__backdrop" type="button" aria-label="Close action menu" onClick={() => setIsMobileActionMenuOpen(false)} />
-                    <section className="table-dialog__panel table-dialog__panel--compact table-dialog__panel--mobile-actions">
-                        {renderActionPanel("dialog")}
-
-                        <div className="table-dialog__actions">
-                            <button className="button button--secondary" type="button" onClick={() => setIsMobileActionMenuOpen(false)}>
-                                Cancel
-                            </button>
-                        </div>
-                    </section>
-                </div>
-            ) : null}
-
             {isPhoneViewport && isMobileRecommendationOpen ? (
                 <div className="table-dialog" role="dialog" aria-modal="true" aria-label="Phone layout notice">
                     <button className="table-dialog__backdrop" type="button" aria-label="Close phone layout notice" onClick={dismissMobileRecommendation} />
@@ -5208,7 +5370,7 @@ export function RoomClient({
                             <div>
                                 <span className="table-menu-drawer__eyebrow">Phone layout</span>
                                 <h2>Best on a tablet or computer</h2>
-                                <p>Phone mode keeps the table playable, but it hides other player cameras, compacts the seat grid, and moves the action pad into a modal. Use a tablet or computer to see the full table layout and media experience.</p>
+                                <p>Phone mode now mirrors the desktop table layout, including the in-table action pad, chat surface, and menu cluster.</p>
                             </div>
                             <button className="table-dialog__close" type="button" onClick={dismissMobileRecommendation} aria-label="Close phone layout notice">
                                 ×
@@ -5223,6 +5385,8 @@ export function RoomClient({
                     </section>
                 </div>
             ) : null}
+
+            {connectionRefreshModal}
         </main>
     );
 }
@@ -5313,6 +5477,7 @@ function buildTableSeats(
             style: {
                 left: `${position.left}%`,
                 top: `${position.top}%`,
+                zIndex: isActive ? 10 : isInHand ? 9 : isHero ? 8 : 3,
             },
             cardStyle: {
                 ["--seat-card-adjust-x" as string]: `${cardAdjustment.desktopX}px`,

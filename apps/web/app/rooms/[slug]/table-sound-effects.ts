@@ -79,7 +79,7 @@ const TABLE_SOUND_EFFECTS: Record<TableSoundName, TableSoundEffectSpec> = {
         volume: 0.7,
     },
     turnCountdown: {
-        src: "/sounds/table/turn-countdown.ogg",
+        src: "/sounds/table/turn-countdown.mp3",
         volume: 0.5,
     },
     chatMessage: {
