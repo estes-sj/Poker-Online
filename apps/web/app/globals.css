@@ -4044,7 +4044,7 @@ button {
   position: absolute;
   right: 0;
   bottom: calc(100% + 10px);
-  z-index: 100;
+  z-index: 21;
   display: grid;
   gap: 8px;
   width: min(324px, calc(100vw - 24px));
@@ -7829,7 +7829,7 @@ button {
     box-shadow: 0 8px 14px rgba(0, 0, 0, 0.22);
     left: -1.5rem;
   }
-
+  
   .room-shell--phone .table-seat__reaction-toggle-emoji,
   .room-shell--phone .table-seat__reaction-toggle-placeholder {
     font-size: 0.54rem;
@@ -7871,16 +7871,43 @@ button {
     border-radius: 12px;
   }
 
+  .room-shell--phone .table-seat__reaction-popover-mobile-shell {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: grid;
+    place-items: center;
+    padding: 8px;
+    pointer-events: none;
+  }
+
+  .room-shell--phone .table-seat__reaction-popover-mobile-shell .table-seat__reaction-popover {
+    position: static;
+    right: auto;
+    bottom: auto;
+    width: min(368px, calc(100vw - 16px));
+    max-width: 100%;
+    max-height: min(72dvh, 520px);
+    overflow: hidden auto;
+    padding: 10px 0;
+    border-radius: 14px;
+    pointer-events: auto;
+  }
+
   .room-shell--phone .table-seat__reaction-group {
     gap: 6px;
+    padding-inline: 12px;
   }
 
   .room-shell--phone .table-seat__emoji-picker {
-    border-radius: 12px;
+    width: calc(100% + 24px);
+    margin-inline: -12px;
   }
 
   .room-shell--phone .table-seat__emoji-picker em-emoji-picker {
-    --border-radius: 12px;
+    width: 100% !important;
+    min-width: 100% !important;
+    --border-radius: 0;
     --category-icon-size: 14px;
     --input-border-radius: 10px;
   }

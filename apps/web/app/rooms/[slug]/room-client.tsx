@@ -589,7 +589,6 @@ export function RoomClient({
     const [openMenuPanel, setOpenMenuPanel] = useState<null | "invite" | "seat" | "media" | "rebuy" | "admin">(null);
     const [isReactionMenuOpen, setIsReactionMenuOpen] = useState(false);
     const [isSessionLedgerOpen, setIsSessionLedgerOpen] = useState(false);
-    const reactionMenuRef = useRef<HTMLDivElement>(null);
     const [sessionLogView, setSessionLogView] = useState<"log" | "ledger">("ledger");
     const [isEngineInfoOpen, setIsEngineInfoOpen] = useState(false);
     const [isHouseRulesOpen, setIsHouseRulesOpen] = useState(false);
@@ -644,6 +643,7 @@ export function RoomClient({
     const adminApprovalSeenRef = useRef<Set<string>>(new Set());
     const runoutEquitySnapshotRef = useRef<RunoutEquitySnapshot | null>(null);
     const runoutEquityTrendResetTimerRef = useRef<number | null>(null);
+    const reactionMenuRef = useRef<HTMLDivElement | null>(null);
     const archivedHands = snapshot?.archive?.hands ?? [];
     const isArchivedRoom = Boolean(snapshot?.status === "archived" && snapshot?.archive);
     const selectedArchivedHand = archivedHands.find((hand) => hand.handId === selectedLedgerHandId) ?? archivedHands[0] ?? null;
@@ -724,6 +724,17 @@ export function RoomClient({
         window.addEventListener("pointerup", handleActionPadPointerEnd);
         window.addEventListener("pointercancel", handleActionPadPointerEnd);
     }
+
+    useEffect(() => {
+        if (!isReactionMenuOpen) return;
+        function handleClickAway(event: MouseEvent) {
+            if (reactionMenuRef.current && !reactionMenuRef.current.contains(event.target as Node)) {
+                setIsReactionMenuOpen(false);
+            }
+        }
+        document.addEventListener("mousedown", handleClickAway);
+        return () => { document.removeEventListener("mousedown", handleClickAway); };
+    }, [isReactionMenuOpen]);
 
     useEffect(() => {
         const syncSessionFromStorage = () => {
@@ -2031,30 +2042,6 @@ export function RoomClient({
             setOpenMenuPanel(null);
         }
     }, [canShowRebuyMenu, openMenuPanel]);
-
-    useEffect(() => {
-        if (!isReactionMenuOpen) {
-            return;
-        }
-
-        const handleClickAway = (event: PointerEvent) => {
-            const target = event.target;
-
-            if (!(target instanceof Node)) {
-                return;
-            }
-
-            if (reactionMenuRef.current && !reactionMenuRef.current.contains(target)) {
-                setIsReactionMenuOpen(false);
-            }
-        };
-
-        document.addEventListener("pointerdown", handleClickAway);
-
-        return () => {
-            document.removeEventListener("pointerdown", handleClickAway);
-        };
-    }, [isReactionMenuOpen]);
 
     useEffect(() => {
         if (typeof window === "undefined" || (!openMenuPanel && !isChatComposerOpen && !isChatExpanded)) {
@@ -3617,6 +3604,94 @@ export function RoomClient({
         setIsReactionMenuOpen(false);
     }
 
+    const reactionPopover = (
+        <div className="table-seat__reaction-popover">
+            <div className="table-seat__reaction-group">
+                <span className="table-seat__reaction-heading">Quick reaction</span>
+                <div className="reaction-strip reaction-strip--table">
+                    {QUICK_REACTIONS.map((emoji) => (
+                        <button
+                            key={emoji}
+                            className="reaction-strip__button table-seat__reaction-button"
+                            type="button"
+                            onClick={() => void handleSendReaction(emoji)}
+                            disabled={isMutating || !heroPlayer}
+                        >
+                            {emoji}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div className="table-seat__reaction-group">
+                <span className="table-seat__reaction-heading">Emoji browser</span>
+                <div className="table-seat__emoji-picker">
+                    <EmojiPicker
+                        data={emojiData}
+                        dynamicWidth={isPhoneViewport}
+                        emojiButtonSize={isPhoneViewport ? 24 : 34}
+                        emojiSize={isPhoneViewport ? 14 : 20}
+                        maxFrequentRows={1}
+                        navPosition="bottom"
+                        onEmojiSelect={(selection: EmojiPickerSelection) => {
+                            const nextEmoji = getNativeEmoji(selection);
+
+                            if (nextEmoji) {
+                                setGestureInput(nextEmoji);
+                            }
+                        }}
+                        perLine={isPhoneViewport ? undefined : 8}
+                        previewPosition="none"
+                        searchPosition="sticky"
+                        set="native"
+                        style={isPhoneViewport ? { width: "100%", minWidth: "100%" } : undefined}
+                        theme="dark"
+                    />
+                </div>
+
+                <div className="table-seat__gesture-preview-row">
+                    <div className="table-seat__gesture-preview">
+                        <span className="table-seat__gesture-preview-label">Selected</span>
+                        <strong>{gestureInput.trim() || heroGesture?.emoji || "None"}</strong>
+                    </div>
+
+                    <div className="table-seat__gesture-actions">
+                        <button
+                            className="button button--secondary table-seat__gesture-action"
+                            type="button"
+                            onClick={() => void handleSendReaction(gestureInput.trim())}
+                            disabled={isMutating || !heroPlayer || !gestureInput.trim()}
+                        >
+                            React
+                        </button>
+                        <button
+                            className="button button--primary table-seat__gesture-action"
+                            type="button"
+                            onClick={() => void handleSetGesture(gestureInput.trim() || null)}
+                            disabled={isMutating || !heroPlayer || !gestureInput.trim()}
+                        >
+                            Set gesture
+                        </button>
+                        <button
+                            className="button button--secondary table-seat__gesture-action"
+                            type="button"
+                            onClick={() => void handleSetGesture(null)}
+                            disabled={isMutating || !heroPlayer || !heroGesture}
+                        >
+                            Clear
+                        </button>
+                    </div>
+                </div>
+
+                {heroGesture ? (
+                    <p className="muted-copy">Current gesture: {heroGesture.emoji}</p>
+                ) : (
+                    <p className="muted-copy">Gestures stay beside your seat until you change or clear them.</p>
+                )}
+            </div>
+        </div>
+    );
+
     async function handleRebuy() {
         if (!accountId || !heroPlayer || !snapshot) {
             setActionError("Take a seat before adjusting your buy-in.");
@@ -4456,7 +4531,7 @@ export function RoomClient({
                                         seat.shiftCardsRightMore ? "table-seat--cards-right-more" : "",
                                         `table-seat--media-${seat.mediaPlacement}`,
                                     ].filter(Boolean).join(" ")}
-                                    style={seat.style}
+                                    style={seat.isHero && isReactionMenuOpen ? { ...seat.style, zIndex: 60 } : seat.style}
                                     onClick={seat.player ? (event) => handleSeatPerspectiveClick(event, seat) : undefined}
                                 >
                                     {showHeroNotReadyNotice ? <div className="table-seat__notice table-seat__notice--warning">Not ready</div> : null}
@@ -4565,7 +4640,7 @@ export function RoomClient({
                                             {showSeatMediaTile ? (
                                                 <div className="table-seat__media-wrap">
                                                     {seat.isHero ? (
-                                                        <div ref={reactionMenuRef} className="table-seat__reaction-control">
+                                                        <div className="table-seat__reaction-control" ref={!isPhoneViewport && seat.isHero ? reactionMenuRef : undefined}>
                                                             <button
                                                                 className={[
                                                                     "table-seat__reaction-toggle",
@@ -4588,91 +4663,7 @@ export function RoomClient({
                                                                 )}
                                                             </button>
 
-                                                            {isReactionMenuOpen ? (
-                                                                <div className="table-seat__reaction-popover">
-                                                                    <div className="table-seat__reaction-group">
-                                                                        <span className="table-seat__reaction-heading">Quick reaction</span>
-                                                                        <div className="reaction-strip reaction-strip--table">
-                                                                            {QUICK_REACTIONS.map((emoji) => (
-                                                                                <button
-                                                                                    key={emoji}
-                                                                                    className="reaction-strip__button table-seat__reaction-button"
-                                                                                    type="button"
-                                                                                    onClick={() => void handleSendReaction(emoji)}
-                                                                                    disabled={isMutating || !heroPlayer}
-                                                                                >
-                                                                                    {emoji}
-                                                                                </button>
-                                                                            ))}
-                                                                        </div>
-                                                                    </div>
-
-                                                                    <div className="table-seat__reaction-group">
-                                                                        <span className="table-seat__reaction-heading">Emoji browser</span>
-                                                                        <div className="table-seat__emoji-picker">
-                                                                            <EmojiPicker
-                                                                                data={emojiData}
-                                                                                emojiButtonSize={isPhoneViewport ? 24 : 34}
-                                                                                emojiSize={isPhoneViewport ? 14 : 20}
-                                                                                maxFrequentRows={1}
-                                                                                navPosition="bottom"
-                                                                                onEmojiSelect={(selection: EmojiPickerSelection) => {
-                                                                                    const nextEmoji = getNativeEmoji(selection);
-
-                                                                                    if (nextEmoji) {
-                                                                                        setGestureInput(nextEmoji);
-                                                                                    }
-                                                                                }}
-                                                                                perLine={isPhoneViewport ? 7 : 8}
-                                                                                previewPosition="none"
-                                                                                searchPosition="sticky"
-                                                                                set="native"
-                                                                                theme="dark"
-                                                                            />
-                                                                        </div>
-
-                                                                        <div className="table-seat__gesture-preview-row">
-                                                                            <div className="table-seat__gesture-preview">
-                                                                                <span className="table-seat__gesture-preview-label">Selected</span>
-                                                                                <strong>{gestureInput.trim() || heroGesture?.emoji || "None"}</strong>
-                                                                            </div>
-
-                                                                            <div className="table-seat__gesture-actions">
-                                                                                <button
-                                                                                    className="button button--secondary table-seat__gesture-action"
-                                                                                    type="button"
-                                                                                    onClick={() => void handleSendReaction(gestureInput.trim())}
-                                                                                    disabled={isMutating || !heroPlayer || !gestureInput.trim()}
-                                                                                >
-                                                                                    React
-                                                                                </button>
-                                                                                <button
-                                                                                    className="button button--primary table-seat__gesture-action"
-                                                                                    type="button"
-                                                                                    onClick={() => void handleSetGesture(gestureInput.trim() || null)}
-                                                                                    disabled={isMutating || !heroPlayer || !gestureInput.trim()}
-                                                                                >
-                                                                                    Set gesture
-                                                                                </button>
-                                                                                <button
-                                                                                    className="button button--secondary table-seat__gesture-action"
-                                                                                    type="button"
-                                                                                    onClick={() => void handleSetGesture(null)}
-                                                                                    disabled={isMutating || !heroPlayer || !heroGesture}
-                                                                                >
-                                                                                    Clear
-                                                                                </button>
-                                                                            </div>
-                                                                        </div>
-
-                                                                        {heroGesture ? (
-                                                                            <p className="muted-copy">Current gesture: {heroGesture.emoji}</p>
-                                                                        ) : (
-                                                                            <p className="muted-copy">Gestures stay beside your seat until you change or clear them.</p>
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-                                                            ) : null}
+                                                            {isReactionMenuOpen && !isPhoneViewport ? reactionPopover : null}
                                                         </div>
                                                     ) : null}
 
@@ -4808,6 +4799,12 @@ export function RoomClient({
                                 </article>
                             );
                         })}
+
+                        {isPhoneViewport && isReactionMenuOpen ? (
+                            <div className="table-seat__reaction-popover-mobile-shell" ref={reactionMenuRef}>
+                                {reactionPopover}
+                            </div>
+                        ) : null}
 
                         <div className="table-command-deck">
                             {isArchivedRoom ? (

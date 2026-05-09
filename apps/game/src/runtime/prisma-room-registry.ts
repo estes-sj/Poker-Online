@@ -5119,7 +5119,11 @@ function normalizeReactionEmoji(value: string): string {
     throw new Error("Reaction emoji is required.");
   }
 
-  if (emoji.length > 8) {
+  const emojiLength = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
+    ? Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(emoji)).length
+    : Array.from(emoji).length;
+
+  if (emojiLength > 1) {
     throw new Error("Reaction emoji is too long.");
   }
 
