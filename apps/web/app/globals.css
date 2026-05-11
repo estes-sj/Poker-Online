@@ -6737,9 +6737,15 @@ button {
 .table-chat-panel__messages {
   display: grid;
   gap: 0.16rem;
+  align-content: start;
+  grid-auto-rows: min-content;
   min-height: 0;
   overflow: auto;
   padding: 0.3rem 0.4rem 0.4rem;
+}
+
+.room-shell--play:not(.room-shell--phone) .table-chat-panel__messages {
+  gap: 0.04rem;
 }
 
 .table-chat-panel__message {
