@@ -93,7 +93,7 @@ export default async function ClubDetailPage({
                                             {formatProfit(entry.totalProfit)}
                                         </td>
                                         <td>{entry.gamesPlayed}</td>
-                                        <td>{entry.isDerivedFromRecordedGames ? "Recorded" : entry.isSynthetic ? "Imported" : "Account"}</td>
+                                        <td>{entry.isBalancingEntry ? "Balance" : entry.isDerivedFromRecordedGames ? "Recorded" : entry.isSynthetic ? "Imported" : "Account"}</td>
                                         <td>{formatTimestamp(entry.updatedAt)}</td>
                                     </tr>
                                 ))}

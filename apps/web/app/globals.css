@@ -2024,7 +2024,22 @@ button {
 }
 
 .table-seat--inactive {
+  opacity: 1;
+}
+
+.table-seat--inactive .table-seat__content,
+.table-seat--inactive .table-seat__hero-hand,
+.table-seat--inactive .table-seat__cards,
+.table-seat--inactive .table-seat__bubble,
+.table-seat--inactive .table-seat__chips,
+.table-seat--inactive .table-seat__equity,
+.table-seat--inactive .table-seat__gesture,
+.table-seat--inactive .table-seat__reaction {
   opacity: 0.58;
+}
+
+.table-seat--inactive .table-seat__media-wrap {
+  opacity: 1;
 }
 
 .table-seat--focusable {
@@ -6769,12 +6784,13 @@ button {
 .table-chat-panel__message-copy {
   margin: 0;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   color: #cfcfcf;
   font-size: 0.62rem;
   line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .table-chat-panel__timestamp {

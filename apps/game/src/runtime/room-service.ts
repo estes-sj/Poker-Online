@@ -169,6 +169,7 @@ export interface ClubLeaderboardEntry {
   isSynthetic: boolean;
   isVisibleInLeaderboard: boolean;
   isDerivedFromRecordedGames: boolean;
+  isBalancingEntry: boolean;
 }
 
 export interface ClubGameLedgerEntry {

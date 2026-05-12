@@ -5298,6 +5298,38 @@ function buildClubLeaderboardEntry(
     isSynthetic: ranking.isSynthetic,
     isVisibleInLeaderboard: ranking.isVisibleInLeaderboard,
     isDerivedFromRecordedGames: ranking.isDerivedFromRecordedGames,
+    isBalancingEntry: false,
+  };
+}
+
+function buildClubLeaderboardBalancingEntry(entries: ClubLeaderboardEntry[]): ClubLeaderboardEntry | null {
+  if (entries.length === 0) {
+    return null;
+  }
+
+  const totalProfit = entries.reduce((sum, entry) => sum + entry.totalProfit, 0);
+  const gamesPlayed = entries.reduce((sum, entry) => sum + entry.gamesPlayed, 0);
+  let latestUpdatedAt = new Date(0).toISOString();
+
+  for (const entry of entries) {
+    if (Date.parse(entry.updatedAt) > Date.parse(latestUpdatedAt)) {
+      latestUpdatedAt = entry.updatedAt;
+    }
+  }
+
+  return {
+    entryKey: "solo-balance",
+    accountId: "solo-balance",
+    accountIds: [],
+    username: "(Others)",
+    displayName: "(Others)",
+    totalProfit: -totalProfit,
+    gamesPlayed,
+    updatedAt: latestUpdatedAt,
+    isSynthetic: true,
+    isVisibleInLeaderboard: true,
+    isDerivedFromRecordedGames: false,
+    isBalancingEntry: true,
   };
 }
 
@@ -5493,7 +5525,7 @@ function buildClubLeaderboardEntries(
     }
   }
 
-  return Array.from(aggregatedByDisplayName.values())
+  const leaderboardEntries = Array.from(aggregatedByDisplayName.values())
     .filter((ranking) => includeHidden || shouldIncludePublicClubLeaderboardRanking(ranking))
     .sort((left, right) => {
       if (left.totalProfit !== right.totalProfit) {
@@ -5507,6 +5539,16 @@ function buildClubLeaderboardEntries(
       return (left.displayName ?? left.username).localeCompare(right.displayName ?? right.username);
     })
     .map((ranking) => buildClubLeaderboardEntry(ranking));
+
+  if (!includeHidden) {
+    const balancingEntry = buildClubLeaderboardBalancingEntry(leaderboardEntries);
+
+    if (balancingEntry) {
+      leaderboardEntries.push(balancingEntry);
+    }
+  }
+
+  return leaderboardEntries;
 }
 
 function buildClubDetails(
