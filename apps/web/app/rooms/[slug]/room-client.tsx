@@ -631,6 +631,7 @@ export function RoomClient({
     const [dimActionPadWhenIdle, setDimActionPadWhenIdle] = useState(true);
     const [isActionPadDragging, setIsActionPadDragging] = useState(false);
     const [actionPanelScreen, setActionPanelScreen] = useState<"buttons" | "betControl">("buttons");
+    const [runoutRevealStep, setRunoutRevealStep] = useState(0);
     const reconnectTimerRef = useRef<number | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
     const chatInputRef = useRef<HTMLInputElement | null>(null);
@@ -643,6 +644,7 @@ export function RoomClient({
     const adminApprovalSeenRef = useRef<Set<string>>(new Set());
     const runoutEquitySnapshotRef = useRef<RunoutEquitySnapshot | null>(null);
     const runoutEquityTrendResetTimerRef = useRef<number | null>(null);
+    const runoutTotalStepsRef = useRef(0);
     const reactionMenuRef = useRef<HTMLDivElement | null>(null);
     const archivedHands = snapshot?.archive?.hands ?? [];
     const isArchivedRoom = Boolean(snapshot?.status === "archived" && snapshot?.archive);
@@ -1079,6 +1081,29 @@ export function RoomClient({
         };
     }, [snapshot?.currentHand?.handNumber, snapshot?.currentHand?.actorAccountId, snapshot?.currentHand?.street, snapshot?.turnState.currentTurnStartedAt, snapshot?.seatReactions, snapshot?.blindState.nextLevelInMs, snapshot?.blindState.pausedAt, snapshot?.lastCompletedHand?.handId, snapshot?.lastCompletedHand?.concludedAt, isArchivedRoom, selectedArchivedHand?.handId, archivedReplaySnapshot?.currentHand?.id]);
 
+    // Drive the all-in runout board reveal one step at a time, keyed on the hand id
+    // so each card always appears after exactly revealIntervalMs regardless of
+    // when the snapshot arrived or whether the tab was backgrounded.
+    useEffect(() => {
+        const handId = snapshot?.lastCompletedHand?.allInRunout
+            ? snapshot.lastCompletedHand.handId
+            : null;
+
+        setRunoutRevealStep(0);
+
+        if (!handId || !snapshot?.lastCompletedHand?.allInRunout) {
+            return;
+        }
+
+        const intervalMs = snapshot.lastCompletedHand.allInRunout.revealIntervalMs;
+
+        const id = window.setInterval(() => {
+            setRunoutRevealStep((prev) => Math.min(prev + 1, runoutTotalStepsRef.current));
+        }, intervalMs);
+
+        return () => window.clearInterval(id);
+    }, [snapshot?.lastCompletedHand?.handId]);
+
     useEffect(() => {
         if (!snapshot) {
             return;
@@ -1230,7 +1255,7 @@ export function RoomClient({
     const readyPlayerCount = snapshot?.players.filter((player) => player.isReady && player.isConnected && !player.isSittingOut && player.stack > 0).length ?? 0;
     const effectiveMediaParticipants = demoMode ? demoMediaParticipants : media.participants;
     const effectiveRemoteParticipants = demoMode ? demoMediaParticipants.filter((participant) => !participant.isLocal) : media.remoteParticipants;
-    const mediaByAccountId = new Map(effectiveMediaParticipants.map((participant) => [participant.identity, participant]));
+    const mediaParticipantsByAccountId = buildMediaParticipantsByAccountId(effectiveMediaParticipants);
     const activeSeatReactions = buildActiveReactionMap(snapshot, turnClockNow);
     const seatGesturesByAccountId = buildSeatGestureMap(snapshot);
     const heroContribution = heroPlayer && currentHand ? currentHand.contributions[heroPlayer.accountId] ?? 0 : 0;
@@ -1278,7 +1303,18 @@ export function RoomClient({
     const heroGesture = accountId ? seatGesturesByAccountId.get(accountId) ?? null : null;
     const lastCompletedHandRevealState = isArchivedRoom ? null : snapshot?.lastCompletedHandRevealState ?? null;
     const latestCompletedHand = tableSnapshot?.lastCompletedHand ?? null;
-    const allInRunoutView = buildAllInRunoutView(latestCompletedHand, turnClockNow);
+    const runoutHandId = latestCompletedHand?.allInRunout ? latestCompletedHand.handId : null;
+    runoutTotalStepsRef.current = (() => {
+        const allInRunout = latestCompletedHand?.allInRunout;
+        if (!allInRunout || !latestCompletedHand) return 0;
+        return getCompletedHandBoards(latestCompletedHand).reduce(
+            (total, board) => total + Math.max(0, board.length - allInRunout.startBoardCount),
+            0,
+        );
+    })();
+    const allInRunoutView = runoutHandId
+        ? buildAllInRunoutViewFromStep(latestCompletedHand, runoutRevealStep)
+        : buildAllInRunoutView(latestCompletedHand, turnClockNow);
     const isAllInRunoutAnimating = Boolean(allInRunoutView?.isActive);
     const pendingRunoutWinners = buildPendingRunoutWinners(latestCompletedHand, isAllInRunoutAnimating);
     const archivedReplayRevealedCards = isArchivedRoom && archivedReplayStartedAt !== null
@@ -4464,12 +4500,13 @@ export function RoomClient({
                         </div>
 
                         {tableSeats.map((seat) => {
+                            const mediaParticipantsForSeat = seat.player
+                                ? mediaParticipantsByAccountId.get(seat.player.accountId) ?? []
+                                : [];
                             const mediaParticipant = seat.player
-                                ? seat.isHero
-                                    ? mediaByAccountId.get(seat.player.accountId) ?? media.localParticipant ?? null
-                                    : mediaByAccountId.get(seat.player.accountId) ?? null
+                                ? pickSeatMediaParticipant(mediaParticipantsForSeat, seat.isHero)
                                 : null;
-                            const mediaBadge = mediaParticipant ? describeMediaBadge(mediaParticipant) : null;
+                            const mediaBadge = mediaParticipant ? describeMediaBadge(mediaParticipant, seat.isHero) : null;
                             const seatCards = buildSeatCardSlots(seat);
                             const seatReaction = seat.player ? activeSeatReactions.get(seat.player.accountId) ?? null : null;
                             const seatGesture = seat.player ? seatGesturesByAccountId.get(seat.player.accountId) ?? null : null;
@@ -4683,14 +4720,17 @@ export function RoomClient({
                                                             <span className={[
                                                                 "table-seat__media-badge",
                                                                 `table-seat__media-badge--${mediaBadge?.tone ?? "joined"}`,
-                                                            ].join(" ")}>{mediaBadge?.label ?? "Joined"}</span>
+                                                                mediaBadge?.tone === "mic" || mediaBadge?.tone === "muted-mic"
+                                                                    ? "table-seat__media-badge--icon-only"
+                                                                    : "",
+                                                            ].filter(Boolean).join(" ")}>{mediaBadge?.label ?? "Joined"}</span>
                                                         </>
                                                     ) : (
                                                         <>
                                                             <div className="table-seat__media table-seat__media--fallback">
                                                                 <span className="table-seat__media-fallback-avatar">{seat.avatarLabel}</span>
                                                             </div>
-                                                            {!isPhoneViewport ? <span className="table-seat__media-badge table-seat__media-badge--awaiting">Awaiting camera</span> : null}
+                                                            {!isPhoneViewport && seat.isHero ? <span className="table-seat__media-badge table-seat__media-badge--awaiting">Awaiting camera</span> : null}
                                                         </>
                                                     )}
                                                 </div>
@@ -5411,6 +5451,13 @@ function buildTableSeats(
     const seatOrder = Array.from({ length: totalSeats }, (_, index) => (anchorSeat + index) % totalSeats);
     const isArchivedSnapshot = snapshot?.status === "archived";
     const currentHand = snapshot?.currentHand ?? null;
+    const completedHandParticipantAccountIds = currentHand || !snapshot?.lastCompletedHand
+        ? new Set<string>()
+        : new Set([
+            ...snapshot.lastCompletedHand.actions.map((action) => action.actorAccountId),
+            ...snapshot.lastCompletedHand.winners.map((winner) => winner.accountId),
+            ...Object.keys(snapshot.lastCompletedHand.revealedHoleCards),
+        ]);
     const completedHandReveals = options?.completedHandReveals ?? snapshot?.lastCompletedHand?.revealedHoleCards ?? null;
     const suppressWinnerHighlights = options?.suppressWinnerHighlights ?? false;
     const pendingRunoutWinners = options?.pendingRunoutWinners ?? new Map<string, LastHandResult["winners"][number]>();
@@ -5518,7 +5565,13 @@ function buildTableSeats(
             runItTwiceResponse: player && currentHand?.runItTwicePrompt
                 ? currentHand.runItTwicePrompt.responsesByAccountId[player.accountId] ?? null
                 : null,
-            cardCount: revealedCards ? 2 : (player && currentHand ? currentHand.playerCardCounts[player.accountId] ?? 0 : 0),
+            cardCount: revealedCards
+                ? 2
+                : player && currentHand
+                    ? currentHand.playerCardCounts[player.accountId] ?? 0
+                    : player && !usePhoneLayout && completedHandParticipantAccountIds.has(player.accountId)
+                        ? 2
+                        : 0,
             revealedCards,
             liveHoleCards: isHero ? snapshot?.currentHand?.heroHoleCards ?? null : null,
             pendingRequest: pendingSeatRequest ? {
@@ -5680,6 +5733,39 @@ function buildSeatCardSlots(seat: TableSeatView): CardSlot[] {
     }));
 }
 
+function buildMediaParticipantsByAccountId(participants: MediaParticipantState[]): Map<string, MediaParticipantState[]> {
+    return participants.reduce((map, participant) => {
+        if (!participant.accountId) {
+            return map;
+        }
+
+        const existing = map.get(participant.accountId) ?? [];
+        existing.push(participant);
+        map.set(participant.accountId, existing);
+        return map;
+    }, new Map<string, MediaParticipantState[]>());
+}
+
+function pickSeatMediaParticipant(participants: MediaParticipantState[], preferLocal: boolean): MediaParticipantState | null {
+    if (participants.length === 0) {
+        return null;
+    }
+
+    if (preferLocal) {
+        return participants.find((participant) => participant.isLocal && participant.cameraEnabled)
+            ?? participants.find((participant) => !participant.isLocal && participant.cameraEnabled)
+            ?? participants.find((participant) => participant.isLocal)
+            ?? participants.find((participant) => !participant.isLocal)
+            ?? null;
+    }
+
+    return participants.find((participant) => !participant.isLocal && participant.cameraEnabled)
+        ?? participants.find((participant) => !participant.isLocal)
+        ?? participants.find((participant) => participant.isLocal && participant.cameraEnabled)
+        ?? participants.find((participant) => participant.isLocal)
+        ?? null;
+}
+
 function buildAllInRunoutView(lastCompletedHand: LastHandResult | null, nowMs: number): AllInRunoutView | null {
     const allInRunout = lastCompletedHand?.allInRunout;
     const finalBoards = getCompletedHandBoards(lastCompletedHand);
@@ -5732,6 +5818,41 @@ function buildAllInRunoutView(lastCompletedHand: LastHandResult | null, nowMs: n
 
 function isAllInRunoutActive(lastCompletedHand: LastHandResult | null, nowMs: number): boolean {
     return Boolean(buildAllInRunoutView(lastCompletedHand, nowMs)?.isActive);
+}
+
+// Step-based variant: each revealed step is explicitly passed so the caller
+// controls the cadence rather than computing it from elapsed wall-clock time.
+function buildAllInRunoutViewFromStep(lastCompletedHand: LastHandResult | null, revealedSteps: number): AllInRunoutView | null {
+    const allInRunout = lastCompletedHand?.allInRunout;
+    const finalBoards = getCompletedHandBoards(lastCompletedHand);
+
+    if (!lastCompletedHand || !allInRunout || finalBoards.length === 0) {
+        return null;
+    }
+
+    const totalRevealSteps = finalBoards.reduce(
+        (total, board) => total + Math.max(0, board.length - Math.min(allInRunout.startBoardCount, board.length)),
+        0,
+    );
+
+    if (totalRevealSteps === 0) {
+        return null;
+    }
+
+    let remainingSteps = revealedSteps;
+    const visibleBoards = finalBoards.map((board) => {
+        const startingCount = Math.min(allInRunout.startBoardCount, board.length);
+        const missingCount = Math.max(0, board.length - startingCount);
+        const revealedForBoard = Math.min(missingCount, remainingSteps);
+        remainingSteps = Math.max(0, remainingSteps - missingCount);
+        return board.slice(0, startingCount + revealedForBoard);
+    });
+
+    return {
+        isActive: revealedSteps < totalRevealSteps,
+        visibleBoards,
+        revealedAccountIds: allInRunout.revealedAccountIds,
+    };
 }
 
 function filterRevealedHoleCards(
@@ -6995,12 +7116,24 @@ function resolveQueuedHeroAction(
     }
 }
 
-function describeMediaBadge(participant: MediaParticipantState): {
+function describeMediaBadge(participant: MediaParticipantState, isHeroSeat: boolean): {
     label: string;
     tone: "awaiting" | "joined" | "live" | "mic" | "muted-mic" | "no-cam";
 } {
     const cameraOn = participant.cameraEnabled;
     const microphoneOn = participant.microphoneEnabled;
+
+    if (!isHeroSeat) {
+        return microphoneOn
+            ? {
+                label: "Mic on",
+                tone: "mic",
+            }
+            : {
+                label: "Mic muted",
+                tone: "muted-mic",
+            };
+    }
 
     if (cameraOn && microphoneOn && participant.isSpeaking) {
         return {
@@ -7031,8 +7164,8 @@ function describeMediaBadge(participant: MediaParticipantState): {
     }
 
     return {
-        label: "Joined",
-        tone: "joined",
+        label: "Media off",
+        tone: "awaiting",
     };
 }
 

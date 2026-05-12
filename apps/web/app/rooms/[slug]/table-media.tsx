@@ -408,11 +408,13 @@ function buildParticipantState(room: LiveKitRoom): MediaParticipantState[] {
 
     return allParticipants
         .map((participant) => {
+            const accountId = readParticipantAccountId(participant.metadata);
             const videoPublication = findPublication(participant, "camera");
             const audioPublication = findPublication(participant, "microphone");
 
             return {
                 identity: participant.identity,
+                accountId,
                 name: participant.name || participant.identity,
                 isLocal: participant.identity === room.localParticipant.identity,
                 isSpeaking: participant.isSpeaking,
@@ -434,6 +436,19 @@ function buildParticipantState(room: LiveKitRoom): MediaParticipantState[] {
 
             return left.name.localeCompare(right.name);
         });
+}
+
+function readParticipantAccountId(metadata: string | undefined): string | null {
+    if (!metadata) {
+        return null;
+    }
+
+    try {
+        const parsed = JSON.parse(metadata) as { accountId?: unknown };
+        return typeof parsed.accountId === "string" && parsed.accountId.trim().length > 0 ? parsed.accountId : null;
+    } catch {
+        return null;
+    }
 }
 
 function findPublication(participant: Participant, source: "camera" | "microphone"): TrackPublication | null {

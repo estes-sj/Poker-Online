@@ -4617,21 +4617,50 @@ button {
   content: "🔇";
 }
 
+.room-shell--play:not(.room-shell--phone) .table-seat--focusable .table-seat__media-badge--icon-only {
+  left: 0.22rem;
+  right: auto;
+  top: calc(100% - 0.36rem);
+  min-width: 1.18rem;
+  min-height: 1.18rem;
+  width: 1.18rem;
+  height: 1.18rem;
+  justify-content: center;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 0;
+  letter-spacing: 0;
+  line-height: 1;
+  border: 1px solid rgba(0, 0, 0, 0.32);
+}
+
+.room-shell--play:not(.room-shell--phone) .table-seat--focusable .table-seat__media-badge--icon-only::before {
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 0.64rem;
+}
+
 .room-shell--play:not(.room-shell--phone) .table-seat--focusable .table-seat__media-badge--no-cam::before,
 .room-shell--play:not(.room-shell--phone) .table-seat--focusable .table-seat__media-badge--awaiting::before {
-  content: "📷";
+  content: "⚠";
 }
 
-.room-shell--play:not(.room-shell--phone) .table-seat--focusable .table-seat__media-badge--joined,
-.room-shell--play:not(.room-shell--phone) .table-seat--focusable .table-seat__media-badge--awaiting {
+.room-shell--play:not(.room-shell--phone) .table-seat--focusable .table-seat__media-badge--joined {
   background: rgba(26, 31, 38, 0.82);
   color: rgba(222, 228, 236, 0.86);
 }
 
-.room-shell--play:not(.room-shell--phone) .table-seat--open .table-seat__media-badge--joined,
+.room-shell--play:not(.room-shell--phone) .table-seat--open .table-seat__media-badge--joined {
+  background: rgba(26, 31, 38, 0.82);
+  color: rgba(222, 228, 236, 0.86);
+}
+
+.room-shell--play:not(.room-shell--phone) .table-seat--focusable .table-seat__media-badge--awaiting,
 .room-shell--play:not(.room-shell--phone) .table-seat--open .table-seat__media-badge--awaiting {
-  background: rgba(26, 31, 38, 0.82);
-  color: rgba(222, 228, 236, 0.86);
+  background: linear-gradient(135deg, rgba(117, 31, 24, 0.96), rgba(76, 18, 14, 0.96));
+  border: 1px solid rgba(255, 163, 148, 0.72);
+  box-shadow: 0 0 0 1px rgba(255, 163, 148, 0.34), 0 0 0.42rem rgba(200, 62, 47, 0.46);
+  color: #ffe3de;
 }
 
 .room-shell--play:not(.room-shell--phone) .table-seat--open .table-seat__media-badge--awaiting::before {
@@ -4748,6 +4777,8 @@ button {
 }
 
 .room-shell--play:not(.room-shell--phone) .table-seat--open .table-seat__stats--open {
+  flex-direction: column;
+  align-items: flex-end;
   gap: 0.28rem;
 }
 
@@ -5044,7 +5075,7 @@ button {
   min-height: 0.82rem;
   padding: 0 0.3rem;
   border-radius: 0.18rem;
-  font-size: 0.4rem;
+  font-size: 0.45rem;
   letter-spacing: 0.04em;
 }
 

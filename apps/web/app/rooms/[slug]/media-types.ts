@@ -9,6 +9,7 @@ export interface DemoParticipantSurface {
 
 export interface MediaParticipantState {
     identity: string;
+    accountId: string | null;
     name: string;
     isLocal: boolean;
     isSpeaking: boolean;

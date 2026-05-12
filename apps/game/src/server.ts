@@ -27,6 +27,7 @@ interface Subscription {
 
 export function buildGameServer() {
   const subscriptions = new Map<WebSocket, Subscription>();
+  const disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const autoStartTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const bustCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const roomExpirationTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -802,14 +803,14 @@ export function buildGameServer() {
       }
 
       try {
-        await handleClientMessage(registry, subscriptions, socket, payload, scheduleRoomBustCleanup, scheduleRoomAutoStart, scheduleRoomTurnTimeout);
+        await handleClientMessage(registry, subscriptions, disconnectTimers, socket, payload, scheduleRoomBustCleanup, scheduleRoomAutoStart, scheduleRoomTurnTimeout);
       } catch (error) {
         socket.send(JSON.stringify({ type: "error", message: getErrorMessage(error) }));
       }
     });
 
     socket.on("close", () => {
-      void handleSocketClose(registry, subscriptions, socket);
+      void handleSocketClose(registry, subscriptions, disconnectTimers, socket);
     });
   });
 
@@ -819,6 +820,7 @@ export function buildGameServer() {
 async function handleClientMessage(
   registry: RoomRegistry,
   subscriptions: Map<WebSocket, Subscription>,
+  disconnectTimers: Map<string, ReturnType<typeof setTimeout>>,
   socket: WebSocket,
   payload: unknown,
   scheduleRoomBustCleanup: (slug: string) => Promise<void>,
@@ -834,6 +836,15 @@ async function handleClientMessage(
   switch (message.type) {
     case "subscribe_room": {
       const accountId = typeof message.accountId === "string" ? message.accountId : undefined;
+
+      // Cancel any pending disconnect timer for this player (e.g. fast page refresh).
+      if (accountId) {
+        const pendingDisconnect = disconnectTimers.get(`${message.slug}:${accountId}`);
+        if (pendingDisconnect !== undefined) {
+          clearTimeout(pendingDisconnect);
+          disconnectTimers.delete(`${message.slug}:${accountId}`);
+        }
+      }
 
       subscriptions.set(socket, {
         slug: message.slug,
@@ -895,11 +906,12 @@ async function handleClientMessage(
   }
 }
 
-async function handleSocketClose(
+function handleSocketClose(
   registry: RoomRegistry,
   subscriptions: Map<WebSocket, Subscription>,
+  disconnectTimers: Map<string, ReturnType<typeof setTimeout>>,
   socket: WebSocket
-): Promise<void> {
+): void {
   const subscription = subscriptions.get(socket);
   subscriptions.delete(socket);
 
@@ -907,15 +919,30 @@ async function handleSocketClose(
     return;
   }
 
-  try {
-    await registry.setPlayerConnection({
-      slug: subscription.slug,
-      accountId: subscription.accountId,
-      isConnected: false,
-    });
-  } catch {
-    // Ignore disconnect cleanup failures after the socket is already gone.
+  // Debounce the disconnect: if subscribe_room arrives for the same player within
+  // the window (e.g. page refresh), the timer is cancelled before it fires.
+  const { slug, accountId } = subscription;
+  const key = `${slug}:${accountId}`;
+
+  const existing = disconnectTimers.get(key);
+  if (existing !== undefined) {
+    clearTimeout(existing);
   }
+
+  disconnectTimers.set(key, setTimeout(() => {
+    disconnectTimers.delete(key);
+
+    // Final guard: skip if another socket is already live for this player.
+    const isStillConnected = Array.from(subscriptions.values()).some(
+      (sub) => sub.slug === slug && sub.accountId === accountId
+    );
+
+    if (!isStillConnected) {
+      void registry.setPlayerConnection({ slug, accountId, isConnected: false }).catch(() => {
+        // Ignore disconnect cleanup failures.
+      });
+    }
+  }, 3000));
 }
 
 function safeParse(raw: string): unknown | null {

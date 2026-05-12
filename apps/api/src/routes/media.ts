@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { AccessToken } from "livekit-server-sdk";
+import { createHash } from "node:crypto";
 
 import type { AuthService } from "../services/auth-service.js";
 
@@ -36,9 +37,11 @@ export async function mediaRoutes(app: FastifyInstance, authService: AuthService
     try {
       const roomName = requireString(body.slug, "slug");
       const participantName = optionalString(body.participantName) ?? account.username;
+      const participantIdentity = buildMediaParticipantIdentity(account.id, sessionToken);
       const accessToken = new AccessToken(livekitApiKey, livekitApiSecret, {
-        identity: account.id,
+        identity: participantIdentity,
         name: participantName,
+        metadata: JSON.stringify({ accountId: account.id }),
       });
 
       accessToken.addGrant({
@@ -54,7 +57,8 @@ export async function mediaRoutes(app: FastifyInstance, authService: AuthService
         roomName,
         turnTls,
         participant: {
-          id: account.id,
+          id: participantIdentity,
+          accountId: account.id,
           name: participantName,
         },
       });
@@ -64,6 +68,11 @@ export async function mediaRoutes(app: FastifyInstance, authService: AuthService
       });
     }
   });
+}
+
+function buildMediaParticipantIdentity(accountId: string, sessionToken: string): string {
+  const sessionFingerprint = createHash("sha256").update(sessionToken).digest("hex").slice(0, 12);
+  return `${accountId}:${sessionFingerprint}`;
 }
 
 function requireString(value: unknown, fieldName: string): string {

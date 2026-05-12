@@ -225,6 +225,7 @@ export function buildDemoRoomPreset(slug: string): DemoRoomPreset | null {
         initialAccountId: DEMO_HERO_ACCOUNT_ID,
         demoMediaParticipants: DEMO_SEAT_PROFILES.map((profile) => ({
             identity: profile.accountId,
+            accountId: profile.accountId,
             name: profile.displayName,
             isLocal: profile.accountId === DEMO_HERO_ACCOUNT_ID,
             isSpeaking: profile.isSpeaking,
