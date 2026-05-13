@@ -1130,6 +1130,41 @@ button {
   gap: 16px;
 }
 
+.club-game-history__workspace {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.club-game-history__pagination {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.club-game-history__page {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(245, 240, 223, 0.1);
+  background: rgba(5, 13, 10, 0.36);
+  color: inherit;
+  text-decoration: none;
+}
+
+.club-game-history__page span {
+  color: var(--text-soft);
+  font-size: 0.9rem;
+}
+
+.club-game-history__page--active {
+  border-color: rgba(230, 181, 76, 0.45);
+  box-shadow: 0 0 0 1px rgba(230, 181, 76, 0.22) inset;
+  background: rgba(230, 181, 76, 0.08);
+}
+
 .club-game-history__header,
 .club-game-card__header,
 .club-game-card__meta {
@@ -1241,8 +1276,47 @@ button {
   gap: 16px;
 }
 
+.admin-club-manager__game-workspace {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.admin-club-manager__game-pagination {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.admin-club-manager__game-page {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  text-align: left;
+  border-radius: 18px;
+  border: 1px solid rgba(245, 240, 223, 0.1);
+  background: rgba(5, 13, 10, 0.36);
+  color: inherit;
+}
+
+.admin-club-manager__game-page span {
+  color: var(--text-soft);
+  font-size: 0.9rem;
+}
+
+.admin-club-manager__game-page--active {
+  border-color: rgba(230, 181, 76, 0.45);
+  box-shadow: 0 0 0 1px rgba(230, 181, 76, 0.22) inset;
+  background: rgba(230, 181, 76, 0.08);
+}
+
 .admin-club-manager__game-card {
   gap: 16px;
+}
+
+.admin-club-manager__game-create {
+  gap: 18px;
 }
 
 .admin-club-manager__game-fields {
@@ -1303,7 +1377,9 @@ button {
   }
 
   .admin-club-manager__create-form,
-  .admin-club-manager__workspace {
+  .admin-club-manager__workspace,
+  .club-game-history__workspace,
+  .admin-club-manager__game-workspace {
     grid-template-columns: 1fr;
   }
 
@@ -9385,4 +9461,646 @@ button {
 .room-shell--phone .table-seat--focusable .table-seat__content,
 .room-shell--phone .table-seat--open .table-seat__content {
   overflow: visible !important;
+}
+
+/* Sharp non-game overhaul */
+.landing-shell {
+  --bg: #17191c;
+  --bg-soft: #202326;
+  --surface: rgba(25, 28, 31, 0.94);
+  --surface-strong: rgba(34, 37, 40, 0.98);
+  --surface-border: rgba(255, 255, 255, 0.08);
+  --text: #f2efe9;
+  --text-soft: #a4a8ac;
+  --accent: #ef9f58;
+  --accent-strong: #df7a47;
+  --shadow: 0 22px 44px rgba(0, 0, 0, 0.3);
+  --lobby-surface: linear-gradient(180deg, rgba(31, 34, 37, 0.96), rgba(18, 20, 22, 0.99));
+  --lobby-surface-soft: linear-gradient(180deg, rgba(40, 44, 47, 0.94), rgba(23, 25, 27, 0.98));
+  --lobby-surface-muted: rgba(18, 20, 22, 0.92);
+  --lobby-border: rgba(255, 255, 255, 0.08);
+  --lobby-border-strong: rgba(239, 159, 88, 0.28);
+  --lobby-text: #f2efe9;
+  --lobby-text-soft: #a4a8ac;
+  --lobby-text-dim: #7f8489;
+  --lobby-accent: #ef9f58;
+  --lobby-accent-soft: #ffd3a9;
+  --lobby-green: #67cf90;
+  --lobby-red: #f08c82;
+  position: relative;
+  isolation: isolate;
+  width: min(1380px, calc(100vw - 28px));
+  display: grid;
+  gap: 18px;
+  padding: 18px 0 78px;
+  color: var(--lobby-text);
+}
+
+.landing-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at top left, rgba(239, 159, 88, 0.1), transparent 26%),
+    radial-gradient(circle at bottom right, rgba(115, 142, 255, 0.08), transparent 24%),
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.04) 1px, transparent 0),
+    linear-gradient(180deg, #242628 0%, #1a1c1f 42%, #131416 100%);
+  background-size: auto, auto, 18px 18px, 100% 100%;
+}
+
+.landing-shell::after {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: -1;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(239, 159, 88, 0.72), transparent);
+}
+
+.landing-shell p,
+.landing-shell ul,
+.landing-shell .muted-copy,
+.landing-shell .room-card__timestamp,
+.landing-shell .admin-room-manager__feedback,
+.landing-shell .club-game-card__meta,
+.landing-shell .admin-room-table__metric span,
+.landing-shell .rooms-archive-table__room span,
+.landing-shell .admin-club-manager__club-button span,
+.landing-shell .admin-club-manager__table-player span,
+.landing-shell .admin-club-manager__member-meta span {
+  color: var(--lobby-text-soft);
+}
+
+.landing-shell .hero-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.landing-shell .hero-brand__mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(10, 12, 13, 0.94);
+  box-shadow: none;
+}
+
+.landing-shell .hero-brand__text {
+  gap: 4px;
+}
+
+.landing-shell .hero-brand__name {
+  color: var(--lobby-text);
+  font-family: var(--font-sans), sans-serif;
+  font-size: 0.8rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.landing-shell .hero-brand__tagline {
+  color: var(--lobby-text-dim);
+  font-size: 0.6rem;
+  letter-spacing: 0.18em;
+}
+
+.landing-shell .eyebrow,
+.landing-shell .section-heading__eyebrow,
+.landing-shell .ui-panel__eyebrow,
+.landing-shell .control-field__label {
+  color: var(--lobby-text-dim);
+  font-size: 0.62rem;
+  letter-spacing: 0.22em;
+}
+
+.landing-shell h1,
+.landing-shell h2,
+.landing-shell h3,
+.landing-shell strong,
+.landing-shell .ui-panel__title,
+.landing-shell .section-heading__title,
+.landing-shell .room-card__header strong,
+.landing-shell .club-detail-page__metric strong,
+.landing-shell .admin-club-manager__metric strong,
+.landing-shell .landing-proof-card strong,
+.landing-shell .landing-brief-list__item strong,
+.landing-shell .control-desk__form-copy strong,
+.landing-shell .control-desk__status strong {
+  color: var(--lobby-text);
+}
+
+.landing-shell .room-header,
+.landing-shell .ui-panel,
+.landing-shell .hero__copy,
+.landing-shell .hero__panel,
+.landing-shell .rooms-page__section,
+.landing-shell .club-leaderboard,
+.landing-shell .club-game-history,
+.landing-shell .admin-club-manager__section,
+.landing-shell .admin-room-manager__panel {
+  position: relative;
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid var(--lobby-border);
+  background: var(--lobby-surface);
+  box-shadow: 0 22px 44px rgba(0, 0, 0, 0.3);
+  backdrop-filter: none;
+}
+
+.landing-shell .room-header::before,
+.landing-shell .ui-panel::before,
+.landing-shell .rooms-page__section::before,
+.landing-shell .club-leaderboard::before,
+.landing-shell .club-game-history::before,
+.landing-shell .admin-club-manager__section::before,
+.landing-shell .admin-room-manager__panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(239, 159, 88, 0.84), rgba(239, 159, 88, 0));
+  pointer-events: none;
+}
+
+.landing-shell .room-header,
+.landing-shell .hero__copy,
+.landing-shell .ui-panel,
+.landing-shell .rooms-page__section,
+.landing-shell .club-leaderboard,
+.landing-shell .club-game-history,
+.landing-shell .admin-club-manager__section,
+.landing-shell .admin-room-manager__panel {
+  padding: 24px;
+}
+
+.landing-shell .ui-panel__title {
+  font-size: clamp(1.22rem, 1.8vw, 1.6rem);
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+}
+
+.landing-shell .section-heading {
+  max-width: 72rem;
+}
+
+.landing-shell .section-heading__title {
+  font-size: clamp(2.1rem, 4vw, 3.25rem);
+  line-height: 0.96;
+}
+
+.landing-shell .section-heading__copy {
+  margin-top: 10px;
+  max-width: 62ch;
+}
+
+.landing-shell .button {
+  min-height: 44px;
+  border-radius: 12px;
+  padding: 0 16px;
+  border: 1px solid var(--lobby-border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.landing-shell .button--primary {
+  border-color: rgba(255, 208, 164, 0.28);
+  background: linear-gradient(135deg, #f3b775, #df7a47);
+  color: #15110d;
+}
+
+.landing-shell .button--secondary {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(34, 37, 40, 0.98), rgba(20, 22, 24, 0.98));
+  color: var(--lobby-text);
+}
+
+.landing-shell .button--danger {
+  border-color: rgba(240, 140, 130, 0.24);
+  background: linear-gradient(180deg, rgba(87, 28, 28, 0.96), rgba(59, 18, 18, 0.98));
+  color: #ffd9d4;
+}
+
+.landing-shell .chip-pill,
+.landing-shell .control-desk__kicker,
+.landing-shell .control-schedule__offset,
+.landing-shell .admin-room-table__room-meta span,
+.landing-shell .admin-club-manager__member-meta span,
+.landing-shell .room-card__meta span {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--lobby-text-soft);
+}
+
+.landing-shell .chip-pill {
+  min-height: 30px;
+  padding: 0 11px;
+  font-size: 0.66rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.landing-shell--home {
+  gap: 22px;
+}
+
+.landing-shell--home .landing-hero {
+  grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.86fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.landing-shell--home .landing-hero__copy {
+  padding: 28px;
+  background:
+    radial-gradient(circle at 100% 0, rgba(239, 159, 88, 0.12), transparent 22%),
+    radial-gradient(circle at 0 100%, rgba(115, 142, 255, 0.1), transparent 26%),
+    linear-gradient(180deg, rgba(31, 34, 37, 0.98), rgba(18, 20, 22, 0.99));
+}
+
+.landing-shell--home .landing-hero__copy::after {
+  right: -96px;
+  bottom: -104px;
+  width: 290px;
+  height: 290px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: radial-gradient(circle, rgba(239, 159, 88, 0.14), transparent 66%);
+  opacity: 1;
+}
+
+.landing-shell--home .landing-hero__eyebrow {
+  margin-top: 22px;
+}
+
+.landing-shell--home .landing-hero__copy h1 {
+  max-width: 10ch;
+  margin-top: 14px;
+  font-size: clamp(3.1rem, 6vw, 5.6rem);
+  line-height: 0.9;
+  letter-spacing: -0.05em;
+}
+
+.landing-shell .landing-hero__lede {
+  max-width: 60ch;
+  font-size: 1rem;
+}
+
+.landing-shell .landing-hero__proof,
+.landing-shell .landing-flow-grid,
+.landing-shell .landing-notes-grid,
+.landing-shell .rooms-grid,
+.landing-shell .clubs-grid,
+.landing-shell .club-detail-page__metrics,
+.landing-shell .admin-club-manager__metrics,
+.landing-shell .admin-club-manager__forms {
+  gap: 14px;
+}
+
+.landing-shell .landing-proof-card,
+.landing-shell .landing-brief-list__item,
+.landing-shell .control-desk__form-block,
+.landing-shell .control-desk__status,
+.landing-shell .club-game-card,
+.landing-shell .admin-room-manager__empty-state,
+.landing-shell .admin-club-manager__club-button,
+.landing-shell .club-detail-page__metric,
+.landing-shell .admin-club-manager__metric {
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--lobby-surface-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.landing-shell .landing-proof-card {
+  min-height: 122px;
+}
+
+.landing-shell .landing-proof-card span,
+.landing-shell .control-desk__kicker {
+  color: var(--lobby-accent-soft);
+}
+
+.landing-shell .landing-closing__panel {
+  background:
+    radial-gradient(circle at 100% 0, rgba(239, 159, 88, 0.14), transparent 22%),
+    linear-gradient(180deg, rgba(31, 34, 37, 0.98), rgba(18, 20, 22, 0.99));
+}
+
+.landing-shell .control-desk__panel::after {
+  inset: auto -44px -44px auto;
+  width: 140px;
+  height: 140px;
+  background: radial-gradient(circle, rgba(239, 159, 88, 0.16), transparent 68%);
+}
+
+.landing-shell .control-desk__notice {
+  border-radius: 12px;
+  border-color: rgba(239, 159, 88, 0.18);
+  background: rgba(239, 159, 88, 0.07);
+}
+
+.landing-shell .control-input {
+  min-height: 48px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(19, 21, 23, 0.98), rgba(13, 15, 17, 0.98));
+  color: var(--lobby-text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.landing-shell .control-input::placeholder {
+  color: rgba(242, 239, 233, 0.28);
+}
+
+.landing-shell .control-input:focus {
+  outline: none;
+  border-color: rgba(239, 159, 88, 0.52);
+  box-shadow: 0 0 0 1px rgba(239, 159, 88, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.landing-shell .control-checkbox,
+.landing-shell .control-schedule,
+.landing-shell .control-tooltip__trigger,
+.landing-shell .control-tooltip__bubble {
+  border-radius: 12px;
+}
+
+.landing-shell .control-checkbox,
+.landing-shell .control-schedule,
+.landing-shell .control-schedule__table-wrap,
+.landing-shell .control-tooltip__trigger,
+.landing-shell .control-tooltip__bubble,
+.landing-shell .rooms-archive-table-wrap,
+.landing-shell .admin-room-manager__table-wrap,
+.landing-shell .club-leaderboard__table-wrap,
+.landing-shell .club-game-card__table-wrap,
+.landing-shell .admin-club-manager__table-wrap {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(15, 17, 19, 0.9);
+}
+
+.landing-shell .rooms-page,
+.landing-shell .clubs-page,
+.landing-shell .club-detail-page,
+.landing-shell .admin-rooms-page,
+.landing-shell .admin-club-manager,
+.landing-shell .admin-room-manager {
+  gap: 18px;
+}
+
+.landing-shell .room-header,
+.landing-shell .admin-rooms-page__header,
+.landing-shell .clubs-page__header,
+.landing-shell .club-detail-page__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 18px;
+  margin-bottom: 0;
+}
+
+.landing-shell .admin-rooms-page__intro,
+.landing-shell .clubs-page__intro,
+.landing-shell .club-detail-page__intro,
+.landing-shell .rooms-page__intro {
+  gap: 10px;
+}
+
+.landing-shell .admin-rooms-page__intro h1,
+.landing-shell .clubs-page__intro h1,
+.landing-shell .club-detail-page__intro h1,
+.landing-shell .rooms-page__intro h1 {
+  font-size: clamp(2.7rem, 5vw, 4.8rem);
+  line-height: 0.9;
+  letter-spacing: -0.05em;
+}
+
+.landing-shell .rooms-page__actions,
+.landing-shell .clubs-page__actions,
+.landing-shell .club-detail-page__actions,
+.landing-shell .admin-rooms-page__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.landing-shell .rooms-page__section-header,
+.landing-shell .admin-room-manager__header,
+.landing-shell .admin-room-manager__toolbar,
+.landing-shell .club-leaderboard__header,
+.landing-shell .club-game-history__header,
+.landing-shell .admin-club-manager__header,
+.landing-shell .admin-club-manager__detail-header,
+.landing-shell .admin-club-manager__section-header,
+.landing-shell .club-game-card__header,
+.landing-shell .club-game-card__meta {
+  gap: 14px;
+}
+
+.landing-shell .rooms-page__section,
+.landing-shell .club-leaderboard,
+.landing-shell .club-game-history,
+.landing-shell .admin-club-manager__section {
+  padding: 22px;
+}
+
+.landing-shell .room-card {
+  position: relative;
+  overflow: hidden;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: linear-gradient(180deg, rgba(35, 39, 42, 0.96), rgba(20, 22, 24, 0.98));
+}
+
+.landing-shell .room-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(112, 148, 255, 0.58), rgba(239, 159, 88, 0.84), transparent);
+}
+
+.landing-shell .room-card--archived::before {
+  background: linear-gradient(90deg, rgba(239, 159, 88, 0.84), transparent);
+}
+
+.landing-shell .room-card__meta,
+.landing-shell .admin-room-table__room-meta,
+.landing-shell .club-game-card__meta {
+  gap: 8px;
+}
+
+.landing-shell .rooms-archive-table-wrap,
+.landing-shell .admin-room-manager__table-wrap,
+.landing-shell .club-leaderboard__table-wrap,
+.landing-shell .club-game-card__table-wrap,
+.landing-shell .admin-club-manager__table-wrap {
+  border-radius: 14px;
+  overflow: auto;
+}
+
+.landing-shell .rooms-archive-table thead th,
+.landing-shell .admin-room-table thead th,
+.landing-shell .club-leaderboard__table th,
+.landing-shell .club-game-card__table th,
+.landing-shell .admin-club-manager__table th {
+  background: #121416;
+  color: #8f9499;
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.landing-shell .rooms-archive-table th,
+.landing-shell .rooms-archive-table td,
+.landing-shell .admin-room-table th,
+.landing-shell .admin-room-table td,
+.landing-shell .club-leaderboard__table th,
+.landing-shell .club-leaderboard__table td,
+.landing-shell .club-game-card__table th,
+.landing-shell .club-game-card__table td,
+.landing-shell .admin-club-manager__table th,
+.landing-shell .admin-club-manager__table td {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+.landing-shell .rooms-archive-table tbody tr:hover,
+.landing-shell .admin-room-table tbody tr:hover,
+.landing-shell .club-leaderboard__table tbody tr:hover,
+.landing-shell .club-game-card__table tbody tr:hover,
+.landing-shell .admin-club-manager__table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.landing-shell .admin-room-table__row--selected {
+  background: rgba(239, 159, 88, 0.08);
+}
+
+.landing-shell .club-leaderboard__profit--positive,
+.landing-shell .admin-club-manager__result--positive,
+.landing-shell .club-game-card__result--positive,
+.landing-shell .admin-room-manager__feedback--notice {
+  color: var(--lobby-green);
+}
+
+.landing-shell .club-leaderboard__profit--negative,
+.landing-shell .admin-club-manager__result--negative,
+.landing-shell .club-game-card__result--negative,
+.landing-shell .form-error {
+  color: var(--lobby-red);
+}
+
+.landing-shell .room-link,
+.landing-shell .admin-room-table__room-link,
+.landing-shell .admin-club-manager__detail-header a {
+  color: var(--lobby-accent-soft);
+}
+
+.landing-shell .admin-room-table__room-link:hover,
+.landing-shell .admin-club-manager__detail-header a:hover {
+  color: var(--lobby-text);
+}
+
+.landing-shell .club-detail-page__metric,
+.landing-shell .admin-club-manager__metric {
+  padding: 18px;
+}
+
+@media (max-width: 1100px) {
+  .landing-shell--home .landing-hero,
+  .landing-shell .room-header,
+  .landing-shell .admin-rooms-page__header,
+  .landing-shell .clubs-page__header,
+  .landing-shell .club-detail-page__header,
+  .landing-shell .admin-room-manager__bulk-actions,
+  .landing-shell .admin-club-manager__workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-shell .rooms-page__actions,
+  .landing-shell .clubs-page__actions,
+  .landing-shell .club-detail-page__actions,
+  .landing-shell .admin-rooms-page__actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 760px) {
+  .landing-shell {
+    width: min(100vw - 18px, 100%);
+    gap: 14px;
+    padding: 12px 0 56px;
+  }
+
+  .landing-shell .room-header,
+  .landing-shell .hero__copy,
+  .landing-shell .ui-panel,
+  .landing-shell .rooms-page__section,
+  .landing-shell .club-leaderboard,
+  .landing-shell .club-game-history,
+  .landing-shell .admin-club-manager__section,
+  .landing-shell .admin-room-manager__panel {
+    border-radius: 14px;
+    padding: 18px;
+  }
+
+  .landing-shell--home .landing-hero__copy h1,
+  .landing-shell .admin-rooms-page__intro h1,
+  .landing-shell .clubs-page__intro h1,
+  .landing-shell .club-detail-page__intro h1,
+  .landing-shell .rooms-page__intro h1,
+  .landing-shell .section-heading__title {
+    max-width: none;
+    font-size: clamp(2.25rem, 12vw, 3.6rem);
+  }
+
+  .landing-shell .landing-hero__proof,
+  .landing-shell .landing-flow-grid,
+  .landing-shell .landing-notes-grid,
+  .landing-shell .rooms-grid,
+  .landing-shell .clubs-grid,
+  .landing-shell .club-detail-page__metrics,
+  .landing-shell .admin-club-manager__metrics,
+  .landing-shell .admin-club-manager__forms,
+  .landing-shell .admin-club-manager__workspace,
+  .landing-shell .admin-room-manager__bulk-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-shell .rooms-page__section-header,
+  .landing-shell .admin-room-manager__header,
+  .landing-shell .admin-room-manager__toolbar,
+  .landing-shell .club-leaderboard__header,
+  .landing-shell .club-game-history__header,
+  .landing-shell .admin-club-manager__header,
+  .landing-shell .admin-club-manager__detail-header,
+  .landing-shell .admin-club-manager__section-header,
+  .landing-shell .club-game-card__header,
+  .landing-shell .club-game-card__meta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .landing-shell .landing-proof-card,
+  .landing-shell .landing-brief-list__item,
+  .landing-shell .control-desk__form-block,
+  .landing-shell .control-desk__status,
+  .landing-shell .room-card,
+  .landing-shell .club-game-card,
+  .landing-shell .club-detail-page__metric,
+  .landing-shell .admin-club-manager__metric {
+    padding: 16px;
+  }
 }

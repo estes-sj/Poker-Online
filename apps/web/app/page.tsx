@@ -99,11 +99,10 @@ export default function HomePage() {
                             <span className="hero-brand__tagline">Online poker for real home games</span>
                         </span>
                     </Link>
-                    <span className="eyebrow landing-hero__eyebrow">Host the room, not a pile of tabs</span>
-                    <h1>Run the whole poker night from the table.</h1>
+                    <h1>Customizable poker nights with live video and audio.</h1>
                     <p className="landing-hero__lede">
-                        Poker Poker keeps the parts hosts actually manage in one place: the invite link, seating,
-                        voice and camera, rebuys, blind controls, hand flow, session ledger, and archived replays.
+                        Poker Poker includes
+                        voice and camera, rebuys, blind controls, hand flow, session ledger, and archived replays. All self-hosted.
                     </p>
                     <div className="hero__actions">
                         <Link className="button button--primary" href="#host-a-game">
@@ -136,41 +135,6 @@ export default function HomePage() {
 
                 <div className="landing-hero__side">
                     <ControlDesk roomCreationPolicy={roomCreationPolicy} />
-                </div>
-            </section>
-
-            <section className="content-grid landing-section" id="why-poker">
-                <SectionHeading eyebrow="How the room works" title="Useful before the deal, during the hand, and after the session ends.">
-                    The product is built around the moments hosts usually patch together by hand: setup, pacing, approvals,
-                    table communication, and the recap when everyone wants to review a spot later.
-                </SectionHeading>
-
-                <div className="landing-flow-grid">
-                    {hostFlow.map((item) => (
-                        <Panel key={item.title} eyebrow={item.eyebrow} title={item.title} className="landing-flow-card">
-                            <p>{item.copy}</p>
-                            <ul className="stack-list landing-flow-card__list">
-                                {item.points.map((point) => (
-                                    <li key={point}>{point}</li>
-                                ))}
-                            </ul>
-                        </Panel>
-                    ))}
-                </div>
-            </section>
-
-            <section className="content-grid landing-section landing-section--notes">
-                <SectionHeading eyebrow="Why it feels better" title="Clear enough for players, controlled enough for the host.">
-                    The aim is not to add more dashboard chrome. It is to make the room feel organized when the table is full,
-                    people are talking over each other, someone needs a rebuy, and another player wants to replay the last hand.
-                </SectionHeading>
-
-                <div className="panel-grid landing-notes-grid">
-                    {productNotes.map((item) => (
-                        <Panel key={item.title} title={item.title} className="landing-note-card">
-                            <p>{item.copy}</p>
-                        </Panel>
-                    ))}
                 </div>
             </section>
 

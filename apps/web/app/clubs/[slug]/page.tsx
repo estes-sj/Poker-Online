@@ -7,15 +7,25 @@ export const dynamic = "force-dynamic";
 
 export default async function ClubDetailPage({
     params,
+    searchParams,
 }: {
     params: Promise<{ slug: string }>;
+    searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
     const { slug } = await params;
+    const resolvedSearchParams = await searchParams;
     const club = await fetchClub(slug);
 
     if (!club) {
         notFound();
     }
+
+    const requestedGameId = typeof resolvedSearchParams.game === "string"
+        ? resolvedSearchParams.game
+        : Array.isArray(resolvedSearchParams.game)
+            ? resolvedSearchParams.game[0]
+            : undefined;
+    const selectedGame = club.gameHistory.find((game) => game.gameId === requestedGameId) ?? club.gameHistory[0] ?? null;
 
     return (
         <main className="landing-shell club-detail-page">
@@ -115,17 +125,34 @@ export default async function ClubDetailPage({
                 </header>
 
                 {club.gameHistory.length ? (
-                    <div className="club-game-history__list">
-                        {club.gameHistory.map((game) => (
-                            <article className="club-game-card" key={game.gameId}>
+                    <div className="club-game-history__workspace">
+                        <div className="club-game-history__pagination">
+                            {club.gameHistory.map((game) => (
+                                <Link
+                                    className={[
+                                        "club-game-history__page",
+                                        game.gameId === selectedGame?.gameId ? "club-game-history__page--active" : "",
+                                    ].filter(Boolean).join(" ")}
+                                    key={game.gameId}
+                                    href={`/clubs/${club.slug}?game=${game.gameId}`}
+                                    scroll={false}
+                                >
+                                    <strong>{game.label}</strong>
+                                    <span>{formatTimestamp(game.playedAt)}</span>
+                                </Link>
+                            ))}
+                        </div>
+
+                        {selectedGame ? (
+                            <article className="club-game-card" key={selectedGame.gameId}>
                                 <header className="club-game-card__header">
                                     <div>
-                                        <strong>{formatTimestamp(game.playedAt)}</strong>
-                                        <p className="muted-copy">{game.label}</p>
+                                        <strong>{formatTimestamp(selectedGame.playedAt)}</strong>
+                                        <p className="muted-copy">{selectedGame.label}</p>
                                     </div>
                                     <div className="club-game-card__meta">
-                                        <span>{game.entryCount} players</span>
-                                        <span>Recorded {formatTimestamp(game.importedAt)}</span>
+                                        <span>{selectedGame.entryCount} players</span>
+                                        <span>Recorded {formatTimestamp(selectedGame.importedAt)}</span>
                                     </div>
                                 </header>
 
@@ -141,8 +168,8 @@ export default async function ClubDetailPage({
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {game.ledger.map((entry) => (
-                                                <tr key={`${game.gameId}-${entry.accountId}`}>
+                                            {selectedGame.ledger.map((entry) => (
+                                                <tr key={`${selectedGame.gameId}-${entry.accountId}`}>
                                                     <td>{entry.displayName}</td>
                                                     <td>{entry.hoursPlayed ?? "-"}</td>
                                                     <td>{formatAmount(entry.totalBuyIn)}</td>
@@ -156,7 +183,7 @@ export default async function ClubDetailPage({
                                     </table>
                                 </div>
                             </article>
-                        ))}
+                        ) : null}
                     </div>
                 ) : (
                     <p className="muted-copy">No per-game ledgers have been imported for this club yet.</p>

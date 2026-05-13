@@ -118,6 +118,9 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
     const [importGamesPlayed, setImportGamesPlayed] = useState("0");
     const [leaderboardDrafts, setLeaderboardDrafts] = useState<Record<string, LeaderboardDraft>>({});
     const [gameDrafts, setGameDrafts] = useState<Record<string, GameDraft>>({});
+    const [newGameDraft, setNewGameDraft] = useState<GameDraft | null>(null);
+    const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
+    const [isMembersExpanded, setIsMembersExpanded] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -131,6 +134,8 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
         && isConfiguredRoomCreationAdmin(session.account.username, roomCreationPolicy.adminUsername),
     );
     const activeClub = clubs.find((club) => club.clubId === selectedClubId) ?? clubs[0] ?? null;
+    const selectedGame = activeClub?.gameHistory.find((game) => game.gameId === selectedGameId) ?? activeClub?.gameHistory[0] ?? null;
+    const selectedGameDraft = selectedGame ? (gameDrafts[selectedGame.gameId] ?? buildGameDraft(selectedGame)) : null;
 
     useEffect(() => {
         const storedSession = readStoredBrowserSession();
@@ -163,6 +168,30 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
             ...buildGameDraftPatch(activeClub.gameHistory),
         }));
     }, [activeClub]);
+
+    useEffect(() => {
+        if (!activeClub) {
+            setSelectedGameId(null);
+            return;
+        }
+
+        setSelectedGameId((currentGameId) => (
+            currentGameId && activeClub.gameHistory.some((game) => game.gameId === currentGameId)
+                ? currentGameId
+                : activeClub.gameHistory[0]?.gameId ?? null
+        ));
+    }, [activeClub]);
+
+    useEffect(() => {
+        if (!activeClub) {
+            setNewGameDraft(null);
+            setIsMembersExpanded(false);
+            return;
+        }
+
+        setNewGameDraft(buildNewGameDraft(activeClub.members));
+        setIsMembersExpanded(false);
+    }, [activeClub?.clubId]);
 
     async function loadClubs(token: string, initialLoad = false) {
         if (initialLoad) {
@@ -434,20 +463,6 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
             return;
         }
 
-        const canEditTotals = entry.accountIds.length === 1 && !entry.isDerivedFromRecordedGames;
-        let totalProfit = 0;
-        let gamesPlayed = 0;
-
-        if (canEditTotals) {
-            try {
-                totalProfit = parseWholeNumber(draft.totalProfit, "Total profit", true);
-                gamesPlayed = parseWholeNumber(draft.gamesPlayed, "Games played");
-            } catch (parseError) {
-                setError(parseError instanceof Error ? parseError.message : "Enter whole-number leaderboard values.");
-                return;
-            }
-        }
-
         setIsMutating(true);
         setError(null);
         setNotice(null);
@@ -464,7 +479,6 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                     accountIds: entry.accountIds,
                     displayName: entry.displayName ?? entry.username,
                     isVisibleInLeaderboard: draft.isVisibleInLeaderboard,
-                    ...(canEditTotals ? { totalProfit, gamesPlayed } : {}),
                 }),
             });
 
@@ -480,18 +494,6 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
         } finally {
             setIsMutating(false);
         }
-    }
-
-    function handleDraftChange(entryKey: string, field: keyof LeaderboardDraft, value: string) {
-        setLeaderboardDrafts((currentDrafts) => ({
-            ...currentDrafts,
-            [entryKey]: {
-                totalProfit: currentDrafts[entryKey]?.totalProfit ?? "0",
-                gamesPlayed: currentDrafts[entryKey]?.gamesPlayed ?? "0",
-                isVisibleInLeaderboard: currentDrafts[entryKey]?.isVisibleInLeaderboard ?? true,
-                [field]: value,
-            },
-        }));
     }
 
     function handleVisibilityDraftChange(entryKey: string, isVisibleInLeaderboard: boolean) {
@@ -554,6 +556,62 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                 },
             };
         });
+    }
+
+    function handleNewGameDraftChange(field: keyof Omit<GameDraft, "entries">, value: string) {
+        setNewGameDraft((currentDraft) => (
+            currentDraft
+                ? {
+                    ...currentDraft,
+                    [field]: value,
+                }
+                : currentDraft
+        ));
+    }
+
+    function handleNewGameEntryDraftChange(accountId: string, field: keyof GameEntryDraft, value: string) {
+        setNewGameDraft((currentDraft) => {
+            if (!currentDraft) {
+                return currentDraft;
+            }
+
+            return {
+                ...currentDraft,
+                entries: currentDraft.entries.map((entry) => (
+                    entry.accountId === accountId
+                        ? {
+                            ...entry,
+                            [field]: value,
+                        }
+                        : entry
+                )),
+            };
+        });
+    }
+
+    function handleRemoveNewGameEntry(accountId: string) {
+        setNewGameDraft((currentDraft) => {
+            if (!currentDraft) {
+                return currentDraft;
+            }
+
+            return {
+                ...currentDraft,
+                entries: currentDraft.entries.filter((entry) => entry.accountId !== accountId),
+            };
+        });
+    }
+
+    function handleResetNewGamePlayers() {
+        if (!activeClub) {
+            return;
+        }
+
+        setNewGameDraft((currentDraft) => ({
+            label: currentDraft?.label ?? "",
+            playedAt: currentDraft?.playedAt ?? buildNewGameDraft(activeClub.members).playedAt,
+            entries: buildNewGameDraft(activeClub.members).entries,
+        }));
     }
 
     async function handleSaveGame(gameId: string) {
@@ -627,6 +685,84 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
         }
     }
 
+    async function handleCreateGame(event: FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+
+        if (!session || !activeClub || !newGameDraft) {
+            setError("Load a club before creating a recorded game.");
+            return;
+        }
+
+        const existingGameIds = new Set(activeClub.gameHistory.map((game) => game.gameId));
+        let entries;
+        let label = "";
+        let playedAt = "";
+
+        try {
+            label = newGameDraft.label.trim();
+            playedAt = newGameDraft.playedAt.trim();
+
+            if (!label.length) {
+                throw new Error("Game label must not be empty.");
+            }
+
+            if (!playedAt.length) {
+                throw new Error("Played date must not be empty.");
+            }
+
+            entries = newGameDraft.entries.map((entry) => ({
+                accountId: entry.accountId,
+                displayName: entry.displayName.trim(),
+                hoursPlayed: entry.hoursPlayed.trim() || null,
+                totalBuyIn: parseWholeNumber(entry.totalBuyIn, "Total buy-in"),
+                cashOut: parseWholeNumber(entry.cashOut, "Cash-out"),
+            }));
+
+            if (entries.length === 0) {
+                throw new Error("Games must include at least one ledger entry.");
+            }
+        } catch (parseError) {
+            setError(parseError instanceof Error ? parseError.message : "Enter valid game ledger values.");
+            return;
+        }
+
+        setIsMutating(true);
+        setError(null);
+        setNotice(null);
+
+        try {
+            const gameBaseUrl = getBrowserGameHttpBaseUrl();
+            const response = await fetch(buildBrowserHttpUrl(gameBaseUrl, `/v1/admin/clubs/${activeClub.clubId}/games`), {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${session.token}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    label,
+                    playedAt,
+                    entries,
+                }),
+            });
+
+            const payload = (await response.json()) as ManagedClubSummary | { error?: string };
+
+            if (!response.ok || !("clubId" in payload)) {
+                throw new Error((payload as { error?: string }).error ?? "Unable to create recorded game.");
+            }
+
+            const createdGame = payload.gameHistory.find((game) => !existingGameIds.has(game.gameId)) ?? null;
+
+            applyClubUpdate(payload, `Created game ${label}.`);
+            setSelectedGameId(createdGame?.gameId ?? null);
+            setNewGameDraft(buildNewGameDraft(payload.members));
+        } catch (mutationError) {
+            setError(mutationError instanceof Error ? mutationError.message : "Unable to create recorded game.");
+        } finally {
+            setIsMutating(false);
+        }
+    }
+
     if (!canManageClubs) {
         return (
             <section className="ui-panel admin-club-manager__panel">
@@ -642,7 +778,7 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
             <header className="admin-club-manager__header">
                 <div>
                     <span className="ui-panel__eyebrow">Club administration</span>
-                    <h2 className="ui-panel__title">Leaderboards, memberships, and imported totals</h2>
+                    <h2 className="ui-panel__title">Leaderboards, memberships, and recorded games</h2>
                 </div>
                 <div className="status-card__actions">
                     <button className="button button--secondary" type="button" onClick={() => session ? void loadClubs(session.token) : undefined} disabled={isRefreshing || isMutating}>
@@ -655,7 +791,7 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                 <div className="admin-club-manager__toolbar">
                     <div className="admin-room-manager__toolbar-copy">
                         <strong>Clubs use the existing room ledger data.</strong>
-                        <p className="muted-copy">Tie a room to a club and every settled hand updates that club's all-time ranking. Recorded games can also be edited here.</p>
+                        <p className="muted-copy">Tie a room to a club and every settled hand updates that club's all-time ranking. Recorded games can be added and edited here.</p>
                     </div>
 
                     <form className="admin-club-manager__create-form" onSubmit={handleCreateClub}>
@@ -833,29 +969,43 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                         <strong>Members</strong>
                                         <p className="muted-copy">Synthetic imported players appear here alongside registered accounts.</p>
                                     </div>
+
+                                    <div className="status-card__actions">
+                                        <button
+                                            className="button button--secondary"
+                                            type="button"
+                                            onClick={() => setIsMembersExpanded((currentValue) => !currentValue)}
+                                        >
+                                            {isMembersExpanded ? "Collapse" : `Expand (${activeClub.memberCount})`}
+                                        </button>
+                                    </div>
                                 </div>
 
-                                <div className="table-admin-list">
-                                    {activeClub.members.map((member) => (
-                                        <article key={member.accountId} className="table-admin-list__item">
-                                            <div>
-                                                <strong>{member.username}</strong>
-                                                <span>{member.email}</span>
-                                            </div>
-                                            <div className="admin-club-manager__member-meta">
-                                                <span>{member.role}</span>
-                                                <span>{member.isSynthetic ? "Imported" : "Account"}</span>
-                                            </div>
-                                        </article>
-                                    ))}
-                                </div>
+                                {isMembersExpanded ? (
+                                    <div className="table-admin-list">
+                                        {activeClub.members.map((member) => (
+                                            <article key={member.accountId} className="table-admin-list__item">
+                                                <div>
+                                                    <strong>{member.username}</strong>
+                                                    <span>{member.email}</span>
+                                                </div>
+                                                <div className="admin-club-manager__member-meta">
+                                                    <span>{member.role}</span>
+                                                    <span>{member.isSynthetic ? "Imported" : "Account"}</span>
+                                                </div>
+                                            </article>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="muted-copy">Members are collapsed by default. Expand this section to review the full roster.</p>
+                                )}
                             </section>
 
                             <section className="admin-club-manager__section">
                                 <div className="admin-club-manager__section-header">
                                     <div>
                                         <strong>Leaderboard entries</strong>
-                                        <p className="muted-copy">Recorded display names appear here automatically. Toggle whether each entry appears on the public leaderboard, and adjust totals directly for single-account rows.</p>
+                                        <p className="muted-copy">Recorded display names appear here automatically. Profit and games totals are read-only here; use recorded games to change them and use this table for visibility only.</p>
                                     </div>
                                 </div>
 
@@ -879,7 +1029,6 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                                         gamesPlayed: String(entry.gamesPlayed),
                                                         isVisibleInLeaderboard: entry.isVisibleInLeaderboard,
                                                     };
-                                                    const canEditTotals = entry.accountIds.length === 1 && !entry.isDerivedFromRecordedGames;
 
                                                     return (
                                                         <tr key={entry.entryKey}>
@@ -889,27 +1038,14 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                                                     <span>{entry.isDerivedFromRecordedGames ? (entry.accountIds.length > 1 ? `${entry.accountIds.length} recorded accounts grouped under this display name` : "Derived from recorded games") : entry.isSynthetic ? "Imported player" : "Registered account"}</span>
                                                                 </div>
                                                             </td>
-                                                            <td>
-                                                                <input
-                                                                    className="control-input"
-                                                                    type="number"
-                                                                    step={1}
-                                                                    value={draft.totalProfit}
-                                                                    onChange={(event) => handleDraftChange(entry.entryKey, "totalProfit", event.target.value)}
-                                                                    disabled={isMutating || !canEditTotals}
-                                                                />
+                                                            <td className={[
+                                                                "admin-club-manager__result",
+                                                                entry.totalProfit > 0 ? "admin-club-manager__result--positive" : "",
+                                                                entry.totalProfit < 0 ? "admin-club-manager__result--negative" : "",
+                                                            ].filter(Boolean).join(" ")}>
+                                                                {formatSignedChipAmount(entry.totalProfit)}
                                                             </td>
-                                                            <td>
-                                                                <input
-                                                                    className="control-input"
-                                                                    type="number"
-                                                                    min={0}
-                                                                    step={1}
-                                                                    value={draft.gamesPlayed}
-                                                                    onChange={(event) => handleDraftChange(entry.entryKey, "gamesPlayed", event.target.value)}
-                                                                    disabled={isMutating || !canEditTotals}
-                                                                />
-                                                            </td>
+                                                            <td>{entry.gamesPlayed}</td>
                                                             <td>
                                                                 <label>
                                                                     <input
@@ -923,7 +1059,7 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                                             <td>{entry.isDerivedFromRecordedGames ? "Recorded" : entry.isSynthetic ? "Imported" : "Account"}</td>
                                                             <td>
                                                                 <button className="button button--secondary" type="button" onClick={() => void handleSaveEntry(entry)} disabled={isMutating}>
-                                                                    {canEditTotals ? "Save" : "Save visibility"}
+                                                                    Save visibility
                                                                 </button>
                                                             </td>
                                                         </tr>
@@ -941,126 +1077,268 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                 <div className="admin-club-manager__section-header">
                                     <div>
                                         <strong>Recorded games</strong>
-                                        <p className="muted-copy">Edit recorded game dates and ledger rows. Saving a game recalculates the affected leaderboard totals.</p>
+                                        <p className="muted-copy">Add a recorded game with a row for each player, then page through existing games by label or date. Saving a game recalculates the affected leaderboard totals.</p>
                                     </div>
                                 </div>
 
+                                {newGameDraft ? (
+                                    <form className="club-game-card admin-club-manager__game-card admin-club-manager__game-create" onSubmit={handleCreateGame}>
+                                        <div className="club-game-card__header">
+                                            <div className="admin-club-manager__game-fields">
+                                                <label className="admin-club-manager__field">
+                                                    <span>New game label</span>
+                                                    <input
+                                                        className="control-input"
+                                                        type="text"
+                                                        value={newGameDraft.label}
+                                                        onChange={(event) => handleNewGameDraftChange("label", event.target.value)}
+                                                        placeholder="Friday cash game"
+                                                    />
+                                                </label>
+                                                <label className="admin-club-manager__field admin-club-manager__field--compact">
+                                                    <span>Played at</span>
+                                                    <input
+                                                        className="control-input"
+                                                        type="date"
+                                                        value={newGameDraft.playedAt}
+                                                        onChange={(event) => handleNewGameDraftChange("playedAt", event.target.value)}
+                                                    />
+                                                </label>
+                                            </div>
+
+                                            <div className="admin-club-manager__game-actions">
+                                                <div className="club-game-card__meta">
+                                                    <span>{newGameDraft.entries.length} players</span>
+                                                    <span>Seeded from the current club roster</span>
+                                                </div>
+                                                <div className="status-card__actions">
+                                                    <button className="button button--secondary" type="button" onClick={handleResetNewGamePlayers} disabled={isMutating}>
+                                                        Reset players
+                                                    </button>
+                                                    <button className="button button--primary" type="submit" disabled={isMutating}>
+                                                        {isMutating ? "Saving..." : "Create game"}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="admin-club-manager__table-wrap">
+                                            <table className="admin-club-manager__table">
+                                                <thead>
+                                                    <tr>
+                                                        <th scope="col">Player</th>
+                                                        <th scope="col">Hours</th>
+                                                        <th scope="col">Buy-in</th>
+                                                        <th scope="col">Cash-out</th>
+                                                        <th scope="col">Result</th>
+                                                        <th scope="col">Row</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {newGameDraft.entries.map((entry) => {
+                                                        const netResult = getDraftNetResult(entry);
+
+                                                        return (
+                                                            <tr key={entry.accountId}>
+                                                                <td>
+                                                                    <div className="admin-club-manager__table-player">
+                                                                        <input
+                                                                            className="control-input"
+                                                                            type="text"
+                                                                            value={entry.displayName}
+                                                                            onChange={(event) => handleNewGameEntryDraftChange(entry.accountId, "displayName", event.target.value)}
+                                                                        />
+                                                                        <span>{entry.username}</span>
+                                                                    </div>
+                                                                </td>
+                                                                <td>
+                                                                    <input
+                                                                        className="control-input"
+                                                                        type="text"
+                                                                        value={entry.hoursPlayed}
+                                                                        onChange={(event) => handleNewGameEntryDraftChange(entry.accountId, "hoursPlayed", event.target.value)}
+                                                                        placeholder="Optional"
+                                                                    />
+                                                                </td>
+                                                                <td>
+                                                                    <input
+                                                                        className="control-input"
+                                                                        type="number"
+                                                                        min={0}
+                                                                        step={1}
+                                                                        value={entry.totalBuyIn}
+                                                                        onChange={(event) => handleNewGameEntryDraftChange(entry.accountId, "totalBuyIn", event.target.value)}
+                                                                    />
+                                                                </td>
+                                                                <td>
+                                                                    <input
+                                                                        className="control-input"
+                                                                        type="number"
+                                                                        min={0}
+                                                                        step={1}
+                                                                        value={entry.cashOut}
+                                                                        onChange={(event) => handleNewGameEntryDraftChange(entry.accountId, "cashOut", event.target.value)}
+                                                                    />
+                                                                </td>
+                                                                <td className={[
+                                                                    "admin-club-manager__result",
+                                                                    netResult !== null && netResult > 0 ? "admin-club-manager__result--positive" : "",
+                                                                    netResult !== null && netResult < 0 ? "admin-club-manager__result--negative" : "",
+                                                                ].filter(Boolean).join(" ")}>
+                                                                    {netResult === null ? "--" : formatSignedChipAmount(netResult)}
+                                                                </td>
+                                                                <td>
+                                                                    <button
+                                                                        className="button button--secondary"
+                                                                        type="button"
+                                                                        onClick={() => handleRemoveNewGameEntry(entry.accountId)}
+                                                                        disabled={isMutating}
+                                                                    >
+                                                                        Remove
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+
+                                        {newGameDraft.entries.length === 0 ? (
+                                            <p className="muted-copy">Reset players to restore the current club roster before saving.</p>
+                                        ) : null}
+                                    </form>
+                                ) : null}
+
                                 {activeClub.gameHistory.length ? (
-                                    <div className="admin-club-manager__game-list">
-                                        {activeClub.gameHistory.map((game) => {
-                                            const draft = gameDrafts[game.gameId] ?? buildGameDraft(game);
+                                    <div className="admin-club-manager__game-workspace">
+                                        <div className="admin-club-manager__game-pagination">
+                                            {activeClub.gameHistory.map((game) => (
+                                                <button
+                                                    key={game.gameId}
+                                                    className={[
+                                                        "admin-club-manager__game-page",
+                                                        game.gameId === selectedGame?.gameId ? "admin-club-manager__game-page--active" : "",
+                                                    ].filter(Boolean).join(" ")}
+                                                    type="button"
+                                                    onClick={() => setSelectedGameId(game.gameId)}
+                                                >
+                                                    <strong>{game.label}</strong>
+                                                    <span>{formatDateLabel(game.playedAt)}</span>
+                                                </button>
+                                            ))}
+                                        </div>
 
-                                            return (
-                                                <article key={game.gameId} className="club-game-card admin-club-manager__game-card">
-                                                    <div className="club-game-card__header">
-                                                        <div className="admin-club-manager__game-fields">
-                                                            <label className="admin-club-manager__field">
-                                                                <span>Label</span>
-                                                                <input
-                                                                    className="control-input"
-                                                                    type="text"
-                                                                    value={draft.label}
-                                                                    onChange={(event) => handleGameDraftChange(game.gameId, "label", event.target.value)}
-                                                                />
-                                                            </label>
-                                                            <label className="admin-club-manager__field admin-club-manager__field--compact">
-                                                                <span>Played at</span>
-                                                                <input
-                                                                    className="control-input"
-                                                                    type="date"
-                                                                    value={draft.playedAt}
-                                                                    onChange={(event) => handleGameDraftChange(game.gameId, "playedAt", event.target.value)}
-                                                                />
-                                                            </label>
-                                                        </div>
-
-                                                        <div className="admin-club-manager__game-actions">
-                                                            <div className="club-game-card__meta">
-                                                                <span>{draft.entries.length} players</span>
-                                                                <span>Recorded {formatTimestamp(game.importedAt)}</span>
-                                                            </div>
-                                                            <button className="button button--secondary" type="button" onClick={() => void handleSaveGame(game.gameId)} disabled={isMutating}>
-                                                                {isMutating ? "Saving..." : "Save game"}
-                                                            </button>
-                                                        </div>
+                                        {selectedGame && selectedGameDraft ? (
+                                            <article className="club-game-card admin-club-manager__game-card">
+                                                <div className="club-game-card__header">
+                                                    <div className="admin-club-manager__game-fields">
+                                                        <label className="admin-club-manager__field">
+                                                            <span>Label</span>
+                                                            <input
+                                                                className="control-input"
+                                                                type="text"
+                                                                value={selectedGameDraft.label}
+                                                                onChange={(event) => handleGameDraftChange(selectedGame.gameId, "label", event.target.value)}
+                                                            />
+                                                        </label>
+                                                        <label className="admin-club-manager__field admin-club-manager__field--compact">
+                                                            <span>Played at</span>
+                                                            <input
+                                                                className="control-input"
+                                                                type="date"
+                                                                value={selectedGameDraft.playedAt}
+                                                                onChange={(event) => handleGameDraftChange(selectedGame.gameId, "playedAt", event.target.value)}
+                                                            />
+                                                        </label>
                                                     </div>
 
-                                                    <div className="admin-club-manager__table-wrap">
-                                                        <table className="admin-club-manager__table">
-                                                            <thead>
-                                                                <tr>
-                                                                    <th scope="col">Player</th>
-                                                                    <th scope="col">Hours</th>
-                                                                    <th scope="col">Buy-in</th>
-                                                                    <th scope="col">Cash-out</th>
-                                                                    <th scope="col">Result</th>
-                                                                </tr>
-                                                            </thead>
-                                                            <tbody>
-                                                                {draft.entries.map((entry) => {
-                                                                    const netResult = getDraftNetResult(entry);
+                                                    <div className="admin-club-manager__game-actions">
+                                                        <div className="club-game-card__meta">
+                                                            <span>{selectedGameDraft.entries.length} players</span>
+                                                            <span>Recorded {formatTimestamp(selectedGame.importedAt)}</span>
+                                                        </div>
+                                                        <button className="button button--secondary" type="button" onClick={() => void handleSaveGame(selectedGame.gameId)} disabled={isMutating}>
+                                                            {isMutating ? "Saving..." : "Save game"}
+                                                        </button>
+                                                    </div>
+                                                </div>
 
-                                                                    return (
-                                                                        <tr key={entry.accountId}>
-                                                                            <td>
-                                                                                <div className="admin-club-manager__table-player">
-                                                                                    <input
-                                                                                        className="control-input"
-                                                                                        type="text"
-                                                                                        value={entry.displayName}
-                                                                                        onChange={(event) => handleGameEntryDraftChange(game.gameId, entry.accountId, "displayName", event.target.value)}
-                                                                                    />
-                                                                                    <span>{entry.username}</span>
-                                                                                </div>
-                                                                            </td>
-                                                                            <td>
+                                                <div className="admin-club-manager__table-wrap">
+                                                    <table className="admin-club-manager__table">
+                                                        <thead>
+                                                            <tr>
+                                                                <th scope="col">Player</th>
+                                                                <th scope="col">Hours</th>
+                                                                <th scope="col">Buy-in</th>
+                                                                <th scope="col">Cash-out</th>
+                                                                <th scope="col">Result</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {selectedGameDraft.entries.map((entry) => {
+                                                                const netResult = getDraftNetResult(entry);
+
+                                                                return (
+                                                                    <tr key={entry.accountId}>
+                                                                        <td>
+                                                                            <div className="admin-club-manager__table-player">
                                                                                 <input
                                                                                     className="control-input"
                                                                                     type="text"
-                                                                                    value={entry.hoursPlayed}
-                                                                                    onChange={(event) => handleGameEntryDraftChange(game.gameId, entry.accountId, "hoursPlayed", event.target.value)}
-                                                                                    placeholder="Optional"
+                                                                                    value={entry.displayName}
+                                                                                    onChange={(event) => handleGameEntryDraftChange(selectedGame.gameId, entry.accountId, "displayName", event.target.value)}
                                                                                 />
-                                                                            </td>
-                                                                            <td>
-                                                                                <input
-                                                                                    className="control-input"
-                                                                                    type="number"
-                                                                                    min={0}
-                                                                                    step={1}
-                                                                                    value={entry.totalBuyIn}
-                                                                                    onChange={(event) => handleGameEntryDraftChange(game.gameId, entry.accountId, "totalBuyIn", event.target.value)}
-                                                                                />
-                                                                            </td>
-                                                                            <td>
-                                                                                <input
-                                                                                    className="control-input"
-                                                                                    type="number"
-                                                                                    min={0}
-                                                                                    step={1}
-                                                                                    value={entry.cashOut}
-                                                                                    onChange={(event) => handleGameEntryDraftChange(game.gameId, entry.accountId, "cashOut", event.target.value)}
-                                                                                />
-                                                                            </td>
-                                                                            <td className={[
-                                                                                "admin-club-manager__result",
-                                                                                netResult !== null && netResult > 0 ? "admin-club-manager__result--positive" : "",
-                                                                                netResult !== null && netResult < 0 ? "admin-club-manager__result--negative" : "",
-                                                                            ].filter(Boolean).join(" ")}>
-                                                                                {netResult === null ? "--" : formatSignedChipAmount(netResult)}
-                                                                            </td>
-                                                                        </tr>
-                                                                    );
-                                                                })}
-                                                            </tbody>
-                                                        </table>
-                                                    </div>
-                                                </article>
-                                            );
-                                        })}
+                                                                                <span>{entry.username}</span>
+                                                                            </div>
+                                                                        </td>
+                                                                        <td>
+                                                                            <input
+                                                                                className="control-input"
+                                                                                type="text"
+                                                                                value={entry.hoursPlayed}
+                                                                                onChange={(event) => handleGameEntryDraftChange(selectedGame.gameId, entry.accountId, "hoursPlayed", event.target.value)}
+                                                                                placeholder="Optional"
+                                                                            />
+                                                                        </td>
+                                                                        <td>
+                                                                            <input
+                                                                                className="control-input"
+                                                                                type="number"
+                                                                                min={0}
+                                                                                step={1}
+                                                                                value={entry.totalBuyIn}
+                                                                                onChange={(event) => handleGameEntryDraftChange(selectedGame.gameId, entry.accountId, "totalBuyIn", event.target.value)}
+                                                                            />
+                                                                        </td>
+                                                                        <td>
+                                                                            <input
+                                                                                className="control-input"
+                                                                                type="number"
+                                                                                min={0}
+                                                                                step={1}
+                                                                                value={entry.cashOut}
+                                                                                onChange={(event) => handleGameEntryDraftChange(selectedGame.gameId, entry.accountId, "cashOut", event.target.value)}
+                                                                            />
+                                                                        </td>
+                                                                        <td className={[
+                                                                            "admin-club-manager__result",
+                                                                            netResult !== null && netResult > 0 ? "admin-club-manager__result--positive" : "",
+                                                                            netResult !== null && netResult < 0 ? "admin-club-manager__result--negative" : "",
+                                                                        ].filter(Boolean).join(" ")}>
+                                                                            {netResult === null ? "--" : formatSignedChipAmount(netResult)}
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </article>
+                                        ) : null}
                                     </div>
                                 ) : (
-                                    <p className="muted-copy">No imported games are stored for this club yet.</p>
+                                    <p className="muted-copy">No recorded games are stored for this club yet. Create the first one above.</p>
                                 )}
                             </section>
                         </div>
@@ -1100,6 +1378,21 @@ function buildGameDraft(game: ClubGameLedger): GameDraft {
     };
 }
 
+function buildNewGameDraft(members: ClubMemberSummary[]): GameDraft {
+    return {
+        label: "",
+        playedAt: new Date().toISOString().slice(0, 10),
+        entries: members.map((member) => ({
+            accountId: member.accountId,
+            username: member.username,
+            displayName: member.username,
+            hoursPlayed: "",
+            totalBuyIn: "0",
+            cashOut: "0",
+        })),
+    };
+}
+
 function buildGameDraftPatch(games: ClubGameLedger[]): Record<string, GameDraft> {
     return Object.fromEntries(games.map((game) => [game.gameId, buildGameDraft(game)]));
 }
@@ -1123,5 +1416,11 @@ function formatTimestamp(value: string): string {
     return new Date(value).toLocaleString(undefined, {
         dateStyle: "medium",
         timeStyle: "short",
+    });
+}
+
+function formatDateLabel(value: string): string {
+    return new Date(value).toLocaleDateString(undefined, {
+        dateStyle: "medium",
     });
 }

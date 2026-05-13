@@ -277,6 +277,13 @@ export interface UpdateClubGameLedgerEntryRequest {
   cashOut: number;
 }
 
+export interface CreateClubGameLedgerRequest {
+  clubId: string;
+  label: string;
+  playedAt: string;
+  entries: UpdateClubGameLedgerEntryRequest[];
+}
+
 export interface UpdateClubGameLedgerRequest {
   clubId: string;
   gameId: string;
@@ -645,6 +652,7 @@ export interface RoomRegistry {
   addClubMember(input: AddClubMemberRequest): Promise<ManagedClubSummary>;
   createSyntheticClubPlayer(input: CreateSyntheticClubPlayerRequest): Promise<ManagedClubSummary>;
   updateClubLeaderboardEntry(input: UpdateClubLeaderboardEntryRequest): Promise<ManagedClubSummary>;
+  createClubGameLedger(input: CreateClubGameLedgerRequest): Promise<ManagedClubSummary>;
   updateClubGameLedger(input: UpdateClubGameLedgerRequest): Promise<ManagedClubSummary>;
   listManagedRooms(): Promise<ManagedRoomSummary[]>;
   listAutoExpiringRooms(): Promise<AutoExpiringRoom[]>;

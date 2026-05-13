@@ -212,6 +212,28 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
     }
   });
 
+  app.post("/v1/admin/clubs/:clubId/games", async (request, reply) => {
+    const params = request.params as Record<string, unknown>;
+    const body = request.body as Record<string, unknown>;
+
+    try {
+      await requireManagementAdmin(registry, request.headers.authorization);
+    } catch (error) {
+      return reply.code(403).send({ error: getErrorMessage(error) });
+    }
+
+    try {
+      return reply.code(201).send(await registry.createClubGameLedger({
+        clubId: requireString(params.clubId, "clubId"),
+        label: requireString(body.label, "label"),
+        playedAt: requireString(body.playedAt, "playedAt"),
+        entries: requireClubLedgerEntries(body.entries, "entries"),
+      }));
+    } catch (error) {
+      return reply.code(400).send({ error: getErrorMessage(error) });
+    }
+  });
+
   app.post("/v1/admin/clubs/:clubId/games/:gameId", async (request, reply) => {
     const params = request.params as Record<string, unknown>;
     const body = request.body as Record<string, unknown>;

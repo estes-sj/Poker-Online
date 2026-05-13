@@ -43,6 +43,7 @@ import type {
   ClubMemberSummary,
   ClubSummary,
   ClubUserSearchResult,
+  CreateClubGameLedgerRequest,
   CreateClubRequest,
   CreateRoomRequest,
   CreateSyntheticClubPlayerRequest,
@@ -955,6 +956,78 @@ export class PrismaRoomRegistry implements RoomRegistry {
           },
         });
       }
+    });
+
+    return this.getManagedClubSummaryById(input.clubId);
+  }
+
+  async createClubGameLedger(input: CreateClubGameLedgerRequest): Promise<ManagedClubSummary> {
+    await this.assertClubExists(input.clubId);
+
+    const label = normalizeClubLedgerGameLabel(input.label);
+    const playedAt = normalizeClubLedgerPlayedAt(input.playedAt);
+    const normalizedEntries = input.entries.map((entry) => ({
+      accountId: entry.accountId,
+      displayName: normalizeSyntheticClubDisplayName(entry.displayName),
+      hoursPlayed: normalizeClubLedgerHoursPlayed(entry.hoursPlayed),
+      totalBuyIn: normalizeNonNegativeChipValue(entry.totalBuyIn, "totalBuyIn"),
+      cashOut: normalizeNonNegativeChipValue(entry.cashOut, "cashOut"),
+    }));
+
+    if (normalizedEntries.length === 0) {
+      throw new Error("Games must include at least one ledger entry.");
+    }
+
+    const accountIds = normalizedEntries.map((entry) => entry.accountId);
+    const uniqueAccountIds = Array.from(new Set(accountIds));
+
+    if (uniqueAccountIds.length !== accountIds.length) {
+      throw new Error("Games must not include the same player more than once.");
+    }
+
+    if (uniqueAccountIds.some((accountId) => isBotAccountId(accountId))) {
+      throw new Error("Bots cannot appear in recorded club games.");
+    }
+
+    const memberships = await this.database.clubMembership.findMany({
+      where: {
+        clubId: input.clubId,
+        userId: {
+          in: uniqueAccountIds,
+        },
+      },
+      select: {
+        userId: true,
+      },
+    });
+
+    if (memberships.length !== uniqueAccountIds.length) {
+      throw new Error("Recorded game entries must belong to club members.");
+    }
+
+    await this.database.$transaction(async (transaction) => {
+      await transaction.clubLedgerGame.create({
+        data: {
+          clubId: input.clubId,
+          source: "IMPORTED_WORKBOOK",
+          sourceKey: randomUUID(),
+          label,
+          playedAt,
+          entries: {
+            create: normalizedEntries.map((entry, index) => ({
+              userId: entry.accountId,
+              displayName: entry.displayName,
+              hoursPlayed: entry.hoursPlayed,
+              totalBuyIn: entry.totalBuyIn,
+              cashOut: entry.cashOut,
+              netResult: entry.cashOut - entry.totalBuyIn,
+              playerOrder: index,
+            })),
+          },
+        },
+      });
+
+      await this.recalculateImportedWorkbookRankings(transaction, input.clubId, uniqueAccountIds);
     });
 
     return this.getManagedClubSummaryById(input.clubId);

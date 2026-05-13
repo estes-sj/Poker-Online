@@ -35,7 +35,6 @@ export default async function RoomsPage() {
                             <span className="hero-brand__tagline">Live tables and archived sessions</span>
                         </span>
                     </Link>
-                    <span className="eyebrow">Rooms</span>
                     <h1>Browse tables and archives</h1>
                     <p>Open a live table, or review an archived session and replay any preserved hand on the felt.</p>
                 </div>
