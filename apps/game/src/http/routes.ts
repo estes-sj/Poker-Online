@@ -381,6 +381,7 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
         slug: requireString(params.slug, "slug"),
         accountId: requireString(body.accountId, "accountId"),
         emoji: requireString(body.emoji, "emoji"),
+        targetAccountId: optionalString(body.targetAccountId),
       });
 
       return reply.send(snapshot);
@@ -498,6 +499,8 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
         maxBuyInRule: requireRoomBuyInMaxRule(body.maxBuyInRule),
         revealAllShowdownHands: requireBoolean(body.revealAllShowdownHands, "revealAllShowdownHands"),
         runItTwiceEnabled: requireBoolean(body.runItTwiceEnabled, "runItTwiceEnabled"),
+        suggestedGesturesEnabled: requireBoolean(body.suggestedGesturesEnabled, "suggestedGesturesEnabled"),
+        suggestedGesturePromptProbability: requireNumber(body.suggestedGesturePromptProbability, "suggestedGesturePromptProbability"),
       });
 
       return reply.send(snapshot);

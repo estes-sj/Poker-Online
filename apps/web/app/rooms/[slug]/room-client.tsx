@@ -20,7 +20,18 @@ const ACTION_PAD_IDLE_DIM_STORAGE_KEY = "river-club-action-pad-idle-dim";
 const ACTION_PAD_VIEWPORT_MARGIN = 16;
 const ACTION_PAD_TOP_MARGIN = 96;
 const QUICK_REACTIONS = ["👏", "🔥", "😂", "😮", "💀"] as const;
+const BIG_RAISE_SUGGESTED_EMOJIS = ["😮", "🤨", "😤", "🔥"] as const;
+const TANKING_SUGGESTED_EMOJIS = ["⏳", "👀", "😴", "🤨"] as const;
+const BIG_WIN_SUGGESTED_EMOJIS = ["👏", "🔥", "💸", "😮"] as const;
 const BOT_ACCOUNT_ID_PREFIX = "bot_";
+const SUGGESTED_GESTURE_POPOVER_DURATION_MS = 4_800;
+const SUGGESTED_GESTURE_FLIGHT_DURATION_MS = 1_650;
+const BIG_RAISE_MIN_CALL_BIG_BLIND_MULTIPLE = 6;
+const BIG_RAISE_MIN_CALL_POT_RATIO = 0.42;
+const TANKING_TRIGGER_MIN_ELAPSED_MS = 12_000;
+const BIG_WIN_SUGGESTED_MAX_AGE_MS = 9_000;
+const BIG_WIN_MIN_POT_BIG_BLIND_MULTIPLE = 18;
+const BIG_WIN_MIN_POT_SHARE_RATIO = 0.64;
 const EmojiPicker = dynamic(() => import("@emoji-mart/react"), { ssr: false });
 const ENGINE_EXPLAINER_SECTIONS = [
     {
@@ -532,6 +543,8 @@ interface AdminOptionsDraft {
     maxBuyInRuleValue: string;
     revealAllShowdownHands: boolean;
     runItTwiceEnabled: boolean;
+    suggestedGesturesEnabled: boolean;
+    suggestedGesturePromptProbability: string;
 }
 
 interface ActionPadOffset {
@@ -548,6 +561,32 @@ interface ActionPadDragState {
 interface HeroChatToast {
     id: string;
     content: string;
+}
+
+type SuggestedGestureReason = "big_raise" | "tanking" | "big_win";
+
+interface SuggestedGesturePromptState {
+    eventKey: string;
+    reason: SuggestedGestureReason;
+    targetAccountId: string;
+    targetDisplayName: string;
+    headline: string;
+    bodyCopy: string;
+    emojis: readonly string[];
+    expiresAtMs: number;
+}
+
+interface SuggestedGestureFlightState {
+    id: string;
+    emoji: string;
+    startX: number;
+    startY: number;
+    midX: number;
+    midY: number;
+    endX: number;
+    endY: number;
+    animationDelayMs: number;
+    expiresAtMs: number;
 }
 
 type ChatMediaActionState = "idle" | "connecting" | "microphone" | "camera";
@@ -632,6 +671,8 @@ export function RoomClient({
     const [isActionPadDragging, setIsActionPadDragging] = useState(false);
     const [actionPanelScreen, setActionPanelScreen] = useState<"buttons" | "betControl">("buttons");
     const [runoutRevealStep, setRunoutRevealStep] = useState(0);
+    const [suggestedGesturePrompt, setSuggestedGesturePrompt] = useState<SuggestedGesturePromptState | null>(null);
+    const [suggestedGestureFlights, setSuggestedGestureFlights] = useState<SuggestedGestureFlightState[]>([]);
     const reconnectTimerRef = useRef<number | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
     const chatInputRef = useRef<HTMLInputElement | null>(null);
@@ -646,6 +687,9 @@ export function RoomClient({
     const runoutEquityTrendResetTimerRef = useRef<number | null>(null);
     const runoutTotalStepsRef = useRef(0);
     const reactionMenuRef = useRef<HTMLDivElement | null>(null);
+    const seatElementRefs = useRef<Map<number, HTMLElement>>(new Map());
+    const handledSuggestedGestureEventKeysRef = useRef<Set<string>>(new Set());
+    const handledSuggestedReactionIdsRef = useRef<Set<string>>(new Set());
     const archivedHands = snapshot?.archive?.hands ?? [];
     const isArchivedRoom = Boolean(snapshot?.status === "archived" && snapshot?.archive);
     const selectedArchivedHand = archivedHands.find((hand) => hand.handId === selectedLedgerHandId) ?? archivedHands[0] ?? null;
@@ -725,6 +769,118 @@ export function RoomClient({
         window.addEventListener("pointermove", handleActionPadPointerMove);
         window.addEventListener("pointerup", handleActionPadPointerEnd);
         window.addEventListener("pointercancel", handleActionPadPointerEnd);
+    }
+
+    function setSeatElementRef(seatIndex: number, element: HTMLElement | null) {
+        if (element) {
+            seatElementRefs.current.set(seatIndex, element);
+            return;
+        }
+
+        seatElementRefs.current.delete(seatIndex);
+    }
+
+    function getElementCenter(element: HTMLElement | null): { x: number; y: number } | null {
+        if (!element) {
+            return null;
+        }
+
+        const rect = element.getBoundingClientRect();
+
+        if (rect.width === 0 && rect.height === 0) {
+            return null;
+        }
+
+        return {
+            x: rect.left + (rect.width / 2),
+            y: rect.top + (rect.height / 2),
+        };
+    }
+
+    function getSuggestedGestureSeatAnchor(
+        element: HTMLElement | null,
+        mediaPlacement: "above" | "below" | "left" | "right",
+        role: "sender" | "receiver",
+    ): { x: number; y: number } | null {
+        if (!element) {
+            return null;
+        }
+
+        const rect = element.getBoundingClientRect();
+
+        if (rect.width === 0 && rect.height === 0) {
+            return null;
+        }
+
+        const laneIsLeft = mediaPlacement !== "left";
+        const seatInsetX = Math.min(52, Math.max(28, rect.width * 0.18));
+        const senderX = laneIsLeft ? rect.left + seatInsetX : rect.right - seatInsetX;
+        const receiverX = laneIsLeft ? rect.left - 28 : rect.right + 28;
+
+        return {
+            x: role === "sender" ? senderX : receiverX,
+            y: rect.top + (rect.height * (role === "sender" ? 0.38 : 0.3)),
+        };
+    }
+
+    function resolveSuggestedGesturePrompt(eventKey: string | null) {
+        if (!eventKey) {
+            setSuggestedGesturePrompt(null);
+            return;
+        }
+
+        handledSuggestedGestureEventKeysRef.current.add(eventKey);
+        setSuggestedGesturePrompt((current) => (current?.eventKey === eventKey ? null : current));
+    }
+
+    function queueSuggestedGestureFlight(reaction: RoomSnapshot["seatReactions"][number]): boolean {
+        if (!snapshot || !reaction.targetAccountId) {
+            return true;
+        }
+
+        const senderSeat = tableSeats.find((seat) => seat.player?.accountId === reaction.accountId) ?? null;
+        const targetSeat = tableSeats.find((seat) => seat.player?.accountId === reaction.targetAccountId) ?? null;
+        const startCenter = senderSeat
+            ? getSuggestedGestureSeatAnchor(seatElementRefs.current.get(senderSeat.seatIndex) ?? null, senderSeat.mediaPlacement, "sender")
+            : null;
+        const targetCenter = targetSeat
+            ? getSuggestedGestureSeatAnchor(seatElementRefs.current.get(targetSeat.seatIndex) ?? null, targetSeat.mediaPlacement, "receiver")
+            : null;
+        const createdAtMs = Date.parse(reaction.createdAt);
+
+        if (Number.isNaN(createdAtMs)) {
+            return true;
+        }
+
+        if (!startCenter || !targetCenter) {
+            return true;
+        }
+
+        const animationDelayMs = Math.max(0, Date.now() - createdAtMs);
+
+        if (animationDelayMs >= SUGGESTED_GESTURE_FLIGHT_DURATION_MS) {
+            return true;
+        }
+
+        const arcLift = Math.min(120, Math.max(56, Math.abs(targetCenter.x - startCenter.x) * 0.18));
+
+        setSuggestedGestureFlights((currentFlights) => ([
+            ...currentFlights.filter((flight) => flight.id !== reaction.id),
+            {
+                id: reaction.id,
+                emoji: reaction.emoji,
+                startX: startCenter.x,
+                startY: startCenter.y,
+                midX: startCenter.x + ((targetCenter.x - startCenter.x) * 0.5),
+                midY: Math.min(startCenter.y, targetCenter.y) - arcLift,
+                endX: targetCenter.x,
+                endY: targetCenter.y,
+                animationDelayMs,
+                expiresAtMs: createdAtMs + SUGGESTED_GESTURE_FLIGHT_DURATION_MS,
+            },
+        ]));
+
+        return true;
     }
 
     useEffect(() => {
@@ -1195,6 +1351,65 @@ export function RoomClient({
         && runItTwicePrompt?.eligibleAccountIds.includes(heroPlayer.accountId)
         && !heroRunItTwiceResponse,
     );
+    const suggestedGesturesEnabled = snapshot?.adminOptions.suggestedGesturesEnabled ?? true;
+    const suggestedGesturePromptProbability = snapshot?.adminOptions.suggestedGesturePromptProbability ?? 0.5;
+    const turnMetrics = buildTurnMetrics(snapshot, turnClockNow);
+    const suggestedGestureTrigger = suggestedGesturesEnabled
+        ? buildSuggestedGestureTrigger(snapshot, accountId, turnClockNow, turnMetrics, suggestedGesturePromptProbability)
+        : null;
+
+    useEffect(() => {
+        handledSuggestedGestureEventKeysRef.current.clear();
+        setSuggestedGesturePrompt(null);
+        setSuggestedGestureFlights([]);
+    }, [snapshot?.currentHand?.id, snapshot?.lastCompletedHand?.handId, suggestedGesturesEnabled]);
+
+    useEffect(() => {
+        setSuggestedGestureFlights((currentFlights) => (
+            currentFlights.some((flight) => flight.expiresAtMs <= turnClockNow)
+                ? currentFlights.filter((flight) => flight.expiresAtMs > turnClockNow)
+                : currentFlights
+        ));
+
+        if (suggestedGesturePrompt && suggestedGesturePrompt.expiresAtMs <= turnClockNow) {
+            resolveSuggestedGesturePrompt(suggestedGesturePrompt.eventKey);
+        }
+    }, [turnClockNow, suggestedGesturePrompt]);
+
+    useEffect(() => {
+        if (!suggestedGestureTrigger) {
+            return;
+        }
+
+        if (handledSuggestedGestureEventKeysRef.current.has(suggestedGestureTrigger.eventKey)) {
+            return;
+        }
+
+        setSuggestedGesturePrompt((currentPrompt) => {
+            if (currentPrompt?.eventKey === suggestedGestureTrigger.eventKey) {
+                return currentPrompt;
+            }
+
+            return {
+                ...suggestedGestureTrigger,
+                expiresAtMs: Date.now() + SUGGESTED_GESTURE_POPOVER_DURATION_MS,
+            };
+        });
+    }, [
+        suggestedGestureTrigger?.eventKey,
+        suggestedGestureTrigger?.targetAccountId,
+        suggestedGestureTrigger?.targetDisplayName,
+    ]);
+
+    useEffect(() => {
+        if (!suggestedGesturePrompt) {
+            return;
+        }
+
+        if (!suggestedGestureTrigger || suggestedGestureTrigger.eventKey !== suggestedGesturePrompt.eventKey) {
+            resolveSuggestedGesturePrompt(suggestedGesturePrompt.eventKey);
+        }
+    }, [suggestedGesturePrompt, suggestedGestureTrigger?.eventKey]);
 
     useEffect(() => {
         if (!currentHand) {
@@ -1256,7 +1471,7 @@ export function RoomClient({
     const effectiveMediaParticipants = demoMode ? demoMediaParticipants : media.participants;
     const effectiveRemoteParticipants = demoMode ? demoMediaParticipants.filter((participant) => !participant.isLocal) : media.remoteParticipants;
     const mediaParticipantsByAccountId = buildMediaParticipantsByAccountId(effectiveMediaParticipants);
-    const activeSeatReactions = buildActiveReactionMap(snapshot, turnClockNow);
+    const activeSeatReactions = buildActiveReactionMap(snapshot, turnClockNow, suggestedGesturesEnabled);
     const seatGesturesByAccountId = buildSeatGestureMap(snapshot);
     const heroContribution = heroPlayer && currentHand ? currentHand.contributions[heroPlayer.accountId] ?? 0 : 0;
     const heroWagerInputConfig = heroActionState ? getHeroWagerInputConfig(heroActionState) : null;
@@ -1264,8 +1479,39 @@ export function RoomClient({
     const adminName = snapshot?.players.find((player) => player.accountId === snapshot.adminAccountId)?.displayName ?? snapshot?.adminAccountId ?? "Unknown";
     const canAdminStartHand = Boolean(snapshot && accountId === snapshot.adminAccountId && !currentHand && readyPlayerCount >= 2);
     const mediaNotice = demoMode ? "Sample table uses mocked camera tiles for layout previews." : media.mediaError ?? media.environmentError;
-    const turnMetrics = buildTurnMetrics(snapshot, turnClockNow);
     const blindCountdownMs = snapshot?.blindState ? getBlindCountdownMs(snapshot.blindState, turnClockNow) : null;
+
+    useEffect(() => {
+        if (!suggestedGesturesEnabled) {
+            handledSuggestedReactionIdsRef.current.clear();
+            setSuggestedGestureFlights([]);
+            return;
+        }
+
+        if (!snapshot?.seatReactions.length) {
+            handledSuggestedReactionIdsRef.current.clear();
+            return;
+        }
+
+        const liveReactionIds = new Set(snapshot.seatReactions.map((reaction) => reaction.id));
+
+        handledSuggestedReactionIdsRef.current.forEach((reactionId) => {
+            if (!liveReactionIds.has(reactionId)) {
+                handledSuggestedReactionIdsRef.current.delete(reactionId);
+            }
+        });
+
+        snapshot.seatReactions.forEach((reaction) => {
+            if (!reaction.targetAccountId || handledSuggestedReactionIdsRef.current.has(reaction.id)) {
+                return;
+            }
+
+            if (queueSuggestedGestureFlight(reaction)) {
+                handledSuggestedReactionIdsRef.current.add(reaction.id);
+            }
+        });
+    }, [snapshot, suggestedGesturesEnabled]);
+
     const heroPendingSeatRequest = accountId ? snapshot?.pendingSeatRequests.find((request) => request.accountId === accountId) ?? null : null;
     const heroPendingRebuyRequest = accountId ? snapshot?.pendingRebuyRequests.find((request) => request.accountId === accountId) ?? null : null;
     const canShowRebuyMenu = Boolean(heroPlayer && (heroPlayer.stack <= 0 || heroPendingRebuyRequest));
@@ -1516,7 +1762,7 @@ export function RoomClient({
     }
 
     const tableMenuDrawer = !isArchivedRoom && openMenuPanel ? (
-        <div className="table-menu-drawer">
+        <div className={["table-menu-drawer", openMenuPanel === "admin" ? "table-menu-drawer--admin" : ""].filter(Boolean).join(" ")}>
             {openMenuPanel === "invite" ? (
                 <div className="table-menu-drawer__section">
                     <span className="table-menu-drawer__eyebrow">Invite</span>
@@ -1683,12 +1929,17 @@ export function RoomClient({
             ) : null}
 
             {openMenuPanel === "admin" && isAdmin && snapshot ? (
-                <div className="table-menu-drawer__section">
+                <div className="table-menu-drawer__section table-menu-drawer__section--admin">
                     <span className="table-menu-drawer__eyebrow">Admin options</span>
 
                     <div className="table-admin-grid">
                         <section className="table-admin-card">
-                            <strong>Controls</strong>
+                            <div className="table-admin-card__header">
+                                <div>
+                                    <strong>Controls</strong>
+                                    <p className="table-admin-card__copy">Pause the table, start the next hand, or close the session once play is idle.</p>
+                                </div>
+                            </div>
                             <div className="seat-control-list seat-control-list--stacked">
                                 <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void handlePauseToggle()} disabled={isMutating}>
                                     {snapshot.status === "paused" ? "Resume table" : "Pause table"}
@@ -1707,8 +1958,12 @@ export function RoomClient({
                         </section>
 
                         <section className="table-admin-card">
-                            <strong>Bots</strong>
-                            <p className="muted-copy">Fill open seats with ready bots so you can start a game before taking a seat yourself.</p>
+                            <div className="table-admin-card__header">
+                                <div>
+                                    <strong>Bots</strong>
+                                    <p className="table-admin-card__copy">Fill open seats with ready bots so the table can start before you seat yourself.</p>
+                                </div>
+                            </div>
                             <input
                                 className="control-input"
                                 type="text"
@@ -1748,179 +2003,232 @@ export function RoomClient({
                         </section>
 
                         <section className="table-admin-card table-admin-card--wide">
-                            <strong>Table options</strong>
-                            <div className="table-admin-form-grid">
-                                <label className="table-admin-field">
-                                    <span>Small blind</span>
-                                    <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.smallBlind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, smallBlind: event.target.value }))} />
-                                </label>
-                                <label className="table-admin-field">
-                                    <span>Big blind</span>
-                                    <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.bigBlind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, bigBlind: event.target.value }))} />
-                                </label>
-                                <label className="table-admin-field">
-                                    <span>Ante</span>
-                                    <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.ante} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, ante: event.target.value }))} />
-                                </label>
-                                <label className="table-admin-field table-admin-field--toggle">
-                                    <input type="checkbox" checked={adminOptionsDraft.autoStartNextHand} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, autoStartNextHand: event.target.checked }))} />
-                                    <span>Auto start next hand</span>
-                                </label>
-                                <label className="table-admin-field">
-                                    <span>Showdown presentation time</span>
-                                    <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.showdownPresentationSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, showdownPresentationSeconds: event.target.value }))} />
-                                </label>
-                                <label className="table-admin-field">
-                                    <span>Decision time limit</span>
-                                    <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.decisionTimeSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, decisionTimeSeconds: event.target.value }))} placeholder="blank = no limit" />
-                                </label>
-                                <label className="table-admin-field">
-                                    <span>Time bank length</span>
-                                    <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.timeBankSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, timeBankSeconds: event.target.value }))} placeholder="blank = no time bank" />
-                                </label>
-                                <label className="table-admin-field">
-                                    <span>Hands to refill bank</span>
-                                    <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.timeBankRefillHands} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, timeBankRefillHands: event.target.value }))} placeholder="blank = disabled" />
-                                </label>
-                                <label className="table-admin-field table-admin-field--toggle">
-                                    <input type="checkbox" checked={adminOptionsDraft.isPubliclyListed} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, isPubliclyListed: event.target.checked }))} />
-                                    <span>Show this room on the public rooms page</span>
-                                </label>
-                                <label className="table-admin-field">
-                                    <span>Minimum buy-in</span>
-                                    <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.minBuyInAmount} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, minBuyInAmount: event.target.value }))} />
-                                </label>
-                                <label className="table-admin-field">
-                                    <span>Maximum buy-in rule</span>
-                                    <select className="control-input" value={adminOptionsDraft.maxBuyInRuleKind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, maxBuyInRuleKind: event.target.value as AdminOptionsDraft["maxBuyInRuleKind"] }))}>
-                                        <option value="chip_lead_percentage">Percent of chip leader</option>
-                                        <option value="fixed_amount">Fixed amount</option>
-                                    </select>
-                                </label>
-                                <label className="table-admin-field">
-                                    <span>{adminOptionsDraft.maxBuyInRuleKind === "fixed_amount" ? "Maximum buy-in" : "Chip leader percentage"}</span>
-                                    <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.maxBuyInRuleValue} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, maxBuyInRuleValue: event.target.value }))} />
-                                </label>
-                                <label className="table-admin-field table-admin-field--toggle">
-                                    <input type="checkbox" checked={adminOptionsDraft.useBlindSchedule} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, useBlindSchedule: event.target.checked }))} />
-                                    <span>Use blind schedule</span>
-                                </label>
-                                <label className="table-admin-field table-admin-field--toggle">
-                                    <input type="checkbox" checked={adminOptionsDraft.revealAllShowdownHands} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, revealAllShowdownHands: event.target.checked }))} />
-                                    <span>Reveal all hands when no more action is possible</span>
-                                </label>
-                                <label className="table-admin-field table-admin-field--toggle">
-                                    <input type="checkbox" checked={adminOptionsDraft.runItTwiceEnabled} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, runItTwiceEnabled: event.target.checked }))} />
-                                    <span>Run it twice on all-in showdowns before the river</span>
-                                </label>
+                            <div className="table-admin-card__header">
+                                <div>
+                                    <strong>Table settings</strong>
+                                    <p className="table-admin-card__copy">Organize blinds, buy-ins, visibility, and reaction behavior in one consistent panel.</p>
+                                </div>
+                                <span className="table-admin-card__meta">Buy-in window {formatNumber(snapshot.buyInState.minRebuyAmount)} to {formatNumber(snapshot.buyInState.maxRebuyAmount)}</span>
                             </div>
 
-                            <p className="muted-copy">Current buy-in window: {formatNumber(snapshot.buyInState.minRebuyAmount)} to {formatNumber(snapshot.buyInState.maxRebuyAmount)}.</p>
+                            <div className="table-admin-sections">
+                                <section className="table-admin-section">
+                                    <div className="table-admin-section__header">
+                                        <h4 className="table-admin-section__title">Blinds & pace</h4>
+                                        <p className="table-admin-section__copy">Set the opening level, hand cadence, and whether the table should roll forward automatically.</p>
+                                    </div>
+                                    <div className="table-admin-form-grid">
+                                        <label className="table-admin-field">
+                                            <span>Small blind</span>
+                                            <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.smallBlind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, smallBlind: event.target.value }))} />
+                                        </label>
+                                        <label className="table-admin-field">
+                                            <span>Big blind</span>
+                                            <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.bigBlind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, bigBlind: event.target.value }))} />
+                                        </label>
+                                        <label className="table-admin-field">
+                                            <span>Ante</span>
+                                            <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.ante} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, ante: event.target.value }))} />
+                                        </label>
+                                        <label className="table-admin-field table-admin-field--toggle">
+                                            <input type="checkbox" checked={adminOptionsDraft.autoStartNextHand} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, autoStartNextHand: event.target.checked }))} />
+                                            <span>Auto start next hand</span>
+                                        </label>
+                                        <label className="table-admin-field">
+                                            <span>Showdown presentation time</span>
+                                            <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.showdownPresentationSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, showdownPresentationSeconds: event.target.value }))} />
+                                        </label>
+                                        <label className="table-admin-field">
+                                            <span>Decision time limit</span>
+                                            <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.decisionTimeSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, decisionTimeSeconds: event.target.value }))} placeholder="blank = no limit" />
+                                        </label>
+                                        <label className="table-admin-field">
+                                            <span>Time bank length</span>
+                                            <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.timeBankSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, timeBankSeconds: event.target.value }))} placeholder="blank = no time bank" />
+                                        </label>
+                                        <label className="table-admin-field">
+                                            <span>Hands to refill bank</span>
+                                            <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.timeBankRefillHands} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, timeBankRefillHands: event.target.value }))} placeholder="blank = disabled" />
+                                        </label>
+                                        <label className="table-admin-field table-admin-field--toggle table-admin-field--full">
+                                            <input type="checkbox" checked={adminOptionsDraft.useBlindSchedule} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, useBlindSchedule: event.target.checked }))} />
+                                            <span>Use blind schedule</span>
+                                        </label>
+                                    </div>
+                                </section>
 
-                            {adminOptionsDraft.useBlindSchedule ? (
-                                <div className="table-admin-field table-admin-field--full table-admin-schedule">
-                                    <div className="table-admin-schedule__header">
-                                        <div>
-                                            <span>Blind schedule</span>
-                                            <small>Add one row per blind level. The final level stays in place after the schedule runs out.</small>
+                                <section className="table-admin-section">
+                                    <div className="table-admin-section__header">
+                                        <h4 className="table-admin-section__title">Buy-ins & listing</h4>
+                                        <p className="table-admin-section__copy">Control discoverability and keep the buy-in rules aligned with the live table.</p>
+                                    </div>
+                                    <div className="table-admin-form-grid">
+                                        <label className="table-admin-field table-admin-field--toggle table-admin-field--full">
+                                            <input type="checkbox" checked={adminOptionsDraft.isPubliclyListed} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, isPubliclyListed: event.target.checked }))} />
+                                            <span>Show this room on the public rooms page</span>
+                                        </label>
+                                        <label className="table-admin-field">
+                                            <span>Minimum buy-in</span>
+                                            <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.minBuyInAmount} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, minBuyInAmount: event.target.value }))} />
+                                        </label>
+                                        <label className="table-admin-field">
+                                            <span>Maximum buy-in rule</span>
+                                            <select className="control-input" value={adminOptionsDraft.maxBuyInRuleKind} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, maxBuyInRuleKind: event.target.value as AdminOptionsDraft["maxBuyInRuleKind"] }))}>
+                                                <option value="chip_lead_percentage">Percent of chip leader</option>
+                                                <option value="fixed_amount">Fixed amount</option>
+                                            </select>
+                                        </label>
+                                        <label className="table-admin-field table-admin-field--full">
+                                            <span>{adminOptionsDraft.maxBuyInRuleKind === "fixed_amount" ? "Maximum buy-in" : "Chip leader percentage"}</span>
+                                            <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.maxBuyInRuleValue} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, maxBuyInRuleValue: event.target.value }))} />
+                                        </label>
+                                    </div>
+                                </section>
+
+                                <section className="table-admin-section">
+                                    <div className="table-admin-section__header">
+                                        <h4 className="table-admin-section__title">Gameplay & suggestions</h4>
+                                        <p className="table-admin-section__copy">Keep showdown rules and reaction prompts aligned with the tone of the table.</p>
+                                    </div>
+                                    <div className="table-admin-form-grid">
+                                        <label className="table-admin-field table-admin-field--toggle table-admin-field--full">
+                                            <input type="checkbox" checked={adminOptionsDraft.revealAllShowdownHands} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, revealAllShowdownHands: event.target.checked }))} />
+                                            <span>Reveal all hands when no more action is possible</span>
+                                        </label>
+                                        <label className="table-admin-field table-admin-field--toggle table-admin-field--full">
+                                            <input type="checkbox" checked={adminOptionsDraft.runItTwiceEnabled} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, runItTwiceEnabled: event.target.checked }))} />
+                                            <span>Run it twice on all-in showdowns before the river</span>
+                                        </label>
+                                        <label className="table-admin-field table-admin-field--toggle table-admin-field--full">
+                                            <input type="checkbox" checked={adminOptionsDraft.suggestedGesturesEnabled} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, suggestedGesturesEnabled: event.target.checked }))} />
+                                            <span>Enable suggested gesture prompts and flyover reactions</span>
+                                        </label>
+                                        <label className="table-admin-field table-admin-field--full">
+                                            <span>Suggestion prompt probability</span>
+                                            <input className="control-input" type="number" min={0} max={1} step={0.05} value={adminOptionsDraft.suggestedGesturePromptProbability} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, suggestedGesturePromptProbability: event.target.value }))} />
+                                        </label>
+                                    </div>
+                                </section>
+
+                                {adminOptionsDraft.useBlindSchedule ? (
+                                    <div className="table-admin-section table-admin-section--full">
+                                        <div className="table-admin-section__header">
+                                            <h4 className="table-admin-section__title">Blind schedule</h4>
+                                            <p className="table-admin-section__copy">Add one row per level. The final row stays active after the schedule runs out.</p>
                                         </div>
-                                        <button className="button button--secondary" type="button" onClick={handleAddBlindLevel} disabled={isMutating}>
-                                            Add level
-                                        </button>
+
+                                        <div className="table-admin-field table-admin-field--full table-admin-schedule">
+                                            <div className="table-admin-schedule__header">
+                                                <div>
+                                                    <span>Blind level rows</span>
+                                                </div>
+                                                <button className="button button--secondary" type="button" onClick={handleAddBlindLevel} disabled={isMutating}>
+                                                    Add level
+                                                </button>
+                                            </div>
+
+                                            <div className="table-admin-schedule__rows">
+                                                {adminOptionsDraft.blindLevels.map((level, index) => {
+                                                    const rowValidation = blindScheduleValidation.rows[index] ?? {};
+                                                    const rowErrors = Object.values(rowValidation).filter((value): value is string => Boolean(value));
+                                                    const hasRowErrors = rowErrors.length > 0;
+
+                                                    return (
+                                                        <article key={`blind-level-${index + 1}`} className={["table-admin-schedule__row", hasRowErrors ? "table-admin-schedule__row--invalid" : ""].filter(Boolean).join(" ")}>
+                                                            <div className="table-admin-schedule__row-header">
+                                                                <strong>Level {index + 1}</strong>
+                                                                <button className="button button--secondary table-admin-schedule__remove" type="button" onClick={() => handleRemoveBlindLevel(index)} disabled={isMutating || adminOptionsDraft.blindLevels.length === 1}>
+                                                                    Remove
+                                                                </button>
+                                                            </div>
+
+                                                            <div className="table-admin-schedule__inputs">
+                                                                <label className="table-admin-field">
+                                                                    <span>Small blind</span>
+                                                                    <input
+                                                                        className={["control-input", rowValidation.smallBlind ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
+                                                                        type="number"
+                                                                        min={1}
+                                                                        step={1}
+                                                                        value={level.smallBlind}
+                                                                        onChange={(event) => updateBlindLevelDraft(index, "smallBlind", event.target.value)}
+                                                                        aria-invalid={rowValidation.smallBlind ? true : undefined}
+                                                                    />
+                                                                </label>
+                                                                <label className="table-admin-field">
+                                                                    <span>Big blind</span>
+                                                                    <input
+                                                                        className={["control-input", rowValidation.bigBlind ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
+                                                                        type="number"
+                                                                        min={1}
+                                                                        step={1}
+                                                                        value={level.bigBlind}
+                                                                        onChange={(event) => updateBlindLevelDraft(index, "bigBlind", event.target.value)}
+                                                                        aria-invalid={rowValidation.bigBlind ? true : undefined}
+                                                                    />
+                                                                </label>
+                                                                <label className="table-admin-field">
+                                                                    <span>Ante</span>
+                                                                    <input
+                                                                        className={["control-input", rowValidation.ante ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
+                                                                        type="number"
+                                                                        min={0}
+                                                                        step={1}
+                                                                        value={level.ante}
+                                                                        onChange={(event) => updateBlindLevelDraft(index, "ante", event.target.value)}
+                                                                        placeholder="0"
+                                                                        aria-invalid={rowValidation.ante ? true : undefined}
+                                                                    />
+                                                                </label>
+                                                                <label className="table-admin-field">
+                                                                    <span>Minutes</span>
+                                                                    <input
+                                                                        className={["control-input", rowValidation.durationMinutes ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
+                                                                        type="number"
+                                                                        min={1}
+                                                                        step={1}
+                                                                        value={level.durationMinutes}
+                                                                        onChange={(event) => updateBlindLevelDraft(index, "durationMinutes", event.target.value)}
+                                                                        aria-invalid={rowValidation.durationMinutes ? true : undefined}
+                                                                    />
+                                                                </label>
+                                                            </div>
+
+                                                            {hasRowErrors ? (
+                                                                <ul className="table-admin-schedule__errors">
+                                                                    {rowErrors.map((message) => (
+                                                                        <li key={`${index + 1}-${message}`}>{message}</li>
+                                                                    ))}
+                                                                </ul>
+                                                            ) : null}
+                                                        </article>
+                                                    );
+                                                })}
+                                            </div>
+
+                                            {blindScheduleValidation.errors.length ? (
+                                                <p className="table-admin-schedule__summary">Fix the highlighted blind levels before saving.</p>
+                                            ) : null}
+                                        </div>
                                     </div>
+                                ) : null}
+                            </div>
 
-                                    <div className="table-admin-schedule__rows">
-                                        {adminOptionsDraft.blindLevels.map((level, index) => {
-                                            const rowValidation = blindScheduleValidation.rows[index] ?? {};
-                                            const rowErrors = Object.values(rowValidation).filter((value): value is string => Boolean(value));
-                                            const hasRowErrors = rowErrors.length > 0;
-
-                                            return (
-                                                <article key={`blind-level-${index + 1}`} className={["table-admin-schedule__row", hasRowErrors ? "table-admin-schedule__row--invalid" : ""].filter(Boolean).join(" ")}>
-                                                    <div className="table-admin-schedule__row-header">
-                                                        <strong>Level {index + 1}</strong>
-                                                        <button className="button button--secondary table-admin-schedule__remove" type="button" onClick={() => handleRemoveBlindLevel(index)} disabled={isMutating || adminOptionsDraft.blindLevels.length === 1}>
-                                                            Remove
-                                                        </button>
-                                                    </div>
-
-                                                    <div className="table-admin-schedule__inputs">
-                                                        <label className="table-admin-field">
-                                                            <span>Small blind</span>
-                                                            <input
-                                                                className={["control-input", rowValidation.smallBlind ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
-                                                                type="number"
-                                                                min={1}
-                                                                step={1}
-                                                                value={level.smallBlind}
-                                                                onChange={(event) => updateBlindLevelDraft(index, "smallBlind", event.target.value)}
-                                                                aria-invalid={rowValidation.smallBlind ? true : undefined}
-                                                            />
-                                                        </label>
-                                                        <label className="table-admin-field">
-                                                            <span>Big blind</span>
-                                                            <input
-                                                                className={["control-input", rowValidation.bigBlind ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
-                                                                type="number"
-                                                                min={1}
-                                                                step={1}
-                                                                value={level.bigBlind}
-                                                                onChange={(event) => updateBlindLevelDraft(index, "bigBlind", event.target.value)}
-                                                                aria-invalid={rowValidation.bigBlind ? true : undefined}
-                                                            />
-                                                        </label>
-                                                        <label className="table-admin-field">
-                                                            <span>Ante</span>
-                                                            <input
-                                                                className={["control-input", rowValidation.ante ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
-                                                                type="number"
-                                                                min={0}
-                                                                step={1}
-                                                                value={level.ante}
-                                                                onChange={(event) => updateBlindLevelDraft(index, "ante", event.target.value)}
-                                                                placeholder="0"
-                                                                aria-invalid={rowValidation.ante ? true : undefined}
-                                                            />
-                                                        </label>
-                                                        <label className="table-admin-field">
-                                                            <span>Minutes</span>
-                                                            <input
-                                                                className={["control-input", rowValidation.durationMinutes ? "table-admin-input--invalid" : ""].filter(Boolean).join(" ")}
-                                                                type="number"
-                                                                min={1}
-                                                                step={1}
-                                                                value={level.durationMinutes}
-                                                                onChange={(event) => updateBlindLevelDraft(index, "durationMinutes", event.target.value)}
-                                                                aria-invalid={rowValidation.durationMinutes ? true : undefined}
-                                                            />
-                                                        </label>
-                                                    </div>
-
-                                                    {hasRowErrors ? (
-                                                        <ul className="table-admin-schedule__errors">
-                                                            {rowErrors.map((message) => (
-                                                                <li key={`${index + 1}-${message}`}>{message}</li>
-                                                            ))}
-                                                        </ul>
-                                                    ) : null}
-                                                </article>
-                                            );
-                                        })}
-                                    </div>
-
-                                    {blindScheduleValidation.errors.length ? (
-                                        <p className="table-admin-schedule__summary">Fix the highlighted blind levels before saving.</p>
-                                    ) : null}
-                                </div>
-                            ) : null}
-
-                            <button className="button button--primary table-menu-drawer__button" type="button" onClick={() => void handleSaveAdminOptions()} disabled={isMutating || (adminOptionsDraft.useBlindSchedule && blindScheduleValidation.errors.length > 0)}>
-                                Save table options
-                            </button>
+                            <div className="table-admin-actions">
+                                <button className="button button--primary table-menu-drawer__button" type="button" onClick={() => void handleSaveAdminOptions()} disabled={isMutating || (adminOptionsDraft.useBlindSchedule && blindScheduleValidation.errors.length > 0)}>
+                                    Save table options
+                                </button>
+                            </div>
                         </section>
 
                         <section className="table-admin-card">
-                            <strong>Seat approvals</strong>
+                            <div className="table-admin-card__header">
+                                <div>
+                                    <strong>Seat approvals</strong>
+                                    <p className="table-admin-card__copy">Review pending seats and adjust the requested stack before approving entry.</p>
+                                </div>
+                                <span className="table-admin-card__meta">{snapshot.pendingSeatRequests.length} waiting</span>
+                            </div>
                             {snapshot.pendingSeatRequests.length ? (
                                 <div className="table-admin-list">
                                     {snapshot.pendingSeatRequests.map((request) => (
@@ -1949,7 +2257,13 @@ export function RoomClient({
                         </section>
 
                         <section className="table-admin-card">
-                            <strong>Rebuy approvals</strong>
+                            <div className="table-admin-card__header">
+                                <div>
+                                    <strong>Rebuy approvals</strong>
+                                    <p className="table-admin-card__copy">Approve or deny add-ons while keeping each rebuy inside the current window.</p>
+                                </div>
+                                <span className="table-admin-card__meta">{snapshot.pendingRebuyRequests.length} waiting</span>
+                            </div>
                             {snapshot.pendingRebuyRequests.length ? (
                                 <div className="table-admin-list">
                                     {snapshot.pendingRebuyRequests.map((request) => (
@@ -1979,7 +2293,13 @@ export function RoomClient({
                         </section>
 
                         <section className="table-admin-card table-admin-card--wide">
-                            <strong>Players</strong>
+                            <div className="table-admin-card__header">
+                                <div>
+                                    <strong>Players</strong>
+                                    <p className="table-admin-card__copy">Track the live table lineup and remove players or bots when a seat needs to open up.</p>
+                                </div>
+                                <span className="table-admin-card__meta">{snapshot.players.length} seated</span>
+                            </div>
                             <div className="table-admin-list">
                                 {snapshot.players.map((player) => {
                                     const isBotPlayer = isBotAccountId(player.accountId);
@@ -2517,7 +2837,7 @@ export function RoomClient({
                                             !isPhoneViewport ? "with-tip" : "",
                                         ].filter(Boolean).join(" ")}
                                         data-hotkey={!isPhoneViewport ? "enter" : undefined}
-                                        value={wagerActionType === "raise" ? `Raise to ${formatNumber(targetContribution)}` : `Bet ${formatNumber(targetContribution)}`}
+                                        value={wagerActionType === "raise" ? "Raise" : `Bet ${formatNumber(targetContribution)}`}
                                         disabled={isMutating}
                                     />
                                     <button
@@ -3613,7 +3933,7 @@ export function RoomClient({
         }, 0);
     }
 
-    async function handleSendReaction(emoji: string) {
+    async function handleSendReaction(emoji: string, targetAccountId?: string) {
         if (!accountId || !heroPlayer) {
             setActionError("Take a seat before sending table reactions.");
             return;
@@ -3622,8 +3942,14 @@ export function RoomClient({
         await submitRoomMutation(`/v1/rooms/${slug}/react`, {
             accountId,
             emoji,
+            targetAccountId,
         });
         setIsReactionMenuOpen(false);
+    }
+
+    async function handleSendSuggestedReaction(emoji: string, targetAccountId: string, eventKey: string) {
+        resolveSuggestedGesturePrompt(eventKey);
+        await handleSendReaction(emoji, targetAccountId);
     }
 
     async function handleSetGesture(nextEmoji: string | null) {
@@ -3727,6 +4053,41 @@ export function RoomClient({
             </div>
         </div>
     );
+
+    const suggestedGesturePopover = suggestedGesturePrompt ? (
+        <div className="table-seat__suggested-gesture-popover">
+            <div className="table-seat__suggested-gesture-header">
+                <span className="table-seat__reaction-heading">Suggested</span>
+                <button
+                    className="table-seat__suggested-gesture-dismiss"
+                    type="button"
+                    onClick={() => resolveSuggestedGesturePrompt(suggestedGesturePrompt.eventKey)}
+                    aria-label="Dismiss suggested gesture"
+                >
+                    ×
+                </button>
+            </div>
+
+            <div className="table-seat__suggested-gesture-copy">
+                <strong>{suggestedGesturePrompt.headline}</strong>
+                <span>{suggestedGesturePrompt.bodyCopy}</span>
+            </div>
+
+            <div className="table-seat__suggested-gesture-actions">
+                {suggestedGesturePrompt.emojis.map((emoji) => (
+                    <button
+                        key={`${suggestedGesturePrompt.eventKey}-${emoji}`}
+                        className="table-seat__suggested-gesture-chip"
+                        type="button"
+                        onClick={() => void handleSendSuggestedReaction(emoji, suggestedGesturePrompt.targetAccountId, suggestedGesturePrompt.eventKey)}
+                        disabled={isMutating || !heroPlayer}
+                    >
+                        {emoji}
+                    </button>
+                ))}
+            </div>
+        </div>
+    ) : null;
 
     async function handleRebuy() {
         if (!accountId || !heroPlayer || !snapshot) {
@@ -3860,6 +4221,8 @@ export function RoomClient({
                 },
                 revealAllShowdownHands: adminOptionsDraft.revealAllShowdownHands,
                 runItTwiceEnabled: adminOptionsDraft.runItTwiceEnabled,
+                suggestedGesturesEnabled: adminOptionsDraft.suggestedGesturesEnabled,
+                suggestedGesturePromptProbability: parseProbabilityInput(adminOptionsDraft.suggestedGesturePromptProbability, "Suggestion prompt probability"),
             });
         } catch (error) {
             setActionError(error instanceof Error ? error.message : "Unable to save table options.");
@@ -4355,6 +4718,28 @@ export function RoomClient({
                         </div>
 
                         <VictoryConfettiCanvas active={showVictoryConfetti} />
+                        {suggestedGestureFlights.length ? (
+                            <div className="table-suggested-gesture-flights" aria-hidden="true">
+                                {suggestedGestureFlights.map((flight) => (
+                                    <span
+                                        key={flight.id}
+                                        className="table-suggested-gesture-flight"
+                                        style={{
+                                            ["--flight-start-x" as string]: `${flight.startX}px`,
+                                            ["--flight-start-y" as string]: `${flight.startY}px`,
+                                            ["--flight-mid-x" as string]: `${flight.midX}px`,
+                                            ["--flight-mid-y" as string]: `${flight.midY}px`,
+                                            ["--flight-end-x" as string]: `${flight.endX}px`,
+                                            ["--flight-end-y" as string]: `${flight.endY}px`,
+                                            ["--flight-duration" as string]: `${SUGGESTED_GESTURE_FLIGHT_DURATION_MS}ms`,
+                                            animationDelay: `-${flight.animationDelayMs}ms`,
+                                        } as CSSProperties}
+                                    >
+                                        {flight.emoji}
+                                    </span>
+                                ))}
+                            </div>
+                        ) : null}
 
                         <div className="table-status-rack">{renderTableStatusRackContent()}</div>
                         <div className={["table-chat-floater", isPhoneViewport ? "table-chat-floater--mobile" : ""].filter(Boolean).join(" ")}>
@@ -4546,10 +4931,17 @@ export function RoomClient({
                                     )
                                 )
                             );
+                            const openSeatTitle = seat.pendingRequest ? "Seat requested" : "Open seat";
+                            const openSeatSubtitle = seat.pendingRequest
+                                ? `${seat.pendingRequest.displayName} · ${formatNumber(seat.pendingRequest.requestedStack)}`
+                                : "Available";
+                            const openSeatStatus = seat.pendingRequest ? "Pending" : "Open";
+                            const openSeatActionLabel = seat.pendingRequest ? "Pending" : heroPendingSeatRequest ? "Move" : "Join";
 
                             return (
                                 <article
                                     key={seat.seatIndex}
+                                    ref={(element) => setSeatElementRef(seat.seatIndex, element)}
                                     className={[
                                         "table-seat",
                                         seat.player ? "table-seat--focusable" : "",
@@ -4604,7 +4996,12 @@ export function RoomClient({
                                         </div>
                                     ) : null}
                                     {!seat.isHero && seatGesture ? <div className={["table-seat__gesture", `table-seat__gesture--${seat.mediaPlacement}`].join(" ")}>{seatGesture.emoji}</div> : null}
-                                    {seatReaction ? <div className="table-seat__reaction">{seatReaction.emoji}</div> : null}
+                                    {seatReaction ? (
+                                        <div className={[
+                                            "table-seat__reaction",
+                                            suggestedGesturesEnabled && seatReaction.targetAccountId ? "table-seat__reaction--suggested" : "",
+                                        ].filter(Boolean).join(" ")}>{seatReaction.emoji}</div>
+                                    ) : null}
                                     {showHeroChatToast ? (
                                         <div className={[
                                             "table-seat__bubble",
@@ -4646,13 +5043,16 @@ export function RoomClient({
                                             </div>
 
                                             <div className="table-seat__content table-seat__content--open">
-                                                <div className="table-seat__identity">
-                                                    <strong>{seat.pendingRequest ? "Pending" : seat.name}</strong>
-                                                    <span>{seat.pendingRequest ? `${seat.pendingRequest.displayName} · ${formatNumber(seat.pendingRequest.requestedStack)}` : seat.stackLabel}</span>
-                                                </div>
+                                                <div className="table-seat__open-header">
+                                                    <div className="table-seat__identity table-seat__open-copy">
+                                                        <strong>{openSeatTitle}</strong>
+                                                        <span>{openSeatSubtitle}</span>
+                                                    </div>
 
-                                                <div className="table-seat__stats table-seat__stats--open">
-                                                    <span className="table-seat__stat-pill table-seat__stat-pill--open-label">Seat {seat.seatIndex + 1}</span>
+                                                    <div className="table-seat__stats table-seat__stats--open">
+                                                        <span className="table-seat__stat-pill table-seat__stat-pill--open-label">Seat {seat.seatIndex + 1}</span>
+                                                        <span className="table-seat__stat-pill table-seat__stat-pill--open-state">{openSeatStatus}</span>
+                                                    </div>
                                                 </div>
 
                                                 {heroPlayer === null ? (
@@ -4662,7 +5062,7 @@ export function RoomClient({
                                                         onClick={() => handleSeatClick(seat.seatIndex)}
                                                         disabled={isMutating || Boolean(seat.pendingRequest)}
                                                     >
-                                                        {seat.pendingRequest ? "Pending" : heroPendingSeatRequest ? "Move request" : "Take seat"}
+                                                        {openSeatActionLabel}
                                                     </button>
                                                 ) : null}
                                             </div>
@@ -4673,11 +5073,11 @@ export function RoomClient({
                                             showSeatMediaTile ? "table-seat__visuals--with-media" : "table-seat__visuals--cards-only",
                                         ].filter(Boolean).join(" ")}>
                                             {seat.isHero && heroHandLabel ? <div className="table-seat__hero-hand">{heroHandLabel}</div> : null}
-
                                             {showSeatMediaTile ? (
                                                 <div className="table-seat__media-wrap">
                                                     {seat.isHero ? (
-                                                        <div className="table-seat__reaction-control" ref={!isPhoneViewport && seat.isHero ? reactionMenuRef : undefined}>
+                                                        <div className="table-seat__reaction-control" ref={seat.isHero ? reactionMenuRef : undefined}>
+                                                            {suggestedGesturePopover && !isReactionMenuOpen ? suggestedGesturePopover : null}
                                                             <button
                                                                 className={[
                                                                     "table-seat__reaction-toggle",
@@ -6596,6 +6996,8 @@ function createEmptyAdminOptionsDraft(): AdminOptionsDraft {
         maxBuyInRuleValue: "50",
         revealAllShowdownHands: false,
         runItTwiceEnabled: false,
+        suggestedGesturesEnabled: true,
+        suggestedGesturePromptProbability: "0.5",
     };
 }
 
@@ -6622,6 +7024,8 @@ function buildAdminOptionsDraft(snapshot: RoomSnapshot): AdminOptionsDraft {
         maxBuyInRuleValue: String(snapshot.adminOptions.maxBuyInRule.value),
         revealAllShowdownHands: snapshot.adminOptions.revealAllShowdownHands,
         runItTwiceEnabled: snapshot.adminOptions.runItTwiceEnabled,
+        suggestedGesturesEnabled: snapshot.adminOptions.suggestedGesturesEnabled,
+        suggestedGesturePromptProbability: String(snapshot.adminOptions.suggestedGesturePromptProbability),
     };
 }
 
@@ -6922,7 +7326,11 @@ function buildTurnMetrics(snapshot: RoomSnapshot | null, nowMs: number): null | 
     };
 }
 
-function buildActiveReactionMap(snapshot: RoomSnapshot | null, nowMs: number): Map<string, RoomSnapshot["seatReactions"][number]> {
+function buildActiveReactionMap(
+    snapshot: RoomSnapshot | null,
+    nowMs: number,
+    useTargetSeat = true,
+): Map<string, RoomSnapshot["seatReactions"][number]> {
     const reactions = snapshot?.seatReactions ?? [];
 
     return reactions.reduce((map, reaction) => {
@@ -6930,7 +7338,7 @@ function buildActiveReactionMap(snapshot: RoomSnapshot | null, nowMs: number): M
             return map;
         }
 
-        map.set(reaction.accountId, reaction);
+        map.set(useTargetSeat ? (reaction.targetAccountId ?? reaction.accountId) : reaction.accountId, reaction);
         return map;
     }, new Map<string, RoomSnapshot["seatReactions"][number]>());
 }
@@ -6942,6 +7350,202 @@ function buildSeatGestureMap(snapshot: RoomSnapshot | null): Map<string, RoomSna
         map.set(gesture.accountId, gesture);
         return map;
     }, new Map<string, RoomSnapshot["seatGestures"][number]>());
+}
+
+function buildSuggestedGestureTrigger(
+    snapshot: RoomSnapshot | null,
+    heroAccountId?: string,
+    nowMs = Date.now(),
+    turnMetrics: ReturnType<typeof buildTurnMetrics> = null,
+    promptProbability = 0.5,
+): Omit<SuggestedGesturePromptState, "expiresAtMs"> | null {
+    if (!snapshot || !heroAccountId) {
+        return null;
+    }
+
+    const candidate = buildBigRaiseSuggestedGestureTrigger(snapshot, heroAccountId)
+        ?? buildTankingSuggestedGestureTrigger(snapshot, heroAccountId, nowMs, turnMetrics)
+        ?? buildBigWinSuggestedGestureTrigger(snapshot, heroAccountId, nowMs);
+
+    if (!candidate) {
+        return null;
+    }
+
+    return shouldShowSuggestedGesturePrompt(candidate.eventKey, heroAccountId, promptProbability) ? candidate : null;
+}
+
+function shouldShowSuggestedGesturePrompt(eventKey: string, heroAccountId: string, probability: number): boolean {
+    if (probability <= 0) {
+        return false;
+    }
+
+    if (probability >= 1) {
+        return true;
+    }
+
+    return createSeededRandom(`${heroAccountId}:${eventKey}`)() < probability;
+}
+
+function buildBigRaiseSuggestedGestureTrigger(
+    snapshot: RoomSnapshot,
+    heroAccountId: string,
+): Omit<SuggestedGesturePromptState, "expiresAtMs"> | null {
+    if (!snapshot.currentHand) {
+        return null;
+    }
+
+    const { currentHand } = snapshot;
+    const heroActionState = currentHand.heroActionState;
+
+    if (!heroActionState || !heroActionState.canAct || heroActionState.hasFolded || heroActionState.isAllIn || heroActionState.callAmount <= 0) {
+        return null;
+    }
+
+    if (currentHand.actorAccountId !== heroAccountId) {
+        return null;
+    }
+
+    const latestAction = currentHand.actions.at(-1);
+
+    if (!latestAction || latestAction.actorAccountId === heroAccountId || latestAction.street !== currentHand.street) {
+        return null;
+    }
+
+    if (latestAction.type !== "raise" && latestAction.type !== "all_in") {
+        return null;
+    }
+
+    const bigBlind = Math.max(1, currentHand.blindLevel.bigBlind);
+    const potBeforeAction = Math.max(0, currentHand.pot - latestAction.amount);
+    const callAmount = heroActionState.callAmount;
+    const qualifiesByBlind = callAmount >= bigBlind * BIG_RAISE_MIN_CALL_BIG_BLIND_MULTIPLE;
+    const qualifiesByPot = potBeforeAction > 0 && (callAmount / potBeforeAction) >= BIG_RAISE_MIN_CALL_POT_RATIO;
+
+    if (!qualifiesByBlind && !qualifiesByPot) {
+        return null;
+    }
+
+    const aggressor = snapshot.players.find((player) => player.accountId === latestAction.actorAccountId) ?? null;
+
+    if (!latestAction.actorAccountId) {
+        return null;
+    }
+
+    return {
+        eventKey: `${currentHand.id}:${latestAction.orderIndex}:${latestAction.actorAccountId}`,
+        reason: "big_raise",
+        targetAccountId: latestAction.actorAccountId,
+        targetDisplayName: aggressor?.displayName ?? "Opponent",
+        headline: `Big raise from ${aggressor?.displayName ?? "Opponent"}`,
+        bodyCopy: "Fire back a quick reaction.",
+        emojis: BIG_RAISE_SUGGESTED_EMOJIS,
+    };
+}
+
+function buildTankingSuggestedGestureTrigger(
+    snapshot: RoomSnapshot,
+    heroAccountId: string,
+    nowMs: number,
+    turnMetrics: ReturnType<typeof buildTurnMetrics>,
+): Omit<SuggestedGesturePromptState, "expiresAtMs"> | null {
+    if (!snapshot.currentHand || !snapshot.turnState.currentTurnStartedAt || !turnMetrics || turnMetrics.kind !== "turn") {
+        return null;
+    }
+
+    const heroPlayer = snapshot.players.find((player) => player.accountId === heroAccountId) ?? null;
+
+    if (!heroPlayer || !turnMetrics.actorAccountId || turnMetrics.actorAccountId === heroAccountId) {
+        return null;
+    }
+
+    const startedAtMs = Date.parse(snapshot.turnState.currentTurnStartedAt);
+
+    if (Number.isNaN(startedAtMs)) {
+        return null;
+    }
+
+    const qualifies = turnMetrics.isUsingTimeBank || (turnMetrics.isMainLow && (nowMs - startedAtMs) >= TANKING_TRIGGER_MIN_ELAPSED_MS);
+
+    if (!qualifies) {
+        return null;
+    }
+
+    const tankingPlayer = snapshot.players.find((player) => player.accountId === turnMetrics.actorAccountId) ?? null;
+
+    if (!tankingPlayer) {
+        return null;
+    }
+
+    return {
+        eventKey: `${snapshot.currentHand.id}:tank:${snapshot.turnState.currentTurnStartedAt}:${tankingPlayer.accountId}`,
+        reason: "tanking",
+        targetAccountId: tankingPlayer.accountId,
+        targetDisplayName: tankingPlayer.displayName,
+        headline: `${tankingPlayer.displayName} is in the tank`,
+        bodyCopy: turnMetrics.isUsingTimeBank ? "The clock is in the red. Send a quick poke." : "They are taking a beat. Nudge the spot.",
+        emojis: TANKING_SUGGESTED_EMOJIS,
+    };
+}
+
+function buildBigWinSuggestedGestureTrigger(
+    snapshot: RoomSnapshot,
+    heroAccountId: string,
+    nowMs: number,
+): Omit<SuggestedGesturePromptState, "expiresAtMs"> | null {
+    if (snapshot.currentHand || !snapshot.lastCompletedHand || isAllInRunoutActive(snapshot.lastCompletedHand, nowMs)) {
+        return null;
+    }
+
+    const heroPlayer = snapshot.players.find((player) => player.accountId === heroAccountId) ?? null;
+
+    if (!heroPlayer) {
+        return null;
+    }
+
+    const concludedAtMs = Date.parse(snapshot.lastCompletedHand.concludedAt);
+
+    if (Number.isNaN(concludedAtMs) || (nowMs - concludedAtMs) > BIG_WIN_SUGGESTED_MAX_AGE_MS) {
+        return null;
+    }
+
+    const topWinner = snapshot.lastCompletedHand.winners.reduce<LastHandResult["winners"][number] | null>((currentTopWinner, winner) => {
+        if (!currentTopWinner || winner.amountWon > currentTopWinner.amountWon) {
+            return winner;
+        }
+
+        return currentTopWinner;
+    }, null);
+
+    if (!topWinner || topWinner.accountId === heroAccountId) {
+        return null;
+    }
+
+    const currentBigBlind = Math.max(1, snapshot.blindState.currentLevel?.bigBlind ?? 1);
+    const qualifiesByBlind = topWinner.amountWon >= currentBigBlind * BIG_WIN_MIN_POT_BIG_BLIND_MULTIPLE;
+    const qualifiesByPot = snapshot.lastCompletedHand.totalPot > 0
+        && (topWinner.amountWon / snapshot.lastCompletedHand.totalPot) >= BIG_WIN_MIN_POT_SHARE_RATIO;
+
+    if (!qualifiesByBlind && !qualifiesByPot) {
+        return null;
+    }
+
+    const winner = snapshot.players.find((player) => player.accountId === topWinner.accountId) ?? null;
+
+    if (!winner) {
+        return null;
+    }
+
+    return {
+        eventKey: `${snapshot.lastCompletedHand.handId}:big_win:${winner.accountId}`,
+        reason: "big_win",
+        targetAccountId: winner.accountId,
+        targetDisplayName: winner.displayName,
+        headline: `${winner.displayName} scooped a big one`,
+        bodyCopy: snapshot.lastCompletedHand.winningReason === "showdown"
+            ? "Mark the pot before the next deal starts."
+            : "They dragged a chunky pot. Send a quick reaction.",
+        emojis: BIG_WIN_SUGGESTED_EMOJIS,
+    };
 }
 
 interface EmojiPickerSelection {
@@ -7448,6 +8052,22 @@ function parseOptionalWholeNumber(value: string, label: string): number | null {
     }
 
     return normalized;
+}
+
+function parseProbabilityInput(value: string, label: string): number {
+    const trimmed = value.trim();
+
+    if (!trimmed) {
+        throw new Error(`${label} is required.`);
+    }
+
+    const normalized = Number(trimmed);
+
+    if (!Number.isFinite(normalized) || normalized < 0 || normalized > 1) {
+        throw new Error(`${label} must be between 0 and 1.`);
+    }
+
+    return Math.round(normalized * 1000) / 1000;
 }
 
 function formatChatTimestamp(value: string): string {

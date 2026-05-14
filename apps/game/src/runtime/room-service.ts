@@ -65,6 +65,7 @@ export interface RoomReactionRequest {
   slug: string;
   accountId: string;
   emoji: string;
+  targetAccountId?: string;
 }
 
 export interface RoomGestureRequest {
@@ -148,6 +149,8 @@ export interface UpdateRoomAdminOptionsRequest {
   maxBuyInRule: RoomBuyInMaxRule;
   revealAllShowdownHands: boolean;
   runItTwiceEnabled: boolean;
+  suggestedGesturesEnabled: boolean;
+  suggestedGesturePromptProbability: number;
 }
 
 export interface RoomManagementAdmin {
@@ -563,12 +566,15 @@ export interface RoomAdminOptionsState {
   maxBuyInRule: RoomBuyInMaxRule;
   revealAllShowdownHands: boolean;
   runItTwiceEnabled: boolean;
+  suggestedGesturesEnabled: boolean;
+  suggestedGesturePromptProbability: number;
 }
 
 export interface RoomSeatReaction {
   id: string;
   accountId: string;
   emoji: string;
+  targetAccountId?: string;
   createdAt: string;
   expiresAt: string;
 }

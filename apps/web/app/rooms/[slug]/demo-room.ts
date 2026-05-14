@@ -280,6 +280,8 @@ export function buildDemoRoomPreset(slug: string): DemoRoomPreset | null {
                 },
                 revealAllShowdownHands: true,
                 runItTwiceEnabled: false,
+                suggestedGesturesEnabled: true,
+                suggestedGesturePromptProbability: 0.5,
             },
             nextHandStartsAt: null,
             handCount: 48,

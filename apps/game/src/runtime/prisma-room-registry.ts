@@ -118,6 +118,7 @@ const BOT_EMAIL_DOMAIN = "bots.local";
 const CLUB_IMPORT_EMAIL_DOMAIN = "club-import.local";
 const MAX_CLUB_USER_SEARCH_RESULTS = 12;
 const DEFAULT_MAX_BUY_IN_PERCENTAGE = 50;
+const DEFAULT_SUGGESTED_GESTURE_PROMPT_PROBABILITY = 0.5;
 
 type PrismaClientLike = PrismaClient;
 type PrismaTransactionClient = Omit<PrismaClientLike, "$on" | "$connect" | "$disconnect" | "$use" | "$transaction" | "$extends">;
@@ -1600,6 +1601,20 @@ export class PrismaRoomRegistry implements RoomRegistry {
     const runtimeState = this.requireRuntimeState(room);
     this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
+    const suggestedGesturesEnabled = runtimeState.adminOptions?.suggestedGesturesEnabled ?? true;
+    const senderIsSeated = runtimeState.table.players.some((player) => player.accountId === input.accountId);
+    const targetIsSeated = input.targetAccountId
+      ? runtimeState.table.players.some((player) => player.accountId === input.targetAccountId)
+      : false;
+
+    if (input.targetAccountId && !suggestedGesturesEnabled) {
+      throw new Error("Suggested gestures are disabled for this table.");
+    }
+
+    if (input.targetAccountId && (!senderIsSeated || !targetIsSeated)) {
+      throw new Error("Targeted reactions require both the sender and target to be seated.");
+    }
+
     const emoji = normalizeReactionEmoji(input.emoji);
     const now = new Date();
 
@@ -1611,6 +1626,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
           id: `react_${crypto.randomUUID()}`,
           accountId: input.accountId,
           emoji,
+          targetAccountId: input.targetAccountId,
           createdAt: now.toISOString(),
           expiresAt: new Date(now.getTime() + REACTION_DURATION_MS).toISOString(),
         },
@@ -1920,6 +1936,10 @@ export class PrismaRoomRegistry implements RoomRegistry {
     const turnSeconds = normalizeOptionalWholeNumber(input.turnSeconds, "Decision time limit");
     const timeBankSeconds = normalizeOptionalWholeNumber(input.timeBankSeconds, "Time bank length");
     const timeBankRefillHands = normalizeOptionalWholeNumber(input.timeBankRefillHands, "Time bank refill hands");
+    const suggestedGesturePromptProbability = normalizeProbability(
+      input.suggestedGesturePromptProbability,
+      "Suggested gesture prompt probability",
+    );
     const buyInOptions = normalizeRoomBuyInAdminOptions(runtimeState.table, {
       minBuyInAmount: input.minBuyInAmount,
       maxBuyInRule: input.maxBuyInRule,
@@ -1952,6 +1972,8 @@ export class PrismaRoomRegistry implements RoomRegistry {
       maxBuyInRule: buyInOptions.maxBuyInRule,
       revealAllShowdownHands: input.revealAllShowdownHands,
       runItTwiceEnabled: input.runItTwiceEnabled,
+      suggestedGesturesEnabled: input.suggestedGesturesEnabled,
+      suggestedGesturePromptProbability,
     } satisfies RoomAdminOptionsState;
     const nextRuntimeState: PersistedRoomRuntimeState = {
       ...runtimeState,
@@ -3589,6 +3611,11 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
   const normalizedHandHistory = normalizeArchivedHandHistory(runtimeState.handHistory);
   const revealAllShowdownHands = runtimeState.adminOptions?.revealAllShowdownHands ?? runtimeState.table.revealAllShowdownHands ?? false;
   const runItTwiceEnabled = runtimeState.adminOptions?.runItTwiceEnabled ?? runtimeState.table.runItTwiceEnabled ?? false;
+  const suggestedGesturesEnabled = runtimeState.adminOptions?.suggestedGesturesEnabled ?? true;
+  const suggestedGesturePromptProbability = normalizeProbability(
+    runtimeState.adminOptions?.suggestedGesturePromptProbability ?? DEFAULT_SUGGESTED_GESTURE_PROMPT_PROBABILITY,
+    "Suggested gesture prompt probability",
+  );
   const buyInOptions = normalizeRoomBuyInAdminOptions(runtimeState.table, runtimeState.adminOptions);
 
   return {
@@ -3601,7 +3628,16 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
     joinedViewerAccountIds: ensureJoinedViewerAccountIds(runtimeState.joinedViewerAccountIds ?? [], runtimeState.table),
     chatMessages: Array.isArray(runtimeState.chatMessages) ? runtimeState.chatMessages.slice(-MAX_CHAT_MESSAGES) : [],
     seatReactions: Array.isArray(runtimeState.seatReactions)
-      ? runtimeState.seatReactions.filter((reaction) => reaction && typeof reaction.expiresAt === "string").slice(-MAX_SEAT_REACTIONS)
+      ? runtimeState.seatReactions
+        .filter((reaction) => (
+          reaction
+          && typeof reaction.accountId === "string"
+          && typeof reaction.emoji === "string"
+          && typeof reaction.createdAt === "string"
+          && typeof reaction.expiresAt === "string"
+          && (typeof reaction.targetAccountId === "undefined" || typeof reaction.targetAccountId === "string")
+        ))
+        .slice(-MAX_SEAT_REACTIONS)
       : [],
     seatGestures: Array.isArray(runtimeState.seatGestures)
       ? runtimeState.seatGestures.filter((gesture) => gesture && typeof gesture.accountId === "string" && typeof gesture.emoji === "string" && typeof gesture.updatedAt === "string").slice(-MAX_SEAT_GESTURES)
@@ -3629,6 +3665,8 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
       maxBuyInRule: buyInOptions.maxBuyInRule,
       revealAllShowdownHands,
       runItTwiceEnabled,
+      suggestedGesturesEnabled,
+      suggestedGesturePromptProbability,
     },
     pendingSeatRequests: Array.isArray(runtimeState.pendingSeatRequests)
       ? runtimeState.pendingSeatRequests.filter((request) => request && typeof request.id === "string")
@@ -3845,6 +3883,8 @@ function buildLockedRoomSnapshot(runtimeState: PersistedRoomRuntimeState): RoomS
       maxBuyInRule: buyInOptions.maxBuyInRule,
       revealAllShowdownHands: false,
       runItTwiceEnabled: false,
+      suggestedGesturesEnabled: true,
+      suggestedGesturePromptProbability: DEFAULT_SUGGESTED_GESTURE_PROMPT_PROBABILITY,
     },
     nextHandStartsAt: null,
     handCount: 0,
@@ -4580,7 +4620,17 @@ function buildDefaultRoomAdminOptions(table: TableState, isPubliclyListed = true
     maxBuyInRule: buildDefaultRoomBuyInMaxRule(),
     revealAllShowdownHands: table.revealAllShowdownHands,
     runItTwiceEnabled: table.runItTwiceEnabled,
+    suggestedGesturesEnabled: true,
+    suggestedGesturePromptProbability: DEFAULT_SUGGESTED_GESTURE_PROMPT_PROBABILITY,
   };
+}
+
+function normalizeProbability(value: number, label: string): number {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`${label} must be between 0 and 1.`);
+  }
+
+  return Math.round(value * 1000) / 1000;
 }
 
 function isRoomPubliclyListed(
