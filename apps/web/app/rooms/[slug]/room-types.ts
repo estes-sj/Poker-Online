@@ -206,6 +206,7 @@ export interface RoomAdminOptionsState {
   runItTwiceEnabled: boolean;
   suggestedGesturesEnabled: boolean;
   suggestedGesturePromptProbability: number;
+  botSuggestedGestureReactionProbability: number;
 }
 
 export interface RoomPendingSeatRequest {

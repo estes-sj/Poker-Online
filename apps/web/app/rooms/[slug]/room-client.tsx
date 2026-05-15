@@ -17,6 +17,8 @@ import type { ArchivedHandRecord, Card, HandActionRecord, HeroActionState, LastH
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 900px)";
 const MOBILE_LAYOUT_RECOMMENDATION_STORAGE_KEY = "river-club-mobile-layout-recommendation-dismissed";
 const ACTION_PAD_IDLE_DIM_STORAGE_KEY = "river-club-action-pad-idle-dim";
+const ROOM_PASSWORD_PROMPT_QUERY_PARAM = "roomPrompt";
+const ROOM_PASSWORD_PROMPT_QUERY_VALUE = "unlock";
 const ACTION_PAD_VIEWPORT_MARGIN = 16;
 const ACTION_PAD_TOP_MARGIN = 96;
 const QUICK_REACTIONS = ["👏", "🔥", "😂", "😮", "💀"] as const;
@@ -26,12 +28,12 @@ const BIG_WIN_SUGGESTED_EMOJIS = ["👏", "🔥", "💸", "😮"] as const;
 const BOT_ACCOUNT_ID_PREFIX = "bot_";
 const SUGGESTED_GESTURE_POPOVER_DURATION_MS = 4_800;
 const SUGGESTED_GESTURE_FLIGHT_DURATION_MS = 1_650;
+const SUGGESTED_GESTURE_MAX_CATCH_UP_MS = 500;
 const BIG_RAISE_MIN_CALL_BIG_BLIND_MULTIPLE = 6;
 const BIG_RAISE_MIN_CALL_POT_RATIO = 0.42;
 const TANKING_TRIGGER_MIN_ELAPSED_MS = 12_000;
 const BIG_WIN_SUGGESTED_MAX_AGE_MS = 9_000;
-const BIG_WIN_MIN_POT_BIG_BLIND_MULTIPLE = 18;
-const BIG_WIN_MIN_POT_SHARE_RATIO = 0.64;
+const BIG_WIN_MIN_POT_BIG_BLIND_MULTIPLE_PER_PLAYER = 18;
 const EmojiPicker = dynamic(() => import("@emoji-mart/react"), { ssr: false });
 const ENGINE_EXPLAINER_SECTIONS = [
     {
@@ -533,7 +535,7 @@ interface AdminOptionsDraft {
     ante: string;
     blindLevels: BlindLevelDraft[];
     autoStartNextHand: boolean;
-    showdownPresentationSeconds: string;
+    autoStartDelaySeconds: string;
     decisionTimeSeconds: string;
     timeBankSeconds: string;
     timeBankRefillHands: string;
@@ -545,6 +547,7 @@ interface AdminOptionsDraft {
     runItTwiceEnabled: boolean;
     suggestedGesturesEnabled: boolean;
     suggestedGesturePromptProbability: string;
+    botSuggestedGestureReactionProbability: string;
 }
 
 interface ActionPadOffset {
@@ -654,6 +657,7 @@ export function RoomClient({
     const [rebuyApprovalDrafts, setRebuyApprovalDrafts] = useState<Record<string, string>>({});
     const [adminApprovalQueue, setAdminApprovalQueue] = useState<AdminApprovalQueueEntry[]>([]);
     const [adminOptionsDraft, setAdminOptionsDraft] = useState<AdminOptionsDraft>(createEmptyAdminOptionsDraft);
+    const [isStopTableConfirmOpen, setIsStopTableConfirmOpen] = useState(false);
     const [selectedLedgerHandId, setSelectedLedgerHandId] = useState<string | null>(null);
     const [tablePovSeatIndex, setTablePovSeatIndex] = useState<number | null>(() => initialSnapshot?.players.find((player) => player.accountId === initialAccountId)?.seatIndex ?? null);
     const [turnClockNow, setTurnClockNow] = useState(() => getSnapshotClockMs(initialSnapshot));
@@ -856,7 +860,10 @@ export function RoomClient({
             return true;
         }
 
-        const animationDelayMs = Math.max(0, Date.now() - createdAtMs);
+        const animationDelayMs = Math.min(
+            Math.max(0, Date.now() - createdAtMs),
+            SUGGESTED_GESTURE_MAX_CATCH_UP_MS,
+        );
 
         if (animationDelayMs >= SUGGESTED_GESTURE_FLIGHT_DURATION_MS) {
             return true;
@@ -876,7 +883,7 @@ export function RoomClient({
                 endX: targetCenter.x,
                 endY: targetCenter.y,
                 animationDelayMs,
-                expiresAtMs: createdAtMs + SUGGESTED_GESTURE_FLIGHT_DURATION_MS,
+                expiresAtMs: Date.now() + (SUGGESTED_GESTURE_FLIGHT_DURATION_MS - animationDelayMs),
             },
         ]));
 
@@ -1482,6 +1489,32 @@ export function RoomClient({
     const blindCountdownMs = snapshot?.blindState ? getBlindCountdownMs(snapshot.blindState, turnClockNow) : null;
 
     useEffect(() => {
+        if (demoMode || typeof window === "undefined") {
+            return;
+        }
+
+        const currentUrl = new URL(window.location.href);
+        const currentPrompt = currentUrl.searchParams.get(ROOM_PASSWORD_PROMPT_QUERY_PARAM);
+
+        if (isProtectedRoomLocked) {
+            if (currentPrompt === ROOM_PASSWORD_PROMPT_QUERY_VALUE) {
+                return;
+            }
+
+            currentUrl.searchParams.set(ROOM_PASSWORD_PROMPT_QUERY_PARAM, ROOM_PASSWORD_PROMPT_QUERY_VALUE);
+            window.history.replaceState(window.history.state, "", currentUrl);
+            return;
+        }
+
+        if (currentPrompt !== ROOM_PASSWORD_PROMPT_QUERY_VALUE) {
+            return;
+        }
+
+        currentUrl.searchParams.delete(ROOM_PASSWORD_PROMPT_QUERY_PARAM);
+        window.history.replaceState(window.history.state, "", currentUrl);
+    }, [demoMode, isProtectedRoomLocked]);
+
+    useEffect(() => {
         if (!suggestedGesturesEnabled) {
             handledSuggestedReactionIdsRef.current.clear();
             setSuggestedGestureFlights([]);
@@ -2035,8 +2068,8 @@ export function RoomClient({
                                             <span>Auto start next hand</span>
                                         </label>
                                         <label className="table-admin-field">
-                                            <span>Showdown presentation time</span>
-                                            <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.showdownPresentationSeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, showdownPresentationSeconds: event.target.value }))} />
+                                            <span>Time before next hand</span>
+                                            <input className="control-input" type="number" min={0} step={1} value={adminOptionsDraft.autoStartDelaySeconds} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, autoStartDelaySeconds: event.target.value }))} disabled={!adminOptionsDraft.autoStartNextHand} placeholder="seconds" />
                                         </label>
                                         <label className="table-admin-field">
                                             <span>Decision time limit</span>
@@ -2106,6 +2139,10 @@ export function RoomClient({
                                         <label className="table-admin-field table-admin-field--full">
                                             <span>Suggestion prompt probability</span>
                                             <input className="control-input" type="number" min={0} max={1} step={0.05} value={adminOptionsDraft.suggestedGesturePromptProbability} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, suggestedGesturePromptProbability: event.target.value }))} />
+                                        </label>
+                                        <label className="table-admin-field table-admin-field--full">
+                                            <span>Bot flyover reaction probability</span>
+                                            <input className="control-input" type="number" min={0} max={1} step={0.05} value={adminOptionsDraft.botSuggestedGestureReactionProbability} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, botSuggestedGestureReactionProbability: event.target.value }))} />
                                         </label>
                                     </div>
                                 </section>
@@ -2837,7 +2874,7 @@ export function RoomClient({
                                             !isPhoneViewport ? "with-tip" : "",
                                         ].filter(Boolean).join(" ")}
                                         data-hotkey={!isPhoneViewport ? "enter" : undefined}
-                                        value={wagerActionType === "raise" ? "Raise" : `Bet ${formatNumber(targetContribution)}`}
+                                        value={wagerActionType === "raise" ? "Raise" : "Bet"}
                                         disabled={isMutating}
                                     />
                                     <button
@@ -4206,7 +4243,7 @@ export function RoomClient({
                 accountId,
                 blindSchedule,
                 autoStartNextHand: adminOptionsDraft.autoStartNextHand,
-                autoStartDelaySeconds: parseOptionalWholeNumber(adminOptionsDraft.showdownPresentationSeconds, "Showdown presentation time") ?? 0,
+                autoStartDelaySeconds: parseOptionalWholeNumber(adminOptionsDraft.autoStartDelaySeconds, "Time before next hand") ?? 0,
                 turnSeconds: parseOptionalWholeNumber(adminOptionsDraft.decisionTimeSeconds, "Decision time limit"),
                 timeBankSeconds: parseOptionalWholeNumber(adminOptionsDraft.timeBankSeconds, "Time bank length"),
                 timeBankRefillHands: parseOptionalWholeNumber(adminOptionsDraft.timeBankRefillHands, "Time bank refill hands"),
@@ -4223,6 +4260,7 @@ export function RoomClient({
                 runItTwiceEnabled: adminOptionsDraft.runItTwiceEnabled,
                 suggestedGesturesEnabled: adminOptionsDraft.suggestedGesturesEnabled,
                 suggestedGesturePromptProbability: parseProbabilityInput(adminOptionsDraft.suggestedGesturePromptProbability, "Suggestion prompt probability"),
+                botSuggestedGestureReactionProbability: parseProbabilityInput(adminOptionsDraft.botSuggestedGestureReactionProbability, "Bot flyover reaction probability"),
             });
         } catch (error) {
             setActionError(error instanceof Error ? error.message : "Unable to save table options.");
@@ -4245,9 +4283,19 @@ export function RoomClient({
             return;
         }
 
+        setIsStopTableConfirmOpen(true);
+    }
+
+    async function handleConfirmStopTable() {
+        if (!accountId) {
+            return;
+        }
+
         await submitRoomMutation(`/v1/rooms/${slug}/admin/stop`, {
             accountId,
         });
+
+        setIsStopTableConfirmOpen(false);
     }
 
     function closeArchivePreview() {
@@ -5402,6 +5450,35 @@ export function RoomClient({
                         <div className="table-dialog__actions">
                             <button className="button button--primary" type="button" onClick={() => setRequestNoticeModal(null)}>
                                 OK
+                            </button>
+                        </div>
+                    </section>
+                </div>
+            ) : null}
+
+            {isStopTableConfirmOpen ? (
+                <div className="table-dialog" role="dialog" aria-modal="true" aria-label="Confirm stop table">
+                    <button className="table-dialog__backdrop" type="button" aria-label="Cancel stop table" onClick={() => setIsStopTableConfirmOpen(false)} />
+                    <section className="table-dialog__panel table-dialog__panel--compact">
+                        <header className="table-dialog__header">
+                            <div>
+                                <span className="table-menu-drawer__eyebrow">Stop table</span>
+                                <h2>Are you sure?</h2>
+                                <p>Games can be resumed, but this will reset the blind schedule. Use Pause if you plan on continuing later.</p>
+                            </div>
+                            <button className="table-dialog__close" type="button" onClick={() => setIsStopTableConfirmOpen(false)} aria-label="Cancel stop table">
+                                ×
+                            </button>
+                        </header>
+
+                        {actionError ? <p className="form-error table-dialog__error">{actionError}</p> : null}
+
+                        <div className="table-dialog__actions">
+                            <button className="button button--secondary" type="button" onClick={() => setIsStopTableConfirmOpen(false)} disabled={isMutating}>
+                                Cancel
+                            </button>
+                            <button className="button button--danger" type="button" onClick={() => void handleConfirmStopTable()} disabled={isMutating}>
+                                Stop table
                             </button>
                         </div>
                     </section>
@@ -6986,7 +7063,7 @@ function createEmptyAdminOptionsDraft(): AdminOptionsDraft {
         ante: "0",
         blindLevels: [createBlindLevelDraft()],
         autoStartNextHand: true,
-        showdownPresentationSeconds: "8",
+        autoStartDelaySeconds: "8",
         decisionTimeSeconds: "",
         timeBankSeconds: "",
         timeBankRefillHands: "",
@@ -6998,6 +7075,7 @@ function createEmptyAdminOptionsDraft(): AdminOptionsDraft {
         runItTwiceEnabled: false,
         suggestedGesturesEnabled: true,
         suggestedGesturePromptProbability: "0.5",
+        botSuggestedGestureReactionProbability: "0.5",
     };
 }
 
@@ -7014,7 +7092,7 @@ function buildAdminOptionsDraft(snapshot: RoomSnapshot): AdminOptionsDraft {
         ante: String(firstLevel.ante ?? 0),
         blindLevels: buildBlindLevelDrafts(schedule),
         autoStartNextHand: snapshot.autoStartNextHand,
-        showdownPresentationSeconds: String(snapshot.autoStartDelaySeconds),
+        autoStartDelaySeconds: String(snapshot.autoStartDelaySeconds),
         decisionTimeSeconds: snapshot.adminOptions.decisionTimeSeconds === null ? "" : String(snapshot.adminOptions.decisionTimeSeconds),
         timeBankSeconds: snapshot.adminOptions.timeBankSeconds === null ? "" : String(snapshot.adminOptions.timeBankSeconds),
         timeBankRefillHands: snapshot.adminOptions.timeBankRefillHands === null ? "" : String(snapshot.adminOptions.timeBankRefillHands),
@@ -7026,6 +7104,7 @@ function buildAdminOptionsDraft(snapshot: RoomSnapshot): AdminOptionsDraft {
         runItTwiceEnabled: snapshot.adminOptions.runItTwiceEnabled,
         suggestedGesturesEnabled: snapshot.adminOptions.suggestedGesturesEnabled,
         suggestedGesturePromptProbability: String(snapshot.adminOptions.suggestedGesturePromptProbability),
+        botSuggestedGestureReactionProbability: String(snapshot.adminOptions.botSuggestedGestureReactionProbability),
     };
 }
 
@@ -7521,11 +7600,10 @@ function buildBigWinSuggestedGestureTrigger(
     }
 
     const currentBigBlind = Math.max(1, snapshot.blindState.currentLevel?.bigBlind ?? 1);
-    const qualifiesByBlind = topWinner.amountWon >= currentBigBlind * BIG_WIN_MIN_POT_BIG_BLIND_MULTIPLE;
-    const qualifiesByPot = snapshot.lastCompletedHand.totalPot > 0
-        && (topWinner.amountWon / snapshot.lastCompletedHand.totalPot) >= BIG_WIN_MIN_POT_SHARE_RATIO;
+    const livePlayerCount = Math.max(2, snapshot.players.filter((player) => player.stack > 0 && !player.isSittingOut).length);
+    const bigWinThreshold = currentBigBlind * livePlayerCount * BIG_WIN_MIN_POT_BIG_BLIND_MULTIPLE_PER_PLAYER;
 
-    if (!qualifiesByBlind && !qualifiesByPot) {
+    if (topWinner.amountWon < bigWinThreshold) {
         return null;
     }
 

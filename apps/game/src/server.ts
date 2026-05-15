@@ -9,7 +9,17 @@ import type { AutoExpiringRoom, RoomRegistry, RoomSnapshot } from "./runtime/roo
 
 const BOT_ACCOUNT_ID_PREFIX = "bot_";
 const BOT_ACTION_DELAY_MS = 900;
+const BOT_SUGGESTED_GESTURE_DELAY_MS = 900;
 const RUN_IT_TWICE_RESOLUTION_DELAY_MS = 1200;
+const BIG_RAISE_SUGGESTED_EMOJIS = ["😮", "🤨", "😤", "🔥"] as const;
+const TANKING_SUGGESTED_EMOJIS = ["⏳", "👀", "😴", "🤨"] as const;
+const BIG_WIN_SUGGESTED_EMOJIS = ["👏", "🔥", "💸", "😮"] as const;
+const BIG_RAISE_MIN_CALL_BIG_BLIND_MULTIPLE = 6;
+const BIG_RAISE_MIN_CALL_POT_RATIO = 0.42;
+const TANKING_TRIGGER_MIN_ELAPSED_MS = 12000;
+const BIG_WIN_SUGGESTED_MAX_AGE_MS = 9000;
+const BIG_WIN_MIN_POT_BIG_BLIND_MULTIPLE_PER_PLAYER = 18;
+const DEFAULT_BOT_SUGGESTED_GESTURE_REACTION_PROBABILITY = 0.5;
 
 interface ClientMessage {
   type: "subscribe_room" | "seat_player" | "set_ready" | "admin_start_hand";
@@ -33,6 +43,8 @@ export function buildGameServer() {
   const roomExpirationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const runItTwiceResolutionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const turnTimeoutTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const botSuggestedReactionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const botSuggestedReactionEventKeys = new Map<string, string>();
   let roomExpirationBootstrapRetryTimer: ReturnType<typeof setTimeout> | null = null;
   const app = Fastify({ logger: true });
   let registry!: RoomRegistry;
@@ -88,6 +100,17 @@ export function buildGameServer() {
     runItTwiceResolutionTimers.delete(slug);
   };
 
+  const clearBotSuggestedReactionTimer = (slug: string) => {
+    const timer = botSuggestedReactionTimers.get(slug);
+
+    if (!timer) {
+      return;
+    }
+
+    clearTimeout(timer);
+    botSuggestedReactionTimers.delete(slug);
+  };
+
   const clearBustCleanupTimer = (slug: string) => {
     const timer = bustCleanupTimers.get(slug);
 
@@ -128,6 +151,8 @@ export function buildGameServer() {
       clearRoomExpirationTimer(slug);
       clearRunItTwiceResolutionTimer(slug);
       clearTurnTimeoutTimer(slug);
+      clearBotSuggestedReactionTimer(slug);
+      botSuggestedReactionEventKeys.delete(slug);
     }
 
     for (const [socket, subscription] of subscriptions.entries()) {
@@ -614,6 +639,41 @@ export function buildGameServer() {
     }
   };
 
+  const executeBotSuggestedReaction = async (slug: string, expectedEventKey: string) => {
+    let snapshot: RoomSnapshot;
+
+    try {
+      snapshot = await registry.getRoomSnapshot(slug);
+    } catch (error) {
+      app.log.warn({ slug, error }, "Unable to read room before scheduled bot suggested reaction.");
+      return;
+    }
+
+    const candidate = await buildBotSuggestedReactionCandidate(registry, slug, snapshot);
+
+    if (!candidate || candidate.eventKey !== expectedEventKey) {
+      return;
+    }
+
+    const senderAccountId = chooseRandomItem(candidate.eligibleSenderAccountIds);
+    const emoji = chooseRandomItem(candidate.emojis);
+
+    if (!senderAccountId || !emoji) {
+      return;
+    }
+
+    try {
+      await registry.postReaction({
+        slug,
+        accountId: senderAccountId,
+        emoji,
+        targetAccountId: candidate.targetAccountId,
+      });
+    } catch (error) {
+      app.log.debug({ slug, error }, "Bot suggested reaction did not resolve cleanly.");
+    }
+  };
+
   const executeRunItTwiceVoteTimeout = async (slug: string) => {
     let snapshot: RoomSnapshot;
 
@@ -726,12 +786,51 @@ export function buildGameServer() {
     }, RUN_IT_TWICE_RESOLUTION_DELAY_MS));
   };
 
+  const scheduleBotSuggestedReaction = async (slug: string) => {
+    let snapshot: RoomSnapshot;
+
+    try {
+      snapshot = await registry.getRoomSnapshot(slug);
+    } catch (error) {
+      app.log.warn({ slug, error }, "Unable to schedule bot suggested reaction.");
+      return;
+    }
+
+    const candidate = await buildBotSuggestedReactionCandidate(registry, slug, snapshot);
+
+    if (!candidate) {
+      clearBotSuggestedReactionTimer(slug);
+      return;
+    }
+
+    if (botSuggestedReactionEventKeys.get(slug) === candidate.eventKey) {
+      return;
+    }
+
+    clearBotSuggestedReactionTimer(slug);
+    botSuggestedReactionEventKeys.set(slug, candidate.eventKey);
+
+    if (candidate.probability <= 0) {
+      return;
+    }
+
+    if (candidate.probability < 1 && Math.random() >= candidate.probability) {
+      return;
+    }
+
+    botSuggestedReactionTimers.set(slug, setTimeout(() => {
+      botSuggestedReactionTimers.delete(slug);
+      void executeBotSuggestedReaction(slug, candidate.eventKey);
+    }, BOT_SUGGESTED_GESTURE_DELAY_MS));
+  };
+
   registry = new PrismaRoomRegistry(async (slug) => {
     await broadcastRoom(slug);
     await scheduleRoomBustCleanup(slug);
     await scheduleRoomAutoStart(slug);
     await scheduleRoomExpiration(slug);
     await scheduleRunItTwiceResolution(slug);
+    await scheduleBotSuggestedReaction(slug);
     await scheduleRoomTurnTimeout(slug);
   }, async (slugs) => {
     await handleDeletedRooms(slugs);
@@ -763,11 +862,17 @@ export function buildGameServer() {
       clearTimeout(timer);
     }
 
+    for (const timer of botSuggestedReactionTimers.values()) {
+      clearTimeout(timer);
+    }
+
     autoStartTimers.clear();
     bustCleanupTimers.clear();
     roomExpirationTimers.clear();
     runItTwiceResolutionTimers.clear();
     turnTimeoutTimers.clear();
+    botSuggestedReactionTimers.clear();
+    botSuggestedReactionEventKeys.clear();
     clearRoomExpirationBootstrapRetryTimer();
     await disconnectPrisma();
   });
@@ -803,7 +908,7 @@ export function buildGameServer() {
       }
 
       try {
-        await handleClientMessage(registry, subscriptions, disconnectTimers, socket, payload, scheduleRoomBustCleanup, scheduleRoomAutoStart, scheduleRoomTurnTimeout);
+        await handleClientMessage(registry, subscriptions, disconnectTimers, socket, payload, scheduleRoomBustCleanup, scheduleRoomAutoStart, scheduleRoomTurnTimeout, scheduleBotSuggestedReaction);
       } catch (error) {
         socket.send(JSON.stringify({ type: "error", message: getErrorMessage(error) }));
       }
@@ -825,7 +930,8 @@ async function handleClientMessage(
   payload: unknown,
   scheduleRoomBustCleanup: (slug: string) => Promise<void>,
   scheduleRoomAutoStart: (slug: string) => Promise<void>,
-  scheduleRoomTurnTimeout: (slug: string) => Promise<void>
+  scheduleRoomTurnTimeout: (slug: string) => Promise<void>,
+  scheduleBotSuggestedReaction: (slug: string) => Promise<void>
 ): Promise<void> {
   const message = payload as Partial<ClientMessage>;
 
@@ -866,6 +972,7 @@ async function handleClientMessage(
 
       await scheduleRoomBustCleanup(message.slug);
       await scheduleRoomAutoStart(message.slug);
+      await scheduleBotSuggestedReaction(message.slug);
       await scheduleRoomTurnTimeout(message.slug);
 
       return;
@@ -1041,4 +1148,274 @@ function chooseBotTurnAction(
 
 function chooseBotRunItTwiceDecision(): boolean {
   return Math.random() < 0.62;
+}
+
+interface BotSuggestedReactionCandidate {
+  eventKey: string;
+  targetAccountId: string;
+  emojis: readonly string[];
+  eligibleSenderAccountIds: string[];
+  probability: number;
+}
+
+async function buildBotSuggestedReactionCandidate(
+  registry: RoomRegistry,
+  slug: string,
+  snapshot: RoomSnapshot,
+  nowMs = Date.now(),
+): Promise<BotSuggestedReactionCandidate | null> {
+  if (!snapshot.adminOptions.suggestedGesturesEnabled) {
+    return null;
+  }
+
+  const probability = normalizeBotSuggestedGestureProbability(snapshot.adminOptions.botSuggestedGestureReactionProbability);
+
+  return await buildBotBigRaiseSuggestedReactionCandidate(registry, slug, snapshot, probability)
+    ?? buildBotTankingSuggestedReactionCandidate(snapshot, nowMs, probability)
+    ?? buildBotBigWinSuggestedReactionCandidate(snapshot, nowMs, probability);
+}
+
+async function buildBotBigRaiseSuggestedReactionCandidate(
+  registry: RoomRegistry,
+  slug: string,
+  snapshot: RoomSnapshot,
+  probability: number,
+): Promise<BotSuggestedReactionCandidate | null> {
+  const currentHand = snapshot.currentHand;
+  const actorAccountId = currentHand?.actorAccountId;
+
+  if (!currentHand || !actorAccountId || !isBotAccountId(actorAccountId)) {
+    return null;
+  }
+
+  const latestAction = currentHand.actions.at(-1);
+
+  if (!latestAction || latestAction.actorAccountId === actorAccountId || latestAction.street !== currentHand.street) {
+    return null;
+  }
+
+  if (latestAction.type !== "raise" && latestAction.type !== "all_in") {
+    return null;
+  }
+
+  let actorSnapshot: RoomSnapshot;
+
+  try {
+    actorSnapshot = await registry.getRoomSnapshot(slug, actorAccountId);
+  } catch {
+    return null;
+  }
+
+  const heroActionState = actorSnapshot.currentHand?.heroActionState;
+
+  if (!heroActionState?.canAct || heroActionState.hasFolded || heroActionState.isAllIn || heroActionState.callAmount <= 0) {
+    return null;
+  }
+
+  const bigBlind = Math.max(1, currentHand.blindLevel.bigBlind);
+  const potBeforeAction = Math.max(0, currentHand.pot - latestAction.amount);
+  const callAmount = heroActionState.callAmount;
+  const qualifiesByBlind = callAmount >= bigBlind * BIG_RAISE_MIN_CALL_BIG_BLIND_MULTIPLE;
+  const qualifiesByPot = potBeforeAction > 0 && (callAmount / potBeforeAction) >= BIG_RAISE_MIN_CALL_POT_RATIO;
+
+  if (!qualifiesByBlind && !qualifiesByPot) {
+    return null;
+  }
+
+  return {
+    eventKey: `${currentHand.id}:${latestAction.orderIndex}:${latestAction.actorAccountId}`,
+    targetAccountId: latestAction.actorAccountId,
+    emojis: BIG_RAISE_SUGGESTED_EMOJIS,
+    eligibleSenderAccountIds: [actorAccountId],
+    probability,
+  };
+}
+
+function buildBotTankingSuggestedReactionCandidate(
+  snapshot: RoomSnapshot,
+  nowMs: number,
+  probability: number,
+): BotSuggestedReactionCandidate | null {
+  const turnMetrics = buildBotTurnMetrics(snapshot, nowMs);
+
+  if (!turnMetrics || turnMetrics.kind !== "turn" || !turnMetrics.actorAccountId) {
+    return null;
+  }
+
+  const startedAtMs = Date.parse(snapshot.turnState.currentTurnStartedAt!);
+
+  if (Number.isNaN(startedAtMs)) {
+    return null;
+  }
+
+  const qualifies = turnMetrics.isUsingTimeBank || (turnMetrics.isMainLow && (nowMs - startedAtMs) >= TANKING_TRIGGER_MIN_ELAPSED_MS);
+
+  if (!qualifies) {
+    return null;
+  }
+
+  const eligibleSenderAccountIds = getEligibleBotSuggestedReactionSenders(snapshot, turnMetrics.actorAccountId);
+
+  if (eligibleSenderAccountIds.length === 0) {
+    return null;
+  }
+
+  return {
+    eventKey: `${snapshot.currentHand!.id}:tank:${snapshot.turnState.currentTurnStartedAt}:${turnMetrics.actorAccountId}`,
+    targetAccountId: turnMetrics.actorAccountId,
+    emojis: TANKING_SUGGESTED_EMOJIS,
+    eligibleSenderAccountIds,
+    probability,
+  };
+}
+
+function buildBotBigWinSuggestedReactionCandidate(
+  snapshot: RoomSnapshot,
+  nowMs: number,
+  probability: number,
+): BotSuggestedReactionCandidate | null {
+  if (snapshot.currentHand || !snapshot.lastCompletedHand || isBotAllInRunoutActive(snapshot.lastCompletedHand, nowMs)) {
+    return null;
+  }
+
+  const concludedAtMs = Date.parse(snapshot.lastCompletedHand.concludedAt);
+
+  if (Number.isNaN(concludedAtMs) || (nowMs - concludedAtMs) > BIG_WIN_SUGGESTED_MAX_AGE_MS) {
+    return null;
+  }
+
+  const topWinner = snapshot.lastCompletedHand.winners.reduce<NonNullable<RoomSnapshot["lastCompletedHand"]>["winners"][number] | null>((currentTopWinner, winner) => {
+    if (!currentTopWinner || winner.amountWon > currentTopWinner.amountWon) {
+      return winner;
+    }
+
+    return currentTopWinner;
+  }, null);
+
+  if (!topWinner) {
+    return null;
+  }
+
+  const currentBigBlind = Math.max(1, snapshot.blindState.currentLevel?.bigBlind ?? 1);
+  const livePlayerCount = Math.max(2, snapshot.players.filter((player) => player.stack > 0 && !player.isSittingOut).length);
+  const bigWinThreshold = currentBigBlind * livePlayerCount * BIG_WIN_MIN_POT_BIG_BLIND_MULTIPLE_PER_PLAYER;
+
+  if (topWinner.amountWon < bigWinThreshold) {
+    return null;
+  }
+
+  const eligibleSenderAccountIds = getEligibleBotSuggestedReactionSenders(snapshot, topWinner.accountId);
+
+  if (eligibleSenderAccountIds.length === 0) {
+    return null;
+  }
+
+  return {
+    eventKey: `${snapshot.lastCompletedHand.handId}:big_win:${topWinner.accountId}`,
+    targetAccountId: topWinner.accountId,
+    emojis: BIG_WIN_SUGGESTED_EMOJIS,
+    eligibleSenderAccountIds,
+    probability,
+  };
+}
+
+function getEligibleBotSuggestedReactionSenders(snapshot: RoomSnapshot, targetAccountId: string): string[] {
+  return snapshot.players
+    .filter((player) => isBotAccountId(player.accountId) && player.accountId !== targetAccountId && player.stack > 0 && !player.isSittingOut)
+    .map((player) => player.accountId);
+}
+
+function buildBotTurnMetrics(
+  snapshot: RoomSnapshot | null,
+  nowMs: number,
+): null | {
+  actorAccountId: string | null;
+  kind: "turn" | "run-it-twice";
+  isUsingTimeBank: boolean;
+  isMainLow: boolean;
+} {
+  if (!snapshot?.currentHand || !snapshot.turnState.currentTurnStartedAt || snapshot.turnState.turnSeconds === null) {
+    return null;
+  }
+
+  const startedAtMs = Date.parse(snapshot.turnState.currentTurnStartedAt);
+
+  if (Number.isNaN(startedAtMs)) {
+    return null;
+  }
+
+  if (snapshot.currentHand.runItTwicePrompt) {
+    return {
+      actorAccountId: null,
+      kind: "run-it-twice",
+      isUsingTimeBank: false,
+      isMainLow: false,
+    };
+  }
+
+  if (!snapshot.currentHand.actorAccountId) {
+    return null;
+  }
+
+  const elapsedMs = Math.max(0, nowMs - startedAtMs);
+  const mainBudgetMs = snapshot.turnState.turnSeconds * 1000;
+  const actorTimeBankMs = snapshot.turnState.timeBankSeconds === null
+    ? 0
+    : snapshot.turnState.timeBankMsByAccount[snapshot.currentHand.actorAccountId] ?? snapshot.turnState.timeBankSeconds * 1000;
+  const mainRemainingMs = Math.max(0, mainBudgetMs - elapsedMs);
+  const overflowMs = Math.max(0, elapsedMs - mainBudgetMs);
+  const timeBankRemainingMs = Math.max(0, actorTimeBankMs - overflowMs);
+  const timeBankBudgetMs = actorTimeBankMs + overflowMs;
+
+  return {
+    actorAccountId: snapshot.currentHand.actorAccountId,
+    kind: "turn",
+    isUsingTimeBank: mainRemainingMs === 0 && timeBankBudgetMs > 0 && timeBankRemainingMs < timeBankBudgetMs,
+    isMainLow: mainBudgetMs > 0 && mainRemainingMs / mainBudgetMs <= 0.3,
+  };
+}
+
+function isBotAllInRunoutActive(lastCompletedHand: NonNullable<RoomSnapshot["lastCompletedHand"]>, nowMs: number): boolean {
+  const allInRunout = lastCompletedHand.allInRunout;
+  const finalBoards = getBotCompletedHandBoards(lastCompletedHand);
+
+  if (!allInRunout || finalBoards.length === 0) {
+    return false;
+  }
+
+  const totalRevealSteps = finalBoards.reduce((totalCards, board) => totalCards + Math.max(0, board.length - Math.min(allInRunout.startBoardCount, board.length)), 0);
+
+  if (totalRevealSteps === 0 || allInRunout.revealIntervalMs <= 0) {
+    return false;
+  }
+
+  const concludedAtMs = Date.parse(lastCompletedHand.concludedAt);
+
+  if (Number.isNaN(concludedAtMs)) {
+    return false;
+  }
+
+  const revealedSteps = Math.floor(Math.max(0, nowMs - concludedAtMs) / allInRunout.revealIntervalMs);
+  return revealedSteps < totalRevealSteps;
+}
+
+function getBotCompletedHandBoards(lastCompletedHand: NonNullable<RoomSnapshot["lastCompletedHand"]>) {
+  const runoutBoards = lastCompletedHand.allInRunout?.runouts?.map((runout) => runout.board) ?? [];
+  return runoutBoards.length ? runoutBoards : [lastCompletedHand.board];
+}
+
+function normalizeBotSuggestedGestureProbability(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_BOT_SUGGESTED_GESTURE_REACTION_PROBABILITY;
+  }
+
+  return Math.max(0, Math.min(1, value));
+}
+
+function chooseRandomItem<T>(items: readonly T[]): T | null {
+  if (items.length === 0) {
+    return null;
+  }
+
+  return items[Math.floor(Math.random() * items.length)] ?? null;
 }

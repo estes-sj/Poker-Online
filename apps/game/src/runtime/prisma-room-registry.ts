@@ -119,6 +119,7 @@ const CLUB_IMPORT_EMAIL_DOMAIN = "club-import.local";
 const MAX_CLUB_USER_SEARCH_RESULTS = 12;
 const DEFAULT_MAX_BUY_IN_PERCENTAGE = 50;
 const DEFAULT_SUGGESTED_GESTURE_PROMPT_PROBABILITY = 0.5;
+const DEFAULT_BOT_SUGGESTED_GESTURE_REACTION_PROBABILITY = 0.5;
 
 type PrismaClientLike = PrismaClient;
 type PrismaTransactionClient = Omit<PrismaClientLike, "$on" | "$connect" | "$disconnect" | "$use" | "$transaction" | "$extends">;
@@ -1940,6 +1941,10 @@ export class PrismaRoomRegistry implements RoomRegistry {
       input.suggestedGesturePromptProbability,
       "Suggested gesture prompt probability",
     );
+    const botSuggestedGestureReactionProbability = normalizeProbability(
+      input.botSuggestedGestureReactionProbability,
+      "Bot suggested gesture reaction probability",
+    );
     const buyInOptions = normalizeRoomBuyInAdminOptions(runtimeState.table, {
       minBuyInAmount: input.minBuyInAmount,
       maxBuyInRule: input.maxBuyInRule,
@@ -1974,6 +1979,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
       runItTwiceEnabled: input.runItTwiceEnabled,
       suggestedGesturesEnabled: input.suggestedGesturesEnabled,
       suggestedGesturePromptProbability,
+      botSuggestedGestureReactionProbability,
     } satisfies RoomAdminOptionsState;
     const nextRuntimeState: PersistedRoomRuntimeState = {
       ...runtimeState,
@@ -3616,6 +3622,10 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
     runtimeState.adminOptions?.suggestedGesturePromptProbability ?? DEFAULT_SUGGESTED_GESTURE_PROMPT_PROBABILITY,
     "Suggested gesture prompt probability",
   );
+  const botSuggestedGestureReactionProbability = normalizeProbability(
+    runtimeState.adminOptions?.botSuggestedGestureReactionProbability ?? DEFAULT_BOT_SUGGESTED_GESTURE_REACTION_PROBABILITY,
+    "Bot suggested gesture reaction probability",
+  );
   const buyInOptions = normalizeRoomBuyInAdminOptions(runtimeState.table, runtimeState.adminOptions);
 
   return {
@@ -3667,6 +3677,7 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
       runItTwiceEnabled,
       suggestedGesturesEnabled,
       suggestedGesturePromptProbability,
+      botSuggestedGestureReactionProbability,
     },
     pendingSeatRequests: Array.isArray(runtimeState.pendingSeatRequests)
       ? runtimeState.pendingSeatRequests.filter((request) => request && typeof request.id === "string")
@@ -3885,6 +3896,7 @@ function buildLockedRoomSnapshot(runtimeState: PersistedRoomRuntimeState): RoomS
       runItTwiceEnabled: false,
       suggestedGesturesEnabled: true,
       suggestedGesturePromptProbability: DEFAULT_SUGGESTED_GESTURE_PROMPT_PROBABILITY,
+      botSuggestedGestureReactionProbability: DEFAULT_BOT_SUGGESTED_GESTURE_REACTION_PROBABILITY,
     },
     nextHandStartsAt: null,
     handCount: 0,
@@ -4622,6 +4634,7 @@ function buildDefaultRoomAdminOptions(table: TableState, isPubliclyListed = true
     runItTwiceEnabled: table.runItTwiceEnabled,
     suggestedGesturesEnabled: true,
     suggestedGesturePromptProbability: DEFAULT_SUGGESTED_GESTURE_PROMPT_PROBABILITY,
+    botSuggestedGestureReactionProbability: DEFAULT_BOT_SUGGESTED_GESTURE_REACTION_PROBABILITY,
   };
 }
 

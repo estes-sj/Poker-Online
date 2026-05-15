@@ -151,6 +151,7 @@ export interface UpdateRoomAdminOptionsRequest {
   runItTwiceEnabled: boolean;
   suggestedGesturesEnabled: boolean;
   suggestedGesturePromptProbability: number;
+  botSuggestedGestureReactionProbability: number;
 }
 
 export interface RoomManagementAdmin {
@@ -568,6 +569,7 @@ export interface RoomAdminOptionsState {
   runItTwiceEnabled: boolean;
   suggestedGesturesEnabled: boolean;
   suggestedGesturePromptProbability: number;
+  botSuggestedGestureReactionProbability: number;
 }
 
 export interface RoomSeatReaction {

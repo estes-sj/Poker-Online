@@ -282,6 +282,7 @@ export function buildDemoRoomPreset(slug: string): DemoRoomPreset | null {
                 runItTwiceEnabled: false,
                 suggestedGesturesEnabled: true,
                 suggestedGesturePromptProbability: 0.5,
+                botSuggestedGestureReactionProbability: 0.5,
             },
             nextHandStartsAt: null,
             handCount: 48,

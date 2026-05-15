@@ -501,6 +501,7 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
         runItTwiceEnabled: requireBoolean(body.runItTwiceEnabled, "runItTwiceEnabled"),
         suggestedGesturesEnabled: requireBoolean(body.suggestedGesturesEnabled, "suggestedGesturesEnabled"),
         suggestedGesturePromptProbability: requireNumber(body.suggestedGesturePromptProbability, "suggestedGesturePromptProbability"),
+        botSuggestedGestureReactionProbability: requireNumber(body.botSuggestedGestureReactionProbability, "botSuggestedGestureReactionProbability"),
       });
 
       return reply.send(snapshot);
