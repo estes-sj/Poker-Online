@@ -2549,10 +2549,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
         && error.code === "P2002"
       ) {
         const latestSnapshot = await this.getRoomSnapshot(input.slug, input.accountId);
-
-        if (latestSnapshot.currentHand) {
-          return latestSnapshot;
-        }
+        return latestSnapshot;
       }
 
       throw error;
