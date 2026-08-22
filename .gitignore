@@ -12,3 +12,5 @@ prisma/dev.db
 docs/
 certs/
 source/
+config/house-rules.json
+redactions.txt
