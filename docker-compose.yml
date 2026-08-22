@@ -114,10 +114,13 @@ services:
       - .env.example
     environment:
       GAME_INTERNAL_BASE_URL: http://game:4200
+      HOUSE_RULES_CONFIG_PATH: /app/config/house-rules.json
       ROOM_CREATION_ADMIN_ONLY: ${ROOM_CREATION_ADMIN_ONLY:-false}
       ROOM_CREATION_ADMIN_USERNAME: ${ROOM_CREATION_ADMIN_USERNAME:-}
     ports:
       - "3000:3000"
+    volumes:
+      - ./config/house-rules.json:/app/config/house-rules.json:ro
     depends_on:
       api:
         condition: service_started

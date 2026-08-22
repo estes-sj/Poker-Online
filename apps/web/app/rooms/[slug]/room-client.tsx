@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
 import { readStoredBrowserSession, SESSION_STORAGE_EVENT, writeStoredBrowserSession } from "../../lib/browser-session";
-import { HOUSE_RULES_CONFIG } from "../../lib/house-rules-config";
+import type { HouseRulesConfig } from "../../lib/house-rules-config";
 import { buildBrowserHttpUrl, buildBrowserWsUrl, getBrowserApiBaseUrl, getBrowserGameHttpBaseUrl, getBrowserGameWsBaseUrl } from "../../lib/public-service-urls";
 import { evaluateHoldemHand, getCurrentHeroHandLabel } from "./hand-evaluator";
 import {
@@ -157,6 +157,7 @@ interface RoomClientProps {
     initialAccountId?: string;
     demoMode?: boolean;
     demoMediaParticipants?: MediaParticipantState[];
+    houseRulesConfig: HouseRulesConfig;
 }
 
 type ConnectionState = "connecting" | "live" | "disconnected" | "reconnecting" | "demo" | "archived";
@@ -267,6 +268,7 @@ export function RoomClient({
     initialAccountId,
     demoMode = false,
     demoMediaParticipants = [],
+    houseRulesConfig,
 }: RoomClientProps) {
     const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(initialSnapshot);
     const [session, setSession] = useState<SessionState | null>(null);
@@ -1345,7 +1347,7 @@ export function RoomClient({
                 <button className="room-toolbar__pill room-toolbar__pill-button" type="button" onClick={() => setIsEngineInfoOpen(true)}>
                     Info
                 </button>
-                {HOUSE_RULES_CONFIG.visible ? (
+                {houseRulesConfig.visible ? (
                     <button className="room-toolbar__pill room-toolbar__pill-button" type="button" onClick={() => setIsHouseRulesOpen(true)}>
                         House Rules
                     </button>
@@ -1393,7 +1395,7 @@ export function RoomClient({
                     Info
                 </button>
 
-                {HOUSE_RULES_CONFIG.visible ? (
+                {houseRulesConfig.visible ? (
                     <button
                         className="table-menu-cluster__button table-menu-cluster__button--rules"
                         type="button"
@@ -5277,15 +5279,15 @@ export function RoomClient({
                 </div>
             ) : null}
 
-            {HOUSE_RULES_CONFIG.visible && isHouseRulesOpen ? (
+            {houseRulesConfig.visible && isHouseRulesOpen ? (
                 <div className="table-dialog" role="dialog" aria-modal="true" aria-label="House rules">
                     <button className="table-dialog__backdrop" type="button" aria-label="Close house rules" onClick={() => setIsHouseRulesOpen(false)} />
                     <section className="table-dialog__panel table-dialog__panel--wide table-dialog__panel--scrollable">
                         <header className="table-dialog__header">
                             <div>
                                 <span className="table-menu-drawer__eyebrow">House Rules</span>
-                                <h2>{HOUSE_RULES_CONFIG.title}</h2>
-                                <p>Last updated: {HOUSE_RULES_CONFIG.lastUpdated}</p>
+                                <h2>{houseRulesConfig.title}</h2>
+                                <p>Last updated: {houseRulesConfig.lastUpdated}</p>
                             </div>
                             <button className="table-dialog__close" type="button" onClick={() => setIsHouseRulesOpen(false)} aria-label="Close house rules">
                                 ×
@@ -5294,12 +5296,12 @@ export function RoomClient({
 
                         <div className="table-dialog__content table-dialog__content--house-rules">
                             <section className="table-dialog__section table-dialog__section--house-rules-intro">
-                                {HOUSE_RULES_CONFIG.overview.map((paragraph, index) => (
+                                {houseRulesConfig.overview.map((paragraph, index) => (
                                     <p key={index}>{paragraph}</p>
                                 ))}
                             </section>
 
-                            {HOUSE_RULES_CONFIG.sections.map((section) => (
+                            {houseRulesConfig.sections.map((section) => (
                                 <section key={section.title} className="table-dialog__section table-dialog__section--house-rules-card">
                                     <div className="table-dialog__house-rule-heading">
                                         <h3>

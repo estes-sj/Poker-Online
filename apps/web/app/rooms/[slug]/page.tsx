@@ -1,5 +1,6 @@
 import { RoomClient } from "./room-client";
 import { buildDemoRoomPreset } from "./demo-room";
+import { loadHouseRulesConfig } from "../../lib/house-rules-config-server";
 import type { RoomSnapshot } from "./room-types";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,7 @@ export default async function RoomPage({
     const demoPreset = buildDemoRoomPreset(slug);
     const accountId = requestedAccountId ?? demoPreset?.initialAccountId;
     const snapshot = demoPreset?.snapshot ?? await fetchRoomSnapshot(slug, requestedAccountId);
+    const houseRulesConfig = await loadHouseRulesConfig();
 
     return (
         <RoomClient
@@ -27,6 +29,7 @@ export default async function RoomPage({
             initialAccountId={accountId}
             demoMode={Boolean(demoPreset)}
             demoMediaParticipants={demoPreset?.demoMediaParticipants ?? []}
+            houseRulesConfig={houseRulesConfig}
         />
     );
 }
