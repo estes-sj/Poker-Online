@@ -55,4 +55,4 @@ awk \
   }
 ' /etc/livekit-base.yaml > /tmp/livekit.yaml
 
-exec /livekit-server --config /tmp/livekit.yaml --node-ip "${LIVEKIT_NODE_IP:-poker.poker.dev}"
+exec /livekit-server --config /tmp/livekit.yaml --node-ip "${LIVEKIT_NODE_IP:-YOUR_DOMAIN.dev}"

@@ -1,11 +1,13 @@
 import Link from "next/link";
 
+import { getBrandName } from "../../lib/brand";
 import { getRoomCreationPolicy } from "../../lib/room-creation-policy";
 import { AdminClubManager } from "./admin-club-manager";
 
 export const dynamic = "force-dynamic";
 
 export default function AdminClubsPage() {
+    const brandName = getBrandName();
     const roomCreationPolicy = getRoomCreationPolicy();
 
     return (
@@ -13,9 +15,9 @@ export default function AdminClubsPage() {
             <section className="room-header admin-rooms-page__header">
                 <div className="admin-rooms-page__intro">
                     <Link className="hero-brand" href="/">
-                        <img className="hero-brand__mark" src="/poker.svg" alt="Poker Poker logo" />
+                        <img className="hero-brand__mark" src="/poker.svg" alt={`${brandName} logo`} />
                         <span className="hero-brand__text">
-                            <span className="hero-brand__name">Poker Poker</span>
+                            <span className="hero-brand__name">{brandName}</span>
                             <span className="hero-brand__tagline">Admin club controls</span>
                         </span>
                     </Link>

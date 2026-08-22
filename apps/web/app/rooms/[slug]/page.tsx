@@ -1,5 +1,6 @@
 import { RoomClient } from "./room-client";
 import { buildDemoRoomPreset } from "./demo-room";
+import { getBrandName } from "../../lib/brand";
 import { loadHouseRulesConfig } from "../../lib/house-rules-config-server";
 import type { RoomSnapshot } from "./room-types";
 
@@ -21,6 +22,7 @@ export default async function RoomPage({
     const accountId = requestedAccountId ?? demoPreset?.initialAccountId;
     const snapshot = demoPreset?.snapshot ?? await fetchRoomSnapshot(slug, requestedAccountId);
     const houseRulesConfig = await loadHouseRulesConfig();
+    const brandName = getBrandName();
 
     return (
         <RoomClient
@@ -30,6 +32,7 @@ export default async function RoomPage({
             demoMode={Boolean(demoPreset)}
             demoMediaParticipants={demoPreset?.demoMediaParticipants ?? []}
             houseRulesConfig={houseRulesConfig}
+            brandName={brandName}
         />
     );
 }

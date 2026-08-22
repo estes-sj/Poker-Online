@@ -1,10 +1,12 @@
 import Link from "next/link";
 
+import { getBrandName } from "../lib/brand";
 import { fetchClubs } from "../lib/clubs";
 
 export const dynamic = "force-dynamic";
 
 export default async function ClubsPage() {
+    const brandName = getBrandName();
     const clubs = await fetchClubs();
 
     return (
@@ -12,9 +14,9 @@ export default async function ClubsPage() {
             <section className="room-header clubs-page__header">
                 <div className="clubs-page__intro">
                     <Link className="hero-brand" href="/">
-                        <img className="hero-brand__mark" src="/poker.svg" alt="Poker Poker logo" />
+                        <img className="hero-brand__mark" src="/poker.svg" alt={`${brandName} logo`} />
                         <span className="hero-brand__text">
-                            <span className="hero-brand__name">Poker Poker</span>
+                            <span className="hero-brand__name">{brandName}</span>
                             <span className="hero-brand__tagline">Club leaderboards</span>
                         </span>
                     </Link>

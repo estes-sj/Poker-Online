@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Panel, SectionHeading } from "@poker/ui";
 
 import { ControlDesk } from "./components/control-desk";
+import { getBrandName } from "./lib/brand";
 import { getRoomCreationPolicy } from "./lib/room-creation-policy";
 
 export const dynamic = "force-dynamic";
@@ -86,6 +87,7 @@ const productNotes = [
 ];
 
 export default function HomePage() {
+    const brandName = getBrandName();
     const roomCreationPolicy = getRoomCreationPolicy();
 
     return (
@@ -93,15 +95,15 @@ export default function HomePage() {
             <section className="landing-hero">
                 <div className="hero__copy landing-hero__copy">
                     <Link className="hero-brand" href="/">
-                        <img className="hero-brand__mark" src="/poker.svg" alt="Poker Poker logo" />
+                        <img className="hero-brand__mark" src="/poker.svg" alt={`${brandName} logo`} />
                         <span className="hero-brand__text">
-                            <span className="hero-brand__name">Poker Poker</span>
+                            <span className="hero-brand__name">{brandName}</span>
                             <span className="hero-brand__tagline">Online poker for real home games</span>
                         </span>
                     </Link>
                     <h1>Customizable poker nights with live video and audio.</h1>
                     <p className="landing-hero__lede">
-                        Poker Poker includes
+                        {brandName} includes
                         voice and camera, rebuys, blind controls, hand flow, session ledger, and archived replays. All self-hosted.
                     </p>
                     <div className="hero__actions">

@@ -32,7 +32,7 @@ services:
       - /bin/sh
       - /etc/livekit-entrypoint.sh
     environment:
-      LIVEKIT_NODE_IP: ${LIVEKIT_NODE_IP:-poker.poker.dev}
+      LIVEKIT_NODE_IP: ${LIVEKIT_NODE_IP:-YOUR_DOMAIN.dev}
       LIVEKIT_TURN_TLS_PORT: ${LIVEKIT_TURN_TLS_PORT:-}
       LIVEKIT_TURN_DOMAIN: ${LIVEKIT_TURN_DOMAIN:-}
       LIVEKIT_TURN_EXTERNAL_TLS: ${LIVEKIT_TURN_EXTERNAL_TLS:-}
@@ -115,6 +115,7 @@ services:
     environment:
       GAME_INTERNAL_BASE_URL: http://game:4200
       HOUSE_RULES_CONFIG_PATH: /app/config/house-rules.json
+      POKER_BRAND_NAME: ${POKER_BRAND_NAME:-Poker}
       ROOM_CREATION_ADMIN_ONLY: ${ROOM_CREATION_ADMIN_ONLY:-false}
       ROOM_CREATION_ADMIN_USERNAME: ${ROOM_CREATION_ADMIN_USERNAME:-}
     ports:

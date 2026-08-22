@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { getBrandName } from "../lib/brand";
+
 export const dynamic = "force-dynamic";
 
 interface PublicRoomSummary {
@@ -20,6 +22,7 @@ interface PublicRoomSummary {
 }
 
 export default async function RoomsPage() {
+    const brandName = getBrandName();
     const rooms = await fetchRooms();
     const liveRooms = rooms.filter((room) => room.status !== "archived");
     const archivedRooms = rooms.filter((room) => room.status === "archived");
@@ -29,9 +32,9 @@ export default async function RoomsPage() {
             <section className="room-header rooms-page__header">
                 <div className="rooms-page__intro">
                     <Link className="hero-brand" href="/">
-                        <img className="hero-brand__mark" src="/poker.svg" alt="Poker Poker logo" />
+                        <img className="hero-brand__mark" src="/poker.svg" alt={`${brandName} logo`} />
                         <span className="hero-brand__text">
-                            <span className="hero-brand__name">Poker Poker</span>
+                            <span className="hero-brand__name">{brandName}</span>
                             <span className="hero-brand__tagline">Live tables and archived sessions</span>
                         </span>
                     </Link>

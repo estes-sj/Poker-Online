@@ -158,6 +158,7 @@ interface RoomClientProps {
     demoMode?: boolean;
     demoMediaParticipants?: MediaParticipantState[];
     houseRulesConfig: HouseRulesConfig;
+    brandName: string;
 }
 
 type ConnectionState = "connecting" | "live" | "disconnected" | "reconnecting" | "demo" | "archived";
@@ -269,6 +270,7 @@ export function RoomClient({
     demoMode = false,
     demoMediaParticipants = [],
     houseRulesConfig,
+    brandName,
 }: RoomClientProps) {
     const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(initialSnapshot);
     const [session, setSession] = useState<SessionState | null>(null);
@@ -4406,8 +4408,8 @@ export function RoomClient({
                 <header className="room-toolbar room-toolbar--compact">
                     <div>
                         <Link className="room-toolbar__brand" href="/">
-                            <img className="room-toolbar__brand-mark" src="/poker.svg" alt="Poker Poker logo" />
-                            <span>Poker Poker Table</span>
+                            <img className="room-toolbar__brand-mark" src="/poker.svg" alt={`${brandName} logo`} />
+                            <span>{brandName} Table</span>
                         </Link>
                         <h1 className="room-toolbar__title">{snapshot?.name ?? `Room ${slug}`}</h1>
                     </div>

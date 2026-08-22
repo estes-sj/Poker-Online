@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { getBrandName } from "../../lib/brand";
 import { fetchClub } from "../../lib/clubs";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +13,7 @@ export default async function ClubDetailPage({
     params: Promise<{ slug: string }>;
     searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+    const brandName = getBrandName();
     const { slug } = await params;
     const resolvedSearchParams = await searchParams;
     const club = await fetchClub(slug);
@@ -32,9 +34,9 @@ export default async function ClubDetailPage({
             <section className="room-header club-detail-page__header">
                 <div className="club-detail-page__intro">
                     <Link className="hero-brand" href="/">
-                        <img className="hero-brand__mark" src="/poker.svg" alt="Poker Poker logo" />
+                        <img className="hero-brand__mark" src="/poker.svg" alt={`${brandName} logo`} />
                         <span className="hero-brand__text">
-                            <span className="hero-brand__name">Poker Poker</span>
+                            <span className="hero-brand__name">{brandName}</span>
                             <span className="hero-brand__tagline">Club leaderboard</span>
                         </span>
                     </Link>

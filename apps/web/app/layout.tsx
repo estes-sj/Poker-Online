@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { DM_Sans, Fraunces } from "next/font/google";
 
+import { getBrandName } from "./lib/brand";
 import "./globals.css";
 import "./room-foundation.css";
 import "./room-play-shell.css";
@@ -17,15 +18,19 @@ const display = Fraunces({
     variable: "--font-display",
 });
 
-export const metadata: Metadata = {
-    title: "Poker Poker",
-    description: "Private Texas Hold'em tables with built-in voice, video, chat, and table-owner controls.",
-    icons: {
-        icon: "/poker.svg",
-        shortcut: "/poker.svg",
-        apple: "/poker.svg",
-    },
-};
+export function generateMetadata(): Metadata {
+    const brandName = getBrandName();
+
+    return {
+        title: brandName,
+        description: "Private Texas Hold'em tables with built-in voice, video, chat, and table-owner controls.",
+        icons: {
+            icon: "/poker.svg",
+            shortcut: "/poker.svg",
+            apple: "/poker.svg",
+        },
+    };
+}
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
     return (
