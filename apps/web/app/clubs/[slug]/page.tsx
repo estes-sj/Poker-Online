@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { getBrandName } from "../../lib/brand";
+import { PageHeader, SiteHeader } from "../../components/site-header";
 import { fetchClub } from "../../lib/clubs";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +13,6 @@ export default async function ClubDetailPage({
     params: Promise<{ slug: string }>;
     searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-    const brandName = getBrandName();
     const { slug } = await params;
     const resolvedSearchParams = await searchParams;
     const club = await fetchClub(slug);
@@ -30,169 +29,151 @@ export default async function ClubDetailPage({
     const selectedGame = club.gameHistory.find((game) => game.gameId === requestedGameId) ?? club.gameHistory[0] ?? null;
 
     return (
-        <main className="landing-shell club-detail-page">
-            <section className="room-header club-detail-page__header">
-                <div className="club-detail-page__intro">
-                    <Link className="hero-brand" href="/">
-                        <img className="hero-brand__mark" src="/poker.svg" alt={`${brandName} logo`} />
-                        <span className="hero-brand__text">
-                            <span className="hero-brand__name">{brandName}</span>
-                            <span className="hero-brand__tagline">Club leaderboard</span>
-                        </span>
-                    </Link>
-                    <span className="eyebrow">{club.memberCount} members</span>
-                    <h1>{club.name}</h1>
-                    <p>Managed by {club.ownerUsername}. Winnings from linked club rooms accumulate here over time.</p>
-                </div>
+        <div className="site">
+            <SiteHeader current="clubs" />
+            <main className="site-main">
+                <PageHeader
+                    meta={<Link className="breadcrumb" href="/clubs">Clubs</Link>}
+                    title={club.name}
+                    description={`Run by ${club.ownerUsername}. Updated ${formatTimestamp(club.updatedAt)}.`}
+                />
 
-                <div className="club-detail-page__actions">
-                    <Link className="button button--secondary" href="/clubs">
-                        All clubs
-                    </Link>
-                    <Link className="button button--secondary" href="/rooms">
-                        Browse rooms
-                    </Link>
-                </div>
-            </section>
-
-            <section className="club-detail-page__metrics">
-                <article className="ui-panel club-detail-page__metric">
-                    <strong>{club.memberCount}</strong>
-                    <span>Members</span>
-                </article>
-                <article className="ui-panel club-detail-page__metric">
-                    <strong>{club.linkedRoomCount}</strong>
-                    <span>Linked rooms</span>
-                </article>
-                <article className="ui-panel club-detail-page__metric">
-                    <strong>{club.leaderboard.length}</strong>
-                    <span>Leaderboard entries</span>
-                </article>
-                <article className="ui-panel club-detail-page__metric">
-                    <strong>{club.gameHistory.length}</strong>
-                    <span>Recorded games</span>
-                </article>
-            </section>
-
-            <section className="ui-panel club-leaderboard">
-                <header className="club-leaderboard__header">
+                <dl className="stat-strip">
                     <div>
-                        <span className="ui-panel__eyebrow">Leaderboard</span>
-                        <h2 className="ui-panel__title">All-time winnings</h2>
+                        <dt>Members</dt>
+                        <dd>{club.memberCount}</dd>
                     </div>
-                    <p className="muted-copy">Updated {formatTimestamp(club.updatedAt)}</p>
-                </header>
+                    <div>
+                        <dt>Linked tables</dt>
+                        <dd>{club.linkedRoomCount}</dd>
+                    </div>
+                    <div>
+                        <dt>Ranked players</dt>
+                        <dd>{club.leaderboard.length}</dd>
+                    </div>
+                    <div>
+                        <dt>Games recorded</dt>
+                        <dd>{club.gameHistory.length}</dd>
+                    </div>
+                </dl>
 
-                {club.leaderboard.length ? (
-                    <div className="club-leaderboard__table-wrap">
-                        <table className="club-leaderboard__table">
-                            <thead>
-                                <tr>
-                                    <th scope="col">Rank</th>
-                                    <th scope="col">Player</th>
-                                    <th scope="col">Profit</th>
-                                    <th scope="col">Games</th>
-                                    <th scope="col">Type</th>
-                                    <th scope="col">Updated</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {club.leaderboard.map((entry, index) => (
-                                    <tr key={entry.entryKey}>
-                                        <td>{index + 1}</td>
-                                        <td>{entry.displayName ?? entry.username}</td>
-                                        <td className={entry.totalProfit >= 0 ? "club-leaderboard__profit club-leaderboard__profit--positive" : "club-leaderboard__profit club-leaderboard__profit--negative"}>
-                                            {formatProfit(entry.totalProfit)}
-                                        </td>
-                                        <td>{entry.gamesPlayed}</td>
-                                        <td>{entry.isBalancingEntry ? "Balance" : entry.isDerivedFromRecordedGames ? "Recorded" : entry.isSynthetic ? "Imported" : "Account"}</td>
-                                        <td>{formatTimestamp(entry.updatedAt)}</td>
+                <section className="page-section">
+                    <div className="section-header">
+                        <h2>Leaderboard</h2>
+                        <span className="section-header__note">All-time net results</span>
+                    </div>
+
+                    {club.leaderboard.length ? (
+                        <div className="data-table-wrap">
+                            <table className="data-table">
+                                <thead>
+                                    <tr>
+                                        <th scope="col" className="data-table__rank">#</th>
+                                        <th scope="col">Player</th>
+                                        <th scope="col" className="data-table__num">Games</th>
+                                        <th scope="col">Source</th>
+                                        <th scope="col" className="data-table__num">Net</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                ) : (
-                    <p className="muted-copy">No leaderboard entries have been recorded for this club yet.</p>
-                )}
-            </section>
-
-            <section className="ui-panel club-game-history">
-                <header className="club-game-history__header">
-                    <div>
-                        <span className="ui-panel__eyebrow">Game history</span>
-                        <h2 className="ui-panel__title">Per-game ledgers</h2>
-                    </div>
-                    <p className="muted-copy">Recorded sessions are grouped by game date rather than individual poker hands.</p>
-                </header>
-
-                {club.gameHistory.length ? (
-                    <div className="club-game-history__workspace">
-                        <div className="club-game-history__pagination">
-                            {club.gameHistory.map((game) => (
-                                <Link
-                                    className={[
-                                        "club-game-history__page",
-                                        game.gameId === selectedGame?.gameId ? "club-game-history__page--active" : "",
-                                    ].filter(Boolean).join(" ")}
-                                    key={game.gameId}
-                                    href={`/clubs/${club.slug}?game=${game.gameId}`}
-                                    scroll={false}
-                                >
-                                    <strong>{game.label}</strong>
-                                    <span>{formatTimestamp(game.playedAt)}</span>
-                                </Link>
-                            ))}
+                                </thead>
+                                <tbody>
+                                    {club.leaderboard.map((entry, index) => (
+                                        <tr key={entry.entryKey}>
+                                            <td className="data-table__rank">{index + 1}</td>
+                                            <td className="data-table__strong">{entry.displayName ?? entry.username}</td>
+                                            <td className="data-table__num">{entry.gamesPlayed}</td>
+                                            <td className="data-table__muted">{entry.isBalancingEntry ? "Balance" : entry.isDerivedFromRecordedGames ? "Recorded" : entry.isSynthetic ? "Imported" : "Account"}</td>
+                                            <td className={`data-table__num ${profitClass(entry.totalProfit)}`}>
+                                                {formatProfit(entry.totalProfit)}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
+                    ) : (
+                        <p className="empty-state">No results recorded for this club yet.</p>
+                    )}
+                </section>
 
-                        {selectedGame ? (
-                            <article className="club-game-card" key={selectedGame.gameId}>
-                                <header className="club-game-card__header">
-                                    <div>
-                                        <strong>{formatTimestamp(selectedGame.playedAt)}</strong>
-                                        <p className="muted-copy">{selectedGame.label}</p>
-                                    </div>
-                                    <div className="club-game-card__meta">
-                                        <span>{selectedGame.entryCount} players</span>
-                                        <span>Recorded {formatTimestamp(selectedGame.importedAt)}</span>
-                                    </div>
-                                </header>
-
-                                <div className="club-game-card__table-wrap">
-                                    <table className="club-game-card__table">
-                                        <thead>
-                                            <tr>
-                                                <th scope="col">Player</th>
-                                                <th scope="col">Hours</th>
-                                                <th scope="col">Buy-in</th>
-                                                <th scope="col">Cash-out</th>
-                                                <th scope="col">Result</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {selectedGame.ledger.map((entry) => (
-                                                <tr key={`${selectedGame.gameId}-${entry.accountId}`}>
-                                                    <td>{entry.displayName}</td>
-                                                    <td>{entry.hoursPlayed ?? "-"}</td>
-                                                    <td>{formatAmount(entry.totalBuyIn)}</td>
-                                                    <td>{formatAmount(entry.cashOut)}</td>
-                                                    <td className={entry.netResult >= 0 ? "club-game-card__result club-game-card__result--positive" : "club-game-card__result club-game-card__result--negative"}>
-                                                        {formatProfit(entry.netResult)}
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </article>
-                        ) : null}
+                <section className="page-section">
+                    <div className="section-header">
+                        <h2>Game history</h2>
+                        <span className="section-header__note">One ledger per game night</span>
                     </div>
-                ) : (
-                    <p className="muted-copy">No per-game ledgers have been imported for this club yet.</p>
-                )}
-            </section>
-        </main>
+
+                    {club.gameHistory.length ? (
+                        <div className="split-view">
+                            <nav className="split-view__nav" aria-label="Recorded games">
+                                {club.gameHistory.map((game) => {
+                                    const isActive = game.gameId === selectedGame?.gameId;
+
+                                    return (
+                                        <Link
+                                            className={isActive ? "nav-item nav-item--active" : "nav-item"}
+                                            key={game.gameId}
+                                            href={`/clubs/${club.slug}?game=${game.gameId}`}
+                                            scroll={false}
+                                            aria-current={isActive ? "page" : undefined}
+                                        >
+                                            <span className="nav-item__title">{game.label}</span>
+                                            <span className="nav-item__hint">{formatTimestamp(game.playedAt)}</span>
+                                        </Link>
+                                    );
+                                })}
+                            </nav>
+
+                            {selectedGame ? (
+                                <div className="split-view__detail" key={selectedGame.gameId}>
+                                    <div className="split-view__header">
+                                        <h3>{selectedGame.label}</h3>
+                                        <p>
+                                            Played {formatTimestamp(selectedGame.playedAt)} · {selectedGame.entryCount} players
+                                        </p>
+                                    </div>
+                                    <div className="data-table-wrap">
+                                        <table className="data-table">
+                                            <thead>
+                                                <tr>
+                                                    <th scope="col">Player</th>
+                                                    <th scope="col" className="data-table__num">Hours</th>
+                                                    <th scope="col" className="data-table__num">Buy-in</th>
+                                                    <th scope="col" className="data-table__num">Cash-out</th>
+                                                    <th scope="col" className="data-table__num">Net</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {selectedGame.ledger.map((entry) => (
+                                                    <tr key={`${selectedGame.gameId}-${entry.accountId}`}>
+                                                        <td className="data-table__strong">{entry.displayName}</td>
+                                                        <td className="data-table__num data-table__muted">{entry.hoursPlayed ?? "–"}</td>
+                                                        <td className="data-table__num">{formatAmount(entry.totalBuyIn)}</td>
+                                                        <td className="data-table__num">{formatAmount(entry.cashOut)}</td>
+                                                        <td className={`data-table__num ${profitClass(entry.netResult)}`}>
+                                                            {formatProfit(entry.netResult)}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : (
+                        <p className="empty-state">No game ledgers recorded for this club yet.</p>
+                    )}
+                </section>
+            </main>
+        </div>
     );
+}
+
+function profitClass(value: number): string {
+    if (value > 0) {
+        return "value--positive";
+    }
+
+    return value < 0 ? "value--negative" : "";
 }
 
 function formatProfit(value: number): string {

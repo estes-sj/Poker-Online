@@ -775,25 +775,8 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
 
     return (
         <section className="ui-panel admin-club-manager__panel">
-            <header className="admin-club-manager__header">
-                <div>
-                    <span className="ui-panel__eyebrow">Club administration</span>
-                    <h2 className="ui-panel__title">Leaderboards, memberships, and recorded games</h2>
-                </div>
-                <div className="status-card__actions">
-                    <button className="button button--secondary" type="button" onClick={() => session ? void loadClubs(session.token) : undefined} disabled={isRefreshing || isMutating}>
-                        {isRefreshing ? "Refreshing..." : "Refresh"}
-                    </button>
-                </div>
-            </header>
-
             <div className="ui-panel__body admin-club-manager__content">
                 <div className="admin-club-manager__toolbar">
-                    <div className="admin-room-manager__toolbar-copy">
-                        <strong>Clubs use the existing room ledger data.</strong>
-                        <p className="muted-copy">Tie a room to a club and every settled hand updates that club's all-time ranking. Recorded games can be added and edited here.</p>
-                    </div>
-
                     <form className="admin-club-manager__create-form" onSubmit={handleCreateClub}>
                         <input
                             className="control-input"
@@ -801,11 +784,15 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                             value={createClubName}
                             onChange={(event) => setCreateClubName(event.target.value)}
                             placeholder="New club name"
+                            aria-label="New club name"
                         />
                         <button className="button button--primary" type="submit" disabled={isCreatingClub}>
                             {isCreatingClub ? "Creating..." : "Create club"}
                         </button>
                     </form>
+                    <button className="button button--secondary" type="button" onClick={() => session ? void loadClubs(session.token) : undefined} disabled={isRefreshing || isMutating}>
+                        {isRefreshing ? "Refreshing..." : "Refresh"}
+                    </button>
                 </div>
 
                 {error ? <p className="admin-room-manager__feedback">{error}</p> : null}
@@ -938,23 +925,29 @@ export function AdminClubManager({ roomCreationPolicy }: AdminClubManagerProps) 
                                             placeholder="Imported player name"
                                         />
                                         <div className="control-grid">
-                                            <input
-                                                className="control-input"
-                                                type="number"
-                                                step={1}
-                                                value={importTotalProfit}
-                                                onChange={(event) => setImportTotalProfit(event.target.value)}
-                                                placeholder="Total profit"
-                                            />
-                                            <input
-                                                className="control-input"
-                                                type="number"
-                                                min={0}
-                                                step={1}
-                                                value={importGamesPlayed}
-                                                onChange={(event) => setImportGamesPlayed(event.target.value)}
-                                                placeholder="Games played"
-                                            />
+                                            <label className="admin-club-manager__field">
+                                                <span>Total profit</span>
+                                                <input
+                                                    className="control-input"
+                                                    type="number"
+                                                    step={1}
+                                                    value={importTotalProfit}
+                                                    onChange={(event) => setImportTotalProfit(event.target.value)}
+                                                    placeholder="Total profit"
+                                                />
+                                            </label>
+                                            <label className="admin-club-manager__field">
+                                                <span>Games played</span>
+                                                <input
+                                                    className="control-input"
+                                                    type="number"
+                                                    min={0}
+                                                    step={1}
+                                                    value={importGamesPlayed}
+                                                    onChange={(event) => setImportGamesPlayed(event.target.value)}
+                                                    placeholder="Games played"
+                                                />
+                                            </label>
                                         </div>
                                         <button className="button button--primary" type="submit" disabled={isMutating}>
                                             {isMutating ? "Saving..." : "Create imported entry"}

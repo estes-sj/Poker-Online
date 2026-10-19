@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { getBrandName } from "../lib/brand";
+import { PageHeader, SiteHeader } from "../components/site-header";
 
 export const dynamic = "force-dynamic";
 
@@ -22,140 +22,100 @@ interface PublicRoomSummary {
 }
 
 export default async function RoomsPage() {
-    const brandName = getBrandName();
     const rooms = await fetchRooms();
     const liveRooms = rooms.filter((room) => room.status !== "archived");
     const archivedRooms = rooms.filter((room) => room.status === "archived");
 
     return (
-        <main className="landing-shell rooms-page">
-            <section className="room-header rooms-page__header">
-                <div className="rooms-page__intro">
-                    <Link className="hero-brand" href="/">
-                        <img className="hero-brand__mark" src="/poker.svg" alt={`${brandName} logo`} />
-                        <span className="hero-brand__text">
-                            <span className="hero-brand__name">{brandName}</span>
-                            <span className="hero-brand__tagline">Live tables and archived sessions</span>
-                        </span>
-                    </Link>
-                    <h1>Browse tables and archives</h1>
-                    <p>Open a live table, or review an archived session and replay any preserved hand on the felt.</p>
-                </div>
+        <div className="site">
+            <SiteHeader current="rooms" />
+            <main className="site-main">
+                <PageHeader
+                    title="Tables"
+                    description="Join a live table, or open an archived session to review its ledger and replay hands."
+                />
 
-                <div className="rooms-page__actions">
-                    <Link className="button button--secondary" href="/">
-                        Return home
-                    </Link>
-                </div>
-            </section>
-
-            <section className="rooms-page__section">
-                <div className="rooms-page__section-header">
-                    <div>
-                        <span className="eyebrow">Live</span>
-                        <h2>Open tables</h2>
+                <section className="page-section">
+                    <div className="section-header">
+                        <h2>Live</h2>
+                        <span className="count">{liveRooms.length}</span>
                     </div>
-                    <span className="chip-pill">{liveRooms.length}</span>
-                </div>
+                    {liveRooms.length ? (
+                        <ul className="row-list">
+                            {liveRooms.map((room) => (
+                                <RoomRow key={room.roomId} room={room} />
+                            ))}
+                        </ul>
+                    ) : (
+                        <p className="empty-state">No live tables right now.</p>
+                    )}
+                </section>
 
-                {liveRooms.length ? (
-                    <div className="rooms-grid">
-                        {liveRooms.map((room) => (
-                            <RoomCard key={room.roomId} room={room} />
-                        ))}
+                <section className="page-section">
+                    <div className="section-header">
+                        <h2>Archived</h2>
+                        <span className="count">{archivedRooms.length}</span>
                     </div>
-                ) : (
-                    <p className="muted-copy rooms-page__empty">No live tables are open right now.</p>
-                )}
-            </section>
-
-            <section className="rooms-page__section">
-                <div className="rooms-page__section-header">
-                    <div>
-                        <span className="eyebrow">Archive</span>
-                        <h2>Archived sessions</h2>
-                    </div>
-                    <span className="chip-pill">{archivedRooms.length}</span>
-                </div>
-
-                {archivedRooms.length ? (
-                    <div className="rooms-archive-table-wrap">
-                        <table className="rooms-archive-table">
-                            <thead>
-                                <tr>
-                                    <th scope="col">Room</th>
-                                    <th scope="col">Admin</th>
-                                    <th scope="col">Seats</th>
-                                    <th scope="col">Hands</th>
-                                    <th scope="col">Archived</th>
-                                    <th scope="col">Access</th>
-                                    <th scope="col" aria-label="Open archive" />
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {archivedRooms.map((room) => (
-                                    <tr key={room.roomId}>
-                                        <td>
-                                            <div className="rooms-archive-table__room">
-                                                <strong>{room.name}</strong>
-                                                {room.clubName ? <span>Club: {room.clubName}</span> : null}
-                                                <span>{room.slug}</span>
-                                            </div>
-                                        </td>
-                                        <td>{room.adminUsername}</td>
-                                        <td>{room.seatedPlayerCount}/{room.maxPlayers}</td>
-                                        <td>{room.handCount}</td>
-                                        <td>{formatTimestamp(room.archivedAt ?? room.lastActivityAt)}</td>
-                                        <td>{room.passwordProtected ? "Password" : room.visibility === "club" ? "Club" : "Private"}</td>
-                                        <td className="rooms-archive-table__action-cell">
-                                            <Link className="button button--primary" href={`/rooms/${room.slug}`}>
-                                                Open archive
-                                            </Link>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                ) : (
-                    <p className="muted-copy rooms-page__empty">Archived tables will appear here after the admin archives a finished session.</p>
-                )}
-            </section>
-        </main>
+                    {archivedRooms.length ? (
+                        <ul className="row-list">
+                            {archivedRooms.map((room) => (
+                                <RoomRow key={room.roomId} room={room} />
+                            ))}
+                        </ul>
+                    ) : (
+                        <p className="empty-state">Archived sessions appear here after the host archives a table.</p>
+                    )}
+                </section>
+            </main>
+        </div>
     );
 }
 
-function RoomCard({ room }: { room: PublicRoomSummary }) {
+function RoomRow({ room }: { room: PublicRoomSummary }) {
+    const isArchived = room.status === "archived";
+    const access = room.passwordProtected ? "Password" : room.visibility === "club" ? "Club" : "Open";
+
     return (
-        <article className={["room-card", room.status === "archived" ? "room-card--archived" : ""].filter(Boolean).join(" ")}>
-            <div className="room-card__header">
-                <div>
-                    <strong>{room.name}</strong>
-                    <p>{room.adminUsername}</p>
+        <li className="row-list__item">
+            <div className="row-list__main">
+                <div className="row-list__title">
+                    <Link className="row-list__link" href={`/rooms/${room.slug}`}>{room.name}</Link>
+                    {isArchived ? null : <StatusBadge status={room.status} />}
                 </div>
-                <span className="chip-pill">{formatRoomStatus(room.status)}</span>
+                <div className="row-list__meta">
+                    <span>Host {room.adminUsername}</span>
+                    {room.clubName ? <span>{room.clubName}</span> : null}
+                    <span>{access}</span>
+                    <span>
+                        {isArchived
+                            ? `Archived ${formatTimestamp(room.archivedAt ?? room.lastActivityAt)}`
+                            : `Active ${formatTimestamp(room.lastActivityAt)}`}
+                    </span>
+                </div>
             </div>
-
-            <div className="room-card__meta">
-                <span>{room.seatedPlayerCount}/{room.maxPlayers} seated</span>
-                <span>{room.passwordProtected ? "Password" : room.visibility === "club" ? "Club" : "Private"}</span>
-                {room.clubName ? <span>Club: {room.clubName}</span> : null}
-                <span>{room.handCount} hands</span>
-            </div>
-
-            <p className="room-card__timestamp">
-                {room.archivedAt
-                    ? `Archived ${formatTimestamp(room.archivedAt)}`
-                    : `Last active ${formatTimestamp(room.lastActivityAt)}`}
-            </p>
-
-            <div className="room-card__actions">
-                <Link className="button button--primary" href={`/rooms/${room.slug}`}>
-                    {room.status === "archived" ? "Open archive" : "Open table"}
+            <dl className="row-list__stats">
+                <div>
+                    <dt>Seated</dt>
+                    <dd>{room.seatedPlayerCount}/{room.maxPlayers}</dd>
+                </div>
+                <div>
+                    <dt>Hands</dt>
+                    <dd>{room.handCount}</dd>
+                </div>
+            </dl>
+            <div className="row-list__action">
+                <Link className={isArchived ? "button button--secondary button--small" : "button button--primary button--small"} href={`/rooms/${room.slug}`}>
+                    {isArchived ? "Review" : "Join"}
                 </Link>
             </div>
-        </article>
+        </li>
     );
+}
+
+function StatusBadge({ status }: { status: string }) {
+    const label = formatRoomStatus(status);
+
+    return <span className={`status-badge status-badge--${label.toLowerCase()}`}>{label}</span>;
 }
 
 async function fetchRooms(): Promise<PublicRoomSummary[]> {

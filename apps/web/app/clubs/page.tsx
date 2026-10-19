@@ -1,73 +1,61 @@
 import Link from "next/link";
 
-import { getBrandName } from "../lib/brand";
+import { PageHeader, SiteHeader } from "../components/site-header";
 import { fetchClubs } from "../lib/clubs";
 
 export const dynamic = "force-dynamic";
 
 export default async function ClubsPage() {
-    const brandName = getBrandName();
     const clubs = await fetchClubs();
 
     return (
-        <main className="landing-shell clubs-page">
-            <section className="room-header clubs-page__header">
-                <div className="clubs-page__intro">
-                    <Link className="hero-brand" href="/">
-                        <img className="hero-brand__mark" src="/poker.svg" alt={`${brandName} logo`} />
-                        <span className="hero-brand__text">
-                            <span className="hero-brand__name">{brandName}</span>
-                            <span className="hero-brand__tagline">Club leaderboards</span>
-                        </span>
-                    </Link>
-                    <span className="eyebrow">Clubs</span>
-                    <h1>Track long-run winners across recurring home games.</h1>
-                    <p>Club leaderboards roll up winnings from any room tied to that club. Open one to browse the current standings.</p>
-                </div>
+        <div className="site">
+            <SiteHeader current="clubs" />
+            <main className="site-main">
+                <PageHeader
+                    title="Clubs"
+                    description="Clubs track results across recurring games. Winnings from every linked table add up on the club leaderboard."
+                />
 
-                <div className="clubs-page__actions">
-                    <Link className="button button--secondary" href="/rooms">
-                        Browse rooms
-                    </Link>
-                    <Link className="button button--secondary" href="/">
-                        Return home
-                    </Link>
-                </div>
-            </section>
-
-            {clubs.length ? (
-                <section className="clubs-grid">
-                    {clubs.map((club) => (
-                        <article key={club.clubId} className="room-card club-card">
-                            <div className="room-card__header">
-                                <div>
-                                    <strong>{club.name}</strong>
-                                    <p>{club.ownerUsername}</p>
-                                </div>
-                                <span className="chip-pill">{club.memberCount} members</span>
-                            </div>
-
-                            <div className="room-card__meta">
-                                <span>{club.linkedRoomCount} linked rooms</span>
-                                <span>Updated {formatTimestamp(club.updatedAt)}</span>
-                            </div>
-
-                            <p className="room-card__timestamp">Created {formatTimestamp(club.createdAt)}</p>
-
-                            <div className="room-card__actions">
-                                <Link className="button button--primary" href={`/clubs/${club.slug}`}>
-                                    Open leaderboard
-                                </Link>
-                            </div>
-                        </article>
-                    ))}
+                <section className="page-section">
+                    {clubs.length ? (
+                        <ul className="row-list">
+                            {clubs.map((club) => (
+                                <li key={club.clubId} className="row-list__item">
+                                    <div className="row-list__main">
+                                        <div className="row-list__title">
+                                            <Link className="row-list__link" href={`/clubs/${club.slug}`}>{club.name}</Link>
+                                        </div>
+                                        <div className="row-list__meta">
+                                            <span>Run by {club.ownerUsername}</span>
+                                            <span>Since {formatTimestamp(club.createdAt)}</span>
+                                            <span>Updated {formatTimestamp(club.updatedAt)}</span>
+                                        </div>
+                                    </div>
+                                    <dl className="row-list__stats">
+                                        <div>
+                                            <dt>Members</dt>
+                                            <dd>{club.memberCount}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>Tables</dt>
+                                            <dd>{club.linkedRoomCount}</dd>
+                                        </div>
+                                    </dl>
+                                    <div className="row-list__action">
+                                        <Link className="button button--secondary button--small" href={`/clubs/${club.slug}`}>
+                                            Leaderboard
+                                        </Link>
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <p className="empty-state">No clubs yet.</p>
+                    )}
                 </section>
-            ) : (
-                <section className="ui-panel clubs-page__empty-state">
-                    <p className="muted-copy">No clubs have been created yet.</p>
-                </section>
-            )}
-        </main>
+            </main>
+        </div>
     );
 }
 
