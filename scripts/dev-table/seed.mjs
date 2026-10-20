@@ -4,6 +4,7 @@
 // localStorage["river-club-session"].
 //
 //   node scripts/dev-table/seed.mjs [botCount=7] [slug]
+// SPECTATE=1 leaves the hero standing (open seats visible) and does not start a hand.
 const API = process.env.DEV_API_URL ?? "http://localhost:14100";
 const GAME = process.env.DEV_GAME_URL ?? "http://localhost:14200";
 const WEB = process.env.DEV_WEB_URL ?? "http://localhost:3100";
@@ -48,17 +49,21 @@ await call(GAME, "/v1/rooms", {
   ],
 }, token);
 
-await call(GAME, `/v1/rooms/${slug}/seat`, { displayName: "Sam", seatIndex: 0 }, token);
-await call(GAME, `/v1/rooms/${slug}/ready`, { isReady: true }, token);
+const spectate = Boolean(process.env.SPECTATE);
+
+if (!spectate) {
+  await call(GAME, `/v1/rooms/${slug}/seat`, { displayName: "Sam", seatIndex: 0 }, token);
+  await call(GAME, `/v1/rooms/${slug}/ready`, { isReady: true }, token);
+}
 
 for (let index = 0; index < botCount; index += 1) {
   await call(GAME, `/v1/rooms/${slug}/admin/seat-bot`, {
     displayName: BOT_NAMES[index],
-    seatIndex: index + 1,
+    seatIndex: spectate ? index : index + 1,
   }, token);
 }
 
-if (!process.env.NO_START) {
+if (!process.env.NO_START && !spectate) {
   await call(GAME, `/v1/rooms/${slug}/start`, {}, token);
 }
 

@@ -582,3 +582,98 @@
   margin: 0 !important;
   transform: translateX(-50%);
 }
+
+/* ---------- Open seats (shown while spectating): same pod shape as a player ---------- */
+
+.room-shell--phone .table-seat--open {
+  width: var(--phone-pod-width) !important;
+  min-width: 0 !important;
+  min-height: var(--phone-pod-height) !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
+.room-shell--phone .table-seat--open .table-seat__visuals {
+  min-height: var(--phone-pod-height) !important;
+}
+
+.room-shell--phone .table-seat--open .table-seat__media-wrap {
+  top: auto !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  z-index: 3;
+  width: var(--phone-avatar) !important;
+}
+
+.room-shell--phone .table-seat--open .table-seat__media {
+  width: var(--phone-avatar) !important;
+  height: var(--phone-plate-height) !important;
+  aspect-ratio: auto !important;
+  border: 1px dashed rgba(245, 240, 223, 0.32) !important;
+  border-radius: 8px 0 0 8px !important;
+  background: rgba(0, 0, 0, 0.28) !important;
+  box-shadow: none !important;
+}
+
+.room-shell--phone .table-seat--open .table-seat__media-fallback-avatar {
+  background: transparent !important;
+  font-size: 18px !important;
+}
+
+.room-shell--phone .table-seat--open .table-seat__content {
+  height: var(--phone-plate-height) !important;
+  min-height: 0 !important;
+  padding: 3px 4px 3px calc(var(--phone-avatar) + 6px) !important;
+  border-radius: 8px !important;
+  background: rgba(51, 51, 51, 0.72) !important;
+}
+
+.room-shell--phone .table-seat--open .table-seat__open-header,
+.room-shell--phone .table-seat--open .table-seat__open-copy {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.room-shell--phone .table-seat--open .table-seat__content .table-seat__identity strong {
+  font-size: 10px !important;
+  letter-spacing: 0 !important;
+  white-space: nowrap;
+  line-height: 12px !important;
+}
+
+.room-shell--phone .table-seat--open .table-seat__content .table-seat__identity span {
+  margin-top: 0 !important;
+  font-size: 11px !important;
+  line-height: 14px !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Seat number / state pills duplicate the copy; the + avatar is the visible join control. */
+.room-shell--phone .table-seat--open .table-seat__stats--open {
+  display: none !important;
+}
+
+/* Keep "Join" as an invisible tap target over the whole plate. */
+.room-shell--phone .table-seat--open .table-seat__button--open {
+  position: absolute !important;
+  inset: 0 !important;
+  width: auto !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  opacity: 0 !important;
+}
+
+.room-shell--phone .table-hero-stats-bar__empty-copy {
+  max-width: 160px;
+  margin: 0 auto !important;
+  padding-bottom: 8px;
+  font-size: 10px !important;
+  line-height: 1.3 !important;
+  text-align: center;
+}
