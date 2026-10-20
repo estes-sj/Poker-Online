@@ -1,3 +1,4 @@
+import type { GuestMode } from "../../../../packages/db/src/guest-policy.js";
 import type {
   BlindLevel,
   Card,
@@ -26,6 +27,7 @@ export interface CreateRoomRequest {
   autoStartDelaySeconds?: number;
   runItTwiceEnabled?: boolean;
   revealAllShowdownHands?: boolean;
+  allowGuests?: boolean;
 }
 
 export interface SeatPlayerRequest {
@@ -152,6 +154,7 @@ export interface UpdateRoomAdminOptionsRequest {
   suggestedGesturesEnabled: boolean;
   suggestedGesturePromptProbability: number;
   botSuggestedGestureReactionProbability: number;
+  allowGuests?: boolean;
 }
 
 export interface RoomManagementAdmin {
@@ -334,6 +337,7 @@ export interface PublicRoomSummary {
   createdAt: string;
   lastActivityAt: string;
   archivedAt: string | null;
+  guestsAllowed: boolean;
 }
 
 export interface AutoExpiringRoom {
@@ -570,6 +574,7 @@ export interface RoomAdminOptionsState {
   suggestedGesturesEnabled: boolean;
   suggestedGesturePromptProbability: number;
   botSuggestedGestureReactionProbability: number;
+  allowGuests: boolean;
 }
 
 export interface RoomSeatReaction {
@@ -654,6 +659,9 @@ export interface RoomRegistry {
   getRoomSnapshot(slug: string, accountId?: string): Promise<RoomSnapshot>;
   getViewerRoomSnapshot(slug: string, accountId?: string): Promise<RoomSnapshot>;
   assertManagementAdmin(sessionToken?: string): Promise<RoomManagementAdmin>;
+  authenticate(sessionToken?: string): Promise<{ id: string; username: string } | null>;
+  getGuestMode(): Promise<GuestMode>;
+  setGuestMode(mode: GuestMode): Promise<GuestMode>;
   listManagedClubs(): Promise<ManagedClubSummary[]>;
   createClub(input: CreateClubRequest): Promise<ManagedClubSummary>;
   searchClubUsers(input: SearchClubUsersRequest): Promise<ClubUserSearchResult[]>;

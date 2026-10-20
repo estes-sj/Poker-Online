@@ -94,6 +94,7 @@ export interface AdminOptionsDraft {
     timeBankSeconds: string;
     timeBankRefillHands: string;
     isPubliclyListed: boolean;
+    allowGuests: boolean;
     minBuyInAmount: string;
     maxBuyInRuleKind: "fixed_amount" | "chip_lead_percentage";
     maxBuyInRuleValue: string;
@@ -908,6 +909,7 @@ export function createEmptyAdminOptionsDraft(): AdminOptionsDraft {
         timeBankSeconds: "",
         timeBankRefillHands: "",
         isPubliclyListed: true,
+        allowGuests: false,
         minBuyInAmount: "1000",
         maxBuyInRuleKind: "chip_lead_percentage",
         maxBuyInRuleValue: "50",
@@ -937,6 +939,7 @@ export function buildAdminOptionsDraft(snapshot: RoomSnapshot): AdminOptionsDraf
         timeBankSeconds: snapshot.adminOptions.timeBankSeconds === null ? "" : String(snapshot.adminOptions.timeBankSeconds),
         timeBankRefillHands: snapshot.adminOptions.timeBankRefillHands === null ? "" : String(snapshot.adminOptions.timeBankRefillHands),
         isPubliclyListed: snapshot.adminOptions.isPubliclyListed,
+        allowGuests: snapshot.adminOptions.allowGuests === true,
         minBuyInAmount: String(snapshot.adminOptions.minBuyInAmount),
         maxBuyInRuleKind: snapshot.adminOptions.maxBuyInRule.kind,
         maxBuyInRuleValue: String(snapshot.adminOptions.maxBuyInRule.value),

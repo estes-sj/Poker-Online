@@ -1,22 +1,22 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 
 import {
-    clearStoredBrowserSession,
     isConfiguredRoomCreationAdmin,
     readStoredBrowserSession,
-    writeStoredBrowserSession,
     type BrowserSessionState,
 } from "../lib/browser-session";
-import { buildBrowserHttpUrl, getBrowserApiBaseUrl, getBrowserGameHttpBaseUrl } from "../lib/public-service-urls";
+import type { GuestMode } from "../lib/guest-policy";
+import { buildBrowserHttpUrl, getBrowserGameHttpBaseUrl } from "../lib/public-service-urls";
+import { AccountCard } from "./account-card";
 
 interface ControlDeskProps {
     roomCreationPolicy: {
         adminOnly: boolean;
         adminUsername: string | null;
     };
+    guestMode: GuestMode;
 }
 
 interface ClubOption {
@@ -52,17 +52,12 @@ const DEFAULT_BLIND_LEVELS: Array<{ smallBlind: number; bigBlind: number; durati
     { smallBlind: 1000, bigBlind: 2000, durationMinutes: 15 },
 ];
 
-export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
+export function ControlDesk({ roomCreationPolicy, guestMode }: ControlDeskProps) {
     const [session, setSession] = useState<BrowserSessionState | null>(null);
-    const [authMode, setAuthMode] = useState<"sign-in" | "register">("sign-in");
-    const [registerError, setRegisterError] = useState<string | null>(null);
-    const [loginError, setLoginError] = useState<string | null>(null);
     const [roomError, setRoomError] = useState<string | null>(null);
     const [clubsError, setClubsError] = useState<string | null>(null);
     const [roomLink, setRoomLink] = useState<string | null>(null);
     const [clubs, setClubs] = useState<ClubOption[]>([]);
-    const [isRegistering, setIsRegistering] = useState(false);
-    const [isLoggingIn, setIsLoggingIn] = useState(false);
     const [isCreatingRoom, setIsCreatingRoom] = useState(false);
     const [isLoadingClubs, setIsLoadingClubs] = useState(false);
     const [useBlindSchedule, setUseBlindSchedule] = useState(false);
@@ -76,69 +71,6 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
             setSession(storedSession);
         }
     }, []);
-
-    async function handleRegister(formData: FormData) {
-        setIsRegistering(true);
-        setRegisterError(null);
-
-        try {
-            const apiBaseUrl = getBrowserApiBaseUrl();
-            const response = await fetch(buildBrowserHttpUrl(apiBaseUrl, "/v1/auth/register"), {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    email: formData.get("email"),
-                    username: formData.get("username"),
-                    password: formData.get("password"),
-                }),
-            });
-
-            const payload = (await response.json()) as Partial<BrowserSessionState> & { error?: string };
-
-            if (!response.ok || !payload.account || !payload.token) {
-                throw new Error(payload.error ?? "Unable to register account.");
-            }
-
-            persistSession(payload.account, payload.token);
-        } catch (error) {
-            setRegisterError(error instanceof Error ? error.message : "Unable to register account.");
-        } finally {
-            setIsRegistering(false);
-        }
-    }
-
-    async function handleLogin(formData: FormData) {
-        setIsLoggingIn(true);
-        setLoginError(null);
-
-        try {
-            const apiBaseUrl = getBrowserApiBaseUrl();
-            const response = await fetch(buildBrowserHttpUrl(apiBaseUrl, "/v1/auth/login"), {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    identifier: formData.get("identifier"),
-                    password: formData.get("password"),
-                }),
-            });
-
-            const payload = (await response.json()) as Partial<BrowserSessionState> & { error?: string };
-
-            if (!response.ok || !payload.account || !payload.token) {
-                throw new Error(payload.error ?? "Unable to sign in.");
-            }
-
-            persistSession(payload.account, payload.token);
-        } catch (error) {
-            setLoginError(error instanceof Error ? error.message : "Unable to sign in.");
-        } finally {
-            setIsLoggingIn(false);
-        }
-    }
 
     async function handleCreateRoom(formData: FormData) {
         if (!session) {
@@ -187,6 +119,7 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                     autoStartNextHand: formData.get("autoStartNextHand") === "on",
                     autoStartDelaySeconds: Number(formData.get("autoStartDelaySeconds") ?? 8),
                     runItTwiceEnabled: formData.get("runItTwiceEnabled") === "on",
+                    allowGuests: formData.get("allowGuests") === "on",
                     blindSchedule: useBlindSchedule ? parseBlindScheduleDrafts(blindLevels) : undefined,
                 }),
             });
@@ -224,20 +157,9 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
         applyBlindLevels(blindLevels.filter((_, levelIndex) => levelIndex !== index));
     }
 
-    function persistSession(account: BrowserSessionState["account"], token: string) {
-        const nextSession = { account, token };
-        setSession(nextSession);
-        writeStoredBrowserSession(nextSession);
-    }
-
-    function signOut() {
-        setSession(null);
-        setRoomLink(null);
-        clearStoredBrowserSession();
-    }
-
     const sessionUsername = session?.account.username ?? null;
-    const canCreateRooms = Boolean(sessionUsername) && (!roomCreationPolicy.adminOnly || isConfiguredRoomCreationAdmin(sessionUsername, roomCreationPolicy.adminUsername));
+    const isGuestSession = Boolean(session?.account.isGuest);
+    const canCreateRooms = Boolean(sessionUsername) && !isGuestSession && (!roomCreationPolicy.adminOnly || isConfiguredRoomCreationAdmin(sessionUsername, roomCreationPolicy.adminUsername));
     const canManageRooms = Boolean(sessionUsername) && isConfiguredRoomCreationAdmin(sessionUsername, roomCreationPolicy.adminUsername);
     const roomCreationNotice = roomCreationPolicy.adminOnly
         ? sessionUsername
@@ -293,100 +215,15 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
 
     return (
         <>
-            <section className="card home__account" id="account">
-                {session ? (
-                    <>
-                        <div className="account-summary">
-                            <span className="account-summary__avatar" aria-hidden="true">
-                                {session.account.username.slice(0, 1).toUpperCase()}
-                            </span>
-                            <div className="account-summary__text">
-                                <strong>{session.account.username}</strong>
-                                <span>{session.account.email}</span>
-                            </div>
-                            <button className="button button--ghost button--small" type="button" onClick={signOut}>
-                                Sign out
-                            </button>
-                        </div>
-                        <nav className="account-links" aria-label="Account shortcuts">
-                            <Link className="account-links__item" href="/rooms">
-                                <span>Browse tables</span>
-                                <span className="account-links__hint">Live and archived sessions</span>
-                            </Link>
-                            <Link className="account-links__item" href="/clubs">
-                                <span>Club leaderboards</span>
-                                <span className="account-links__hint">Standings and game ledgers</span>
-                            </Link>
-                            {canManageRooms ? (
-                                <>
-                                    <Link className="account-links__item" href="/admin/rooms">
-                                        <span>Manage rooms</span>
-                                        <span className="account-links__hint">Bulk delete and idle cleanup</span>
-                                    </Link>
-                                    <Link className="account-links__item" href="/admin/clubs">
-                                        <span>Manage clubs</span>
-                                        <span className="account-links__hint">Members and recorded games</span>
-                                    </Link>
-                                </>
-                            ) : null}
-                        </nav>
-                    </>
-                ) : (
-                    <>
-                        <div className="segmented" role="tablist" aria-label="Account">
-                            <button
-                                className={authMode === "sign-in" ? "segmented__option segmented__option--active" : "segmented__option"}
-                                type="button"
-                                role="tab"
-                                aria-selected={authMode === "sign-in"}
-                                onClick={() => setAuthMode("sign-in")}
-                            >
-                                Sign in
-                            </button>
-                            <button
-                                className={authMode === "register" ? "segmented__option segmented__option--active" : "segmented__option"}
-                                type="button"
-                                role="tab"
-                                aria-selected={authMode === "register"}
-                                onClick={() => setAuthMode("register")}
-                            >
-                                Create account
-                            </button>
-                        </div>
-
-                        {authMode === "sign-in" ? (
-                            <form className="form" action={handleLogin}>
-                                <Field htmlFor="login-identifier" label="Email or username">
-                                    <input className="control-input" id="login-identifier" type="text" name="identifier" autoComplete="username" required />
-                                </Field>
-                                <Field htmlFor="login-password" label="Password">
-                                    <input className="control-input" id="login-password" type="password" name="password" autoComplete="current-password" required />
-                                </Field>
-                                <button className="button button--primary button--block" type="submit" disabled={isLoggingIn}>
-                                    {isLoggingIn ? "Signing in..." : "Sign in"}
-                                </button>
-                                {loginError ? <p className="form-error">{loginError}</p> : null}
-                            </form>
-                        ) : (
-                            <form className="form" action={handleRegister}>
-                                <Field htmlFor="register-email" label="Email">
-                                    <input className="control-input" id="register-email" type="email" name="email" autoComplete="email" required />
-                                </Field>
-                                <Field htmlFor="register-username" label="Username">
-                                    <input className="control-input" id="register-username" type="text" name="username" autoComplete="username" required />
-                                </Field>
-                                <Field htmlFor="register-password" label="Password" hint="At least 8 characters.">
-                                    <input className="control-input" id="register-password" type="password" name="password" autoComplete="new-password" required minLength={8} />
-                                </Field>
-                                <button className="button button--primary button--block" type="submit" disabled={isRegistering}>
-                                    {isRegistering ? "Creating account..." : "Create account"}
-                                </button>
-                                {registerError ? <p className="form-error">{registerError}</p> : null}
-                            </form>
-                        )}
-                    </>
-                )}
-            </section>
+            <AccountCard
+                session={session}
+                onSessionChange={(nextSession) => {
+                    setSession(nextSession);
+                    setRoomLink(null);
+                }}
+                canManageRooms={canManageRooms}
+                guestMode={guestMode}
+            />
 
             <section className="card home__create" id="host-a-game">
                 <header className="card__header">
@@ -398,7 +235,9 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
 
                 {!canCreateRooms ? (
                     <p className="notice">
-                        {roomCreationNotice ?? "Sign in to open a table."}
+                        {isGuestSession
+                            ? "Guests can join tables but not open them. Create a full account from the account card to host."
+                            : roomCreationNotice ?? "Sign in to open a table."}
                     </p>
                 ) : (
                     <form className="form" action={handleCreateRoom}>
@@ -453,6 +292,14 @@ export function ControlDesk({ roomCreationPolicy }: ControlDeskProps) {
                                 hint="When off, only people with the link can find the table."
                                 defaultChecked
                             />
+                            {guestMode === "per-room" ? (
+                                <Toggle
+                                    id="allow-guests"
+                                    name="allowGuests"
+                                    label="Allow guests"
+                                    hint="Players can join without creating an account."
+                                />
+                            ) : null}
                             <Toggle
                                 id="use-blind-schedule"
                                 label="Custom blind schedule"

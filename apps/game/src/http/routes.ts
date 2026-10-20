@@ -1,8 +1,50 @@
 import type { FastifyInstance } from "fastify";
 
+import { isGuestMode } from "../../../../packages/db/src/guest-policy.js";
 import type { RoomRegistry } from "../runtime/room-service.js";
 
 export async function registerRoutes(app: FastifyInstance, registry: RoomRegistry): Promise<void> {
+  // The acting player always comes from the session token, never from the request body or query.
+  app.addHook("preHandler", async (request, reply) => {
+    const route = request.routeOptions.url;
+
+    if (!route?.startsWith("/v1/rooms")) {
+      return;
+    }
+
+    const isOptionalIdentityRoute = route === "/v1/rooms/:slug/join" || (request.method === "GET" && route === "/v1/rooms/:slug");
+    const isPlayerRoute = request.method === "POST" && (route === "/v1/rooms" || route.startsWith("/v1/rooms/:slug/"));
+
+    if (!isOptionalIdentityRoute && !isPlayerRoute) {
+      return;
+    }
+
+    const account = await registry.authenticate(getBearerToken(request.headers.authorization));
+
+    if (isOptionalIdentityRoute) {
+      const target = (request.method === "GET" ? request.query : request.body) as Record<string, unknown> | undefined;
+
+      if (target) {
+        target.accountId = account?.id;
+      }
+
+      return;
+    }
+
+    if (!account) {
+      return reply.code(401).send({ error: "Your session has expired. Sign in again to continue." });
+    }
+
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    request.body = body;
+
+    if (route === "/v1/rooms") {
+      body.adminAccountId = account.id;
+    } else {
+      body.accountId = account.id;
+    }
+  });
+
   app.get("/health", async () => ({
     status: "ok",
     service: "game",
@@ -36,6 +78,7 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
         autoStartNextHand: optionalBoolean(body.autoStartNextHand),
         autoStartDelaySeconds: optionalNumber(body.autoStartDelaySeconds),
         runItTwiceEnabled: optionalBoolean(body.runItTwiceEnabled),
+        allowGuests: optionalBoolean(body.allowGuests),
       });
 
       return reply.code(201).send(snapshot);
@@ -68,6 +111,39 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
     } catch (error) {
       return reply.code(404).send({ error: getErrorMessage(error) });
     }
+  });
+
+  app.get("/v1/settings", async (_request, reply) => {
+    try {
+      return reply.send({ guestMode: await registry.getGuestMode() });
+    } catch (error) {
+      return reply.code(500).send({ error: getErrorMessage(error) });
+    }
+  });
+
+  app.get("/v1/admin/settings", async (request, reply) => {
+    try {
+      await requireManagementAdmin(registry, request.headers.authorization);
+      return reply.send({ guestMode: await registry.getGuestMode() });
+    } catch (error) {
+      return reply.code(403).send({ error: getErrorMessage(error) });
+    }
+  });
+
+  app.post("/v1/admin/settings", async (request, reply) => {
+    const body = (request.body ?? {}) as Record<string, unknown>;
+
+    try {
+      await requireManagementAdmin(registry, request.headers.authorization);
+    } catch (error) {
+      return reply.code(403).send({ error: getErrorMessage(error) });
+    }
+
+    if (!isGuestMode(body.guestMode)) {
+      return reply.code(400).send({ error: "guestMode must be one of off, all, or per-room." });
+    }
+
+    return reply.send({ guestMode: await registry.setGuestMode(body.guestMode) });
   });
 
   app.get("/v1/clubs", async (_request, reply) => {
@@ -495,6 +571,7 @@ export async function registerRoutes(app: FastifyInstance, registry: RoomRegistr
         timeBankSeconds: requireNullableNumber(body.timeBankSeconds, "timeBankSeconds"),
         timeBankRefillHands: requireNullableNumber(body.timeBankRefillHands, "timeBankRefillHands"),
         isPubliclyListed: requireBoolean(body.isPubliclyListed, "isPubliclyListed"),
+        allowGuests: optionalBoolean(body.allowGuests),
         minBuyInAmount: requireNumber(body.minBuyInAmount, "minBuyInAmount"),
         maxBuyInRule: requireRoomBuyInMaxRule(body.maxBuyInRule),
         revealAllShowdownHands: requireBoolean(body.revealAllShowdownHands, "revealAllShowdownHands"),

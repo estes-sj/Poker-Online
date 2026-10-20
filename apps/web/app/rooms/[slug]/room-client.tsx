@@ -5,7 +5,11 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
-import { readStoredBrowserSession, SESSION_STORAGE_EVENT, writeStoredBrowserSession } from "../../lib/browser-session";
+import { getSessionDisplayName, readStoredBrowserSession, SESSION_STORAGE_EVENT, writeStoredBrowserSession } from "../../lib/browser-session";
+import { createGuestSession } from "../../lib/guest-auth";
+import { roomAllowsGuests, type GuestMode } from "../../lib/guest-policy";
+import { RecoveryCodeNotice } from "../../components/account-card";
+import { DeviceLinkDialog } from "../../components/device-link-dialog";
 import type { HouseRulesConfig } from "../../lib/house-rules-config";
 import { buildBrowserHttpUrl, buildBrowserWsUrl, getBrowserApiBaseUrl, getBrowserGameHttpBaseUrl, getBrowserGameWsBaseUrl } from "../../lib/public-service-urls";
 import { evaluateHoldemHand, getCurrentHeroHandLabel } from "./hand-evaluator";
@@ -159,6 +163,7 @@ interface RoomClientProps {
     demoMediaParticipants?: MediaParticipantState[];
     houseRulesConfig: HouseRulesConfig;
     brandName: string;
+    guestMode: GuestMode;
 }
 
 type ConnectionState = "connecting" | "live" | "disconnected" | "reconnecting" | "demo" | "archived";
@@ -261,7 +266,8 @@ const DEFAULT_ACTION_PAD_OFFSET: ActionPadOffset = {
     y: 0,
 };
 
-const MAX_RECONNECT_ATTEMPTS_BEFORE_REFRESH = 6;
+// The server pings every 20 s, so this much silence means the socket died without a close event.
+const SOCKET_SILENCE_TIMEOUT_MS = 45_000;
 
 export function RoomClient({
     slug,
@@ -271,9 +277,12 @@ export function RoomClient({
     demoMediaParticipants = [],
     houseRulesConfig,
     brandName,
+    guestMode,
 }: RoomClientProps) {
     const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(initialSnapshot);
     const [session, setSession] = useState<SessionState | null>(null);
+    // Read by request helpers so a fresh sign-in is used before React re-renders.
+    const sessionTokenRef = useRef<string | undefined>(undefined);
     const [accountId, setAccountId] = useState<string | undefined>(initialAccountId);
     const [displayName, setDisplayName] = useState("");
     const [roomPassword, setRoomPassword] = useState("");
@@ -314,6 +323,10 @@ export function RoomClient({
     const [authLoginError, setAuthLoginError] = useState<string | null>(null);
     const [isRegisteringInRoom, setIsRegisteringInRoom] = useState(false);
     const [isLoggingInRoom, setIsLoggingInRoom] = useState(false);
+    const [isCreatingGuestInRoom, setIsCreatingGuestInRoom] = useState(false);
+    const [authGuestError, setAuthGuestError] = useState<string | null>(null);
+    const [guestRecoveryCode, setGuestRecoveryCode] = useState<string | null>(null);
+    const [isDeviceLinkOpen, setIsDeviceLinkOpen] = useState(false);
     const [isCompletingAuthAction, setIsCompletingAuthAction] = useState(false);
     const [archivePreview, setArchivePreview] = useState<RoomArchivePreview | null>(null);
     const [archiveMatchDrafts, setArchiveMatchDrafts] = useState<Record<string, string>>({});
@@ -360,6 +373,7 @@ export function RoomClient({
     const handledSuggestedReactionIdsRef = useRef<Set<string>>(new Set());
     const archivedHands = snapshot?.archive?.hands ?? [];
     const isArchivedRoom = Boolean(snapshot?.status === "archived" && snapshot?.archive);
+    const canJoinAsGuest = !demoMode && !isArchivedRoom && roomAllowsGuests(guestMode, snapshot?.adminOptions?.allowGuests);
     const selectedArchivedHand = archivedHands.find((hand) => hand.handId === selectedLedgerHandId) ?? archivedHands[0] ?? null;
     const archivedReplaySnapshot = isArchivedRoom && snapshot && selectedArchivedHand && archivedReplayStartedAt !== null
         ? buildArchivedReplayRoomSnapshot(snapshot, selectedArchivedHand, accountId, turnClockNow, archivedReplayStartedAt)
@@ -569,6 +583,7 @@ export function RoomClient({
         const syncSessionFromStorage = () => {
             const nextSession = readStoredBrowserSession() as SessionState | null;
 
+            sessionTokenRef.current = nextSession?.token;
             setSession(nextSession);
 
             if (!initialAccountId) {
@@ -576,7 +591,7 @@ export function RoomClient({
             }
 
             if (nextSession) {
-                setDisplayName((current) => current || nextSession.account.username);
+                setDisplayName((current) => current || getSessionDisplayName(nextSession));
             }
         };
 
@@ -782,6 +797,7 @@ export function RoomClient({
 
         let disposed = false;
         let reconnectAttempts = 0;
+        let lastMessageAt = Date.now();
 
         const clearReconnectTimer = () => {
             if (reconnectTimerRef.current === null) {
@@ -806,15 +822,17 @@ export function RoomClient({
 
             socket.addEventListener("open", () => {
                 reconnectAttempts = 0;
+                lastMessageAt = Date.now();
                 setConnectionState("live");
                 socket.send(JSON.stringify({
                     type: "subscribe_room",
                     slug,
-                    accountId,
+                    sessionToken: sessionTokenRef.current,
                 }));
             });
 
             socket.addEventListener("message", (event) => {
+                lastMessageAt = Date.now();
                 const payload = safeParse(event.data);
 
                 if (!payload || typeof payload !== "object") {
@@ -843,22 +861,60 @@ export function RoomClient({
                 socketRef.current = null;
                 reconnectAttempts += 1;
 
-                if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS_BEFORE_REFRESH) {
-                    setConnectionState("disconnected");
-                    return;
-                }
-
+                // Keep retrying: phones regularly lose the socket when switching networks or sleeping.
                 setConnectionState("reconnecting");
                 const retryDelayMs = Math.min(5000, 500 * 2 ** Math.min(reconnectAttempts - 1, 4));
                 reconnectTimerRef.current = window.setTimeout(connect, retryDelayMs);
             });
         };
 
+        // Reconnect right away when the network or the tab comes back instead of waiting out the backoff.
+        // Replacing the socket ref first makes the old socket's close handler a no-op, so a dead
+        // connection that takes a long time to report its close cannot delay the new one.
+        const replaceSocket = () => {
+            const activeSocket = socketRef.current;
+            socketRef.current = null;
+            activeSocket?.close();
+            reconnectAttempts = Math.max(reconnectAttempts, 1);
+            connect();
+        };
+        const reconnectIfIdle = () => {
+            const activeSocket = socketRef.current;
+
+            if (disposed || (activeSocket && (activeSocket.readyState === WebSocket.OPEN || activeSocket.readyState === WebSocket.CONNECTING))) {
+                return;
+            }
+
+            replaceSocket();
+        };
+        // A network change leaves the old TCP connection dead even if the browser still reports it open.
+        const handleOnline = () => {
+            if (!disposed) {
+                replaceSocket();
+            }
+        };
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "visible") {
+                reconnectIfIdle();
+            }
+        };
+        const silenceCheckInterval = window.setInterval(() => {
+            if (socketRef.current?.readyState === WebSocket.OPEN && Date.now() - lastMessageAt > SOCKET_SILENCE_TIMEOUT_MS) {
+                replaceSocket();
+            }
+        }, 10_000);
+
+        window.addEventListener("online", handleOnline);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+
         connect();
 
         return () => {
             disposed = true;
             clearReconnectTimer();
+            window.clearInterval(silenceCheckInterval);
+            window.removeEventListener("online", handleOnline);
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
 
             const activeSocket = socketRef.current;
             socketRef.current = null;
@@ -1136,7 +1192,7 @@ export function RoomClient({
         slug,
         session,
         canConnect: canConnectMedia,
-        displayName: displayName.trim() || heroPlayer?.displayName || session?.account.username || "",
+        displayName: displayName.trim() || heroPlayer?.displayName || getSessionDisplayName(session),
     });
     const readyPlayerCount = snapshot?.players.filter((player) => player.isReady && player.isConnected && !player.isSittingOut && player.stack > 0).length ?? 0;
     const effectiveMediaParticipants = demoMode ? demoMediaParticipants : media.participants;
@@ -1474,7 +1530,14 @@ export function RoomClient({
             {openMenuPanel === "seat" ? (
                 <div className="table-menu-drawer__section">
                     <span className="table-menu-drawer__eyebrow">Seat</span>
-                    {session ? <p className="muted-copy">Signed in as {session.account.username}</p> : <p className="muted-copy">Pick a seat and you will be asked to sign in or create an account from this page.</p>}
+                    {session ? (
+                        <>
+                            <p className="muted-copy">Signed in as {getSessionDisplayName(session)}{session.account.isGuest ? " (guest)" : ""}</p>
+                            <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => setIsDeviceLinkOpen(true)}>
+                                Use on another device
+                            </button>
+                        </>
+                    ) : <p className="muted-copy">Pick a seat and you will be asked to sign in or create an account from this page.</p>}
 
                     {heroPlayer ? (
                         <div className="table-stat-list">
@@ -1764,6 +1827,12 @@ export function RoomClient({
                                             <input type="checkbox" checked={adminOptionsDraft.isPubliclyListed} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, isPubliclyListed: event.target.checked }))} />
                                             <span>Show this room on the public rooms page</span>
                                         </label>
+                                        {guestMode === "per-room" ? (
+                                            <label className="table-admin-field table-admin-field--toggle table-admin-field--full">
+                                                <input type="checkbox" checked={adminOptionsDraft.allowGuests} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, allowGuests: event.target.checked }))} />
+                                                <span>Allow guests to join without an account</span>
+                                            </label>
+                                        ) : null}
                                         <label className="table-admin-field">
                                             <span>Minimum buy-in</span>
                                             <input className="control-input" type="number" min={1} step={1} value={adminOptionsDraft.minBuyInAmount} onChange={(event) => setAdminOptionsDraft((current) => ({ ...current, minBuyInAmount: event.target.value }))} />
@@ -3200,10 +3269,12 @@ export function RoomClient({
 
         try {
             const gameBaseUrl = getBrowserGameHttpBaseUrl();
+            const sessionToken = sessionTokenRef.current;
             const response = await fetch(buildBrowserHttpUrl(gameBaseUrl, path), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
+                    ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
                 },
                 body: JSON.stringify(body),
             });
@@ -3253,9 +3324,10 @@ export function RoomClient({
     }
 
     function persistSession(nextSession: SessionState) {
+        sessionTokenRef.current = nextSession.token;
         setSession(nextSession);
         setAccountId(nextSession.account.id);
-        setDisplayName((current) => current || nextSession.account.username);
+        setDisplayName((current) => current || getSessionDisplayName(nextSession));
         writeStoredBrowserSession(nextSession);
     }
 
@@ -3265,7 +3337,7 @@ export function RoomClient({
         }
 
         setActionError(null);
-        setDisplayName((current) => current || session?.account.username || "");
+        setDisplayName((current) => current || getSessionDisplayName(session));
         setSeatRequestPrompt({
             seatIndex,
             requestedStack: heroPendingSeatRequest
@@ -3334,6 +3406,24 @@ export function RoomClient({
             setAuthRegisterError(error instanceof Error ? error.message : "Unable to register account.");
         } finally {
             setIsRegisteringInRoom(false);
+        }
+    }
+
+    async function handleGuestInRoom(formData: FormData) {
+        setIsCreatingGuestInRoom(true);
+        setAuthGuestError(null);
+
+        try {
+            const result = await createGuestSession(String(formData.get("displayName") ?? ""), slug);
+            const nextSession = result.session as SessionState;
+
+            persistSession(nextSession);
+            setGuestRecoveryCode(result.recoveryCode);
+            await continuePendingAuthAction(nextSession, pendingAuthAction);
+        } catch (error) {
+            setAuthGuestError(error instanceof Error ? error.message : "Unable to continue as a guest.");
+        } finally {
+            setIsCreatingGuestInRoom(false);
         }
     }
 
@@ -3440,7 +3530,7 @@ export function RoomClient({
         try {
             await submitRoomMutation(`/v1/rooms/${slug}/seat`, {
                 accountId,
-                displayName: displayName.trim() || session?.account.username || "Player",
+                displayName: displayName.trim() || getSessionDisplayName(session) || "Player",
                 seatIndex,
                 requestedStack,
             });
@@ -3589,7 +3679,7 @@ export function RoomClient({
 
         await submitRoomMutation(`/v1/rooms/${slug}/chat`, {
             accountId,
-            displayName: displayName.trim() || heroPlayer?.displayName || session?.account.username,
+            displayName: displayName.trim() || heroPlayer?.displayName || getSessionDisplayName(session) || undefined,
             content,
         });
         setHeroChatToast({
@@ -3912,6 +4002,7 @@ export function RoomClient({
                 timeBankSeconds: parseOptionalWholeNumber(adminOptionsDraft.timeBankSeconds, "Time bank length"),
                 timeBankRefillHands: parseOptionalWholeNumber(adminOptionsDraft.timeBankRefillHands, "Time bank refill hands"),
                 isPubliclyListed: adminOptionsDraft.isPubliclyListed,
+                allowGuests: adminOptionsDraft.allowGuests,
                 minBuyInAmount: parseRequiredWholeNumber(adminOptionsDraft.minBuyInAmount, "Minimum buy-in"),
                 maxBuyInRule: {
                     kind: adminOptionsDraft.maxBuyInRuleKind,
@@ -4278,6 +4369,23 @@ export function RoomClient({
     );
 
     const showConnectionRefreshModal = connectionState === "disconnected";
+    const accountDialogs = (
+        <>
+            {guestRecoveryCode ? (
+                <div className="site site--overlay">
+                    <div className="dialog-backdrop">
+                        <section className="dialog card" role="dialog" aria-modal="true" aria-label="Save your recovery code">
+                            <RecoveryCodeNotice code={guestRecoveryCode} onDone={() => setGuestRecoveryCode(null)} />
+                        </section>
+                    </div>
+                </div>
+            ) : null}
+            {isDeviceLinkOpen && session ? (
+                <DeviceLinkDialog token={session.token} nextPath={`/rooms/${slug}`} onClose={() => setIsDeviceLinkOpen(false)} />
+            ) : null}
+        </>
+    );
+
     const connectionRefreshModal = showConnectionRefreshModal ? (
         <div className="table-dialog table-dialog--connection-alert" role="alertdialog" aria-modal="true" aria-label="Connection lost">
             <div className="table-dialog__backdrop" aria-hidden="true" />
@@ -4314,7 +4422,7 @@ export function RoomClient({
 
                         <div className="table-dialog__content">
                             {session
-                                ? <p className="muted-copy">Signed in as {session.account.username}</p>
+                                ? <p className="muted-copy">Signed in as {getSessionDisplayName(session)}</p>
                                 : <p className="muted-copy"></p>}
 
                             <input
@@ -4362,6 +4470,21 @@ export function RoomClient({
                             </header>
 
                             <div className="control-desk__auth-stack">
+                            {canJoinAsGuest ? (
+                                <section className="control-desk__form-block">
+                                    <div className="control-desk__form-copy">
+                                        <strong>Play as guest</strong>
+                                        <p>No email or password. You can move to another device with a code later.</p>
+                                    </div>
+                                    <form className="control-form" action={handleGuestInRoom}>
+                                        <input className="control-input" type="text" name="displayName" placeholder="display name" autoComplete="nickname" required minLength={2} maxLength={24} />
+                                        <button className="button button--primary" type="submit" disabled={isCreatingGuestInRoom || isCompletingAuthAction}>
+                                            {isCreatingGuestInRoom ? "Starting..." : isCompletingAuthAction ? "Finishing..." : "Continue as guest"}
+                                        </button>
+                                        {authGuestError ? <p className="form-error">{authGuestError}</p> : null}
+                                    </form>
+                                </section>
+                            ) : null}
                                 <section className="control-desk__form-block">
                                     <div className="control-desk__form-copy">
                                         <strong>New account</strong>
@@ -4398,6 +4521,7 @@ export function RoomClient({
                 ) : null}
 
                 {connectionRefreshModal}
+                {accountDialogs}
             </main>
         );
     }
@@ -5007,7 +5131,7 @@ export function RoomClient({
                                 type="text"
                                 value={displayName}
                                 onChange={(event) => setDisplayName(event.target.value)}
-                                placeholder={session?.account.username ?? "optional display name"}
+                                placeholder={getSessionDisplayName(session) || "optional display name"}
                             />
                         </label>
 
@@ -5061,6 +5185,21 @@ export function RoomClient({
                         </header>
 
                         <div className="control-desk__auth-stack">
+                            {canJoinAsGuest ? (
+                                <section className="control-desk__form-block">
+                                    <div className="control-desk__form-copy">
+                                        <strong>Play as guest</strong>
+                                        <p>No email or password. You can move to another device with a code later.</p>
+                                    </div>
+                                    <form className="control-form" action={handleGuestInRoom}>
+                                        <input className="control-input" type="text" name="displayName" placeholder="display name" autoComplete="nickname" required minLength={2} maxLength={24} />
+                                        <button className="button button--primary" type="submit" disabled={isCreatingGuestInRoom || isCompletingAuthAction}>
+                                            {isCreatingGuestInRoom ? "Starting..." : isCompletingAuthAction ? "Finishing..." : "Continue as guest"}
+                                        </button>
+                                        {authGuestError ? <p className="form-error">{authGuestError}</p> : null}
+                                    </form>
+                                </section>
+                            ) : null}
                             <section className="control-desk__form-block">
                                 <div className="control-desk__form-copy">
                                     <strong>New account</strong>
@@ -5565,6 +5704,7 @@ export function RoomClient({
             ) : null}
 
             {connectionRefreshModal}
+            {accountDialogs}
         </main>
     );
 }

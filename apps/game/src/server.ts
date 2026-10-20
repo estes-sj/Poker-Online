@@ -24,11 +24,13 @@ const DEFAULT_BOT_SUGGESTED_GESTURE_REACTION_PROBABILITY = 0.5;
 interface ClientMessage {
   type: "subscribe_room" | "seat_player" | "set_ready" | "admin_start_hand";
   slug: string;
-  accountId?: string;
+  sessionToken?: string;
   displayName?: string;
   seatIndex?: number;
   isReady?: boolean;
 }
+
+const WEBSOCKET_HEARTBEAT_INTERVAL_MS = 20_000;
 
 interface Subscription {
   slug: string;
@@ -837,11 +839,24 @@ export function buildGameServer() {
   });
   const websocketServer = new WebSocketServer({ noServer: true });
 
+  // Regular traffic lets clients spot sockets that died silently, such as after a Wi-Fi to mobile data switch.
+  const heartbeatInterval = setInterval(() => {
+    const ping = JSON.stringify({ type: "ping" });
+
+    for (const client of websocketServer.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(ping);
+      }
+    }
+  }, WEBSOCKET_HEARTBEAT_INTERVAL_MS);
+
   app.register(cors, {
     origin: true,
   });
 
   app.addHook("onClose", async () => {
+    clearInterval(heartbeatInterval);
+
     for (const timer of autoStartTimers.values()) {
       clearTimeout(timer);
     }
@@ -939,9 +954,12 @@ async function handleClientMessage(
     throw new Error("Messages must include a type and room slug.");
   }
 
+  // The player identity comes from the session token. Without a valid token the socket is a spectator.
+  const account = await registry.authenticate(typeof message.sessionToken === "string" ? message.sessionToken : undefined);
+
   switch (message.type) {
     case "subscribe_room": {
-      const accountId = typeof message.accountId === "string" ? message.accountId : undefined;
+      const accountId = account?.id;
 
       // Cancel any pending disconnect timer for this player (e.g. fast page refresh).
       if (accountId) {
@@ -963,7 +981,7 @@ async function handleClientMessage(
             accountId,
             isConnected: true,
           })
-        : await registry.getViewerRoomSnapshot(message.slug, message.accountId);
+        : await registry.getViewerRoomSnapshot(message.slug);
 
       socket.send(JSON.stringify({
         type: "room_snapshot",
@@ -978,7 +996,7 @@ async function handleClientMessage(
       return;
     }
     case "seat_player": {
-      const accountId = requireString(message.accountId, "accountId");
+      const accountId = requireAccountId(account);
 
       subscriptions.set(socket, {
         slug: message.slug,
@@ -996,7 +1014,7 @@ async function handleClientMessage(
     case "set_ready": {
       await registry.setReady({
         slug: message.slug,
-        accountId: requireString(message.accountId, "accountId"),
+        accountId: requireAccountId(account),
         isReady: requireBoolean(message.isReady, "isReady"),
       });
       return;
@@ -1004,13 +1022,21 @@ async function handleClientMessage(
     case "admin_start_hand": {
       await registry.startHand({
         slug: message.slug,
-        accountId: requireString(message.accountId, "accountId"),
+        accountId: requireAccountId(account),
       });
       return;
     }
     default:
       throw new Error(`Unsupported message type: ${String(message.type)}`);
   }
+}
+
+function requireAccountId(account: { id: string } | null): string {
+  if (!account) {
+    throw new Error("Your session has expired. Sign in again to continue.");
+  }
+
+  return account.id;
 }
 
 function handleSocketClose(

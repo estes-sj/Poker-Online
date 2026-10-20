@@ -19,6 +19,7 @@ interface PublicRoomSummary {
     createdAt: string;
     lastActivityAt: string;
     archivedAt: string | null;
+    guestsAllowed?: boolean;
 }
 
 export default async function RoomsPage() {
@@ -86,6 +87,7 @@ function RoomRow({ room }: { room: PublicRoomSummary }) {
                     <span>Host {room.adminUsername}</span>
                     {room.clubName ? <span>{room.clubName}</span> : null}
                     <span>{access}</span>
+                    {room.guestsAllowed && !isArchived ? <span>Guests welcome</span> : null}
                     <span>
                         {isArchived
                             ? `Archived ${formatTimestamp(room.archivedAt ?? room.lastActivityAt)}`

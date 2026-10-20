@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { Prisma, RoomStatus, RoomVisibility, type PrismaClient } from "@prisma/client";
 import { prisma } from "../../../../packages/db/src/index.js";
+import { getGuestMode, roomAllowsGuests, setGuestMode, type GuestMode } from "../../../../packages/db/src/guest-policy.js";
 import { getRoomCreationAdminConfig, isConfiguredRoomCreationAdmin } from "../../../../packages/db/src/room-creation-policy.js";
 import {
   addPlayerChips,
@@ -307,6 +308,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
     const name = input.name.trim();
 
     const adminUser = await this.assertAdminExists(input.adminAccountId);
+    await this.assertNotGuest(adminUser.id, "Guests cannot open tables. Create a full account first.");
     await this.assertRoomCreationAllowed(adminUser, input.sessionToken);
     await this.assertClubExists(input.clubId);
 
@@ -331,7 +333,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
       roomId: baseTable.roomId,
     };
 
-    const runtimeState = createRuntimeState(table, input.isPubliclyListed ?? true);
+    const runtimeState = createRuntimeState(table, input.isPubliclyListed ?? true, input.allowGuests ?? false);
 
     await this.database.room.create({
       data: {
@@ -1194,11 +1196,13 @@ export class PrismaRoomRegistry implements RoomRegistry {
       },
     });
 
+    const guestMode = await this.getGuestMode();
+
     return rooms.flatMap((room) => {
       const runtimeState = this.requireRuntimeState(room);
 
       return isRoomPubliclyListed(runtimeState.adminOptions)
-        ? [buildPublicRoomSummary(room, runtimeState)]
+        ? [{ ...buildPublicRoomSummary(room, runtimeState), guestsAllowed: roomAllowsGuests(guestMode, runtimeState.adminOptions.allowGuests) }]
         : [];
     });
   }
@@ -1358,6 +1362,8 @@ export class PrismaRoomRegistry implements RoomRegistry {
       return this.toSnapshot(runtimeState, input.accountId);
     }
 
+    await this.assertGuestMayPlay(runtimeState, input.accountId);
+
     const joinedViewerAccountIds = ensureJoinedViewerAccountIds([...runtimeState.joinedViewerAccountIds, input.accountId], runtimeState.table);
 
     if (haveSameStringEntries(joinedViewerAccountIds, runtimeState.joinedViewerAccountIds)) {
@@ -1383,6 +1389,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
     const runtimeState = this.requireRuntimeState(room);
     this.assertRoomIsMutable(runtimeState);
     this.assertViewerHasRoomAccess(runtimeState, input.accountId);
+    await this.assertGuestMayPlay(runtimeState, input.accountId);
     const requestedStack = normalizeRequestedStack(
       input.requestedStack,
       runtimeState.table.startingStack,
@@ -1973,6 +1980,7 @@ export class PrismaRoomRegistry implements RoomRegistry {
       timeBankSeconds,
       timeBankRefillHands,
       isPubliclyListed: input.isPubliclyListed,
+      allowGuests: input.allowGuests ?? runtimeState.adminOptions.allowGuests,
       minBuyInAmount: buyInOptions.minBuyInAmount,
       maxBuyInRule: buyInOptions.maxBuyInRule,
       revealAllShowdownHands: input.revealAllShowdownHands,
@@ -3167,6 +3175,35 @@ export class PrismaRoomRegistry implements RoomRegistry {
     }
   }
 
+  async authenticate(sessionToken?: string): Promise<{ id: string; username: string } | null> {
+    return sessionToken ? this.getAccountBySessionToken(sessionToken) : null;
+  }
+
+  async getGuestMode(): Promise<GuestMode> {
+    return getGuestMode(this.database);
+  }
+
+  async setGuestMode(mode: GuestMode): Promise<GuestMode> {
+    return setGuestMode(this.database, mode);
+  }
+
+  private async assertNotGuest(accountId: string, message: string): Promise<void> {
+    const user = await this.database.user.findUnique({ where: { id: accountId }, select: { isGuest: true } });
+
+    if (user?.isGuest) {
+      throw new Error(message);
+    }
+  }
+
+  /** Guests may only join or sit at tables that allow them under the current site guest mode. */
+  private async assertGuestMayPlay(runtimeState: PersistedRoomRuntimeState, accountId: string): Promise<void> {
+    if (roomAllowsGuests(await this.getGuestMode(), runtimeState.adminOptions.allowGuests)) {
+      return;
+    }
+
+    await this.assertNotGuest(accountId, "This table requires a full account.");
+  }
+
   private async getAccountBySessionToken(token: string): Promise<{ id: string; username: string } | null> {
     const tokenHash = createHash("sha256").update(token).digest("hex");
     const session = await this.database.session.findUnique({
@@ -3570,8 +3607,8 @@ export class PrismaRoomRegistry implements RoomRegistry {
   }
 }
 
-function createRuntimeState(table: TableState, isPubliclyListed = true): PersistedRoomRuntimeState {
-  const adminOptions = buildDefaultRoomAdminOptions(table, isPubliclyListed);
+function createRuntimeState(table: TableState, isPubliclyListed = true, allowGuests = false): PersistedRoomRuntimeState {
+  const adminOptions = buildDefaultRoomAdminOptions(table, isPubliclyListed, allowGuests);
 
   return {
     table,
@@ -3668,6 +3705,7 @@ function normalizeRuntimeState(runtimeState: PersistedRoomRuntimeState): Persist
       timeBankSeconds,
       timeBankRefillHands: normalizeOptionalRuntimeSetting(runtimeState.adminOptions?.timeBankRefillHands, null),
       isPubliclyListed: isRoomPubliclyListed(runtimeState.adminOptions),
+      allowGuests: runtimeState.adminOptions?.allowGuests === true,
       minBuyInAmount: buyInOptions.minBuyInAmount,
       maxBuyInRule: buyInOptions.maxBuyInRule,
       revealAllShowdownHands,
@@ -3887,6 +3925,7 @@ function buildLockedRoomSnapshot(runtimeState: PersistedRoomRuntimeState): RoomS
       timeBankSeconds: null,
       timeBankRefillHands: null,
       isPubliclyListed: isRoomPubliclyListed(runtimeState.adminOptions),
+      allowGuests: runtimeState.adminOptions?.allowGuests === true,
       minBuyInAmount: buyInOptions.minBuyInAmount,
       maxBuyInRule: buyInOptions.maxBuyInRule,
       revealAllShowdownHands: false,
@@ -3953,7 +3992,7 @@ function buildManagedRoomSummary(room: ManagedPersistedRoomRecord, runtimeState:
   };
 }
 
-function buildPublicRoomSummary(room: ManagedPersistedRoomRecord, runtimeState: PersistedRoomRuntimeState): PublicRoomSummary {
+function buildPublicRoomSummary(room: ManagedPersistedRoomRecord, runtimeState: PersistedRoomRuntimeState): Omit<PublicRoomSummary, "guestsAllowed"> {
   return {
     roomId: room.id,
     slug: room.slug,
@@ -4619,12 +4658,13 @@ function buildDefaultRoomBuyInMaxRule(): RoomBuyInMaxRule {
   };
 }
 
-function buildDefaultRoomAdminOptions(table: TableState, isPubliclyListed = true): RoomAdminOptionsState {
+function buildDefaultRoomAdminOptions(table: TableState, isPubliclyListed = true, allowGuests = false): RoomAdminOptionsState {
   return {
     decisionTimeSeconds: DEFAULT_TURN_SECONDS,
     timeBankSeconds: DEFAULT_TIMEBANK_SECONDS,
     timeBankRefillHands: null,
     isPubliclyListed,
+    allowGuests,
     minBuyInAmount: table.startingStack,
     maxBuyInRule: buildDefaultRoomBuyInMaxRule(),
     revealAllShowdownHands: table.revealAllShowdownHands,

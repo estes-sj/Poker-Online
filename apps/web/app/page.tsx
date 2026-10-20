@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ControlDesk } from "./components/control-desk";
 import { SiteHeader } from "./components/site-header";
 import { getBrandName } from "./lib/brand";
+import { fetchGuestMode } from "./lib/guest-policy";
 import { getRoomCreationPolicy } from "./lib/room-creation-policy";
 
 export const dynamic = "force-dynamic";
@@ -26,9 +27,10 @@ const features = [
     },
 ];
 
-export default function HomePage() {
+export default async function HomePage() {
     const brandName = getBrandName();
     const roomCreationPolicy = getRoomCreationPolicy();
+    const guestMode = await fetchGuestMode();
 
     return (
         <div className="site">
@@ -55,7 +57,7 @@ export default function HomePage() {
                     ))}
                 </dl>
 
-                <ControlDesk roomCreationPolicy={roomCreationPolicy} />
+                <ControlDesk roomCreationPolicy={roomCreationPolicy} guestMode={guestMode} />
             </main>
         </div>
     );

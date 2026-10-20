@@ -1,8 +1,11 @@
 export interface BrowserSessionState {
   account: {
     id: string;
-    email: string;
+    email: string | null;
     username: string;
+    /** Missing on sessions stored before guest accounts existed. */
+    displayName?: string;
+    isGuest?: boolean;
     createdAt: string;
   };
   token: string;
@@ -62,4 +65,7 @@ export function isConfiguredRoomCreationAdmin(username: string | null | undefine
     && configuredAdminUsername
     && username.trim().toLowerCase() === configuredAdminUsername.trim().toLowerCase(),
   );
+}
+export function getSessionDisplayName(session: BrowserSessionState | null | undefined): string {
+  return session?.account.displayName ?? session?.account.username ?? "";
 }

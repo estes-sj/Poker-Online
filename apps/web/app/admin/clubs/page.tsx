@@ -18,9 +18,14 @@ export default function AdminClubsPage() {
                     title="Manage clubs"
                     description="Create clubs, add members, add imported players for old ledgers, and edit recorded games."
                     actions={(
-                        <Link className="button button--secondary button--small" href="/admin/rooms">
-                            Manage rooms
-                        </Link>
+                        <>
+                            <Link className="button button--secondary button--small" href="/admin/rooms">
+                                Manage rooms
+                            </Link>
+                            <Link className="button button--secondary button--small" href="/admin/settings">
+                                Site settings
+                            </Link>
+                        </>
                     )}
                 />
                 <AdminClubManager roomCreationPolicy={roomCreationPolicy} />

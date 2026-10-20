@@ -36,7 +36,7 @@ export async function mediaRoutes(app: FastifyInstance, authService: AuthService
 
     try {
       const roomName = requireString(body.slug, "slug");
-      const participantName = optionalString(body.participantName) ?? account.username;
+      const participantName = optionalString(body.participantName) ?? account.displayName;
       const participantIdentity = buildMediaParticipantIdentity(account.id, sessionToken);
       const accessToken = new AccessToken(livekitApiKey, livekitApiSecret, {
         identity: participantIdentity,

@@ -55,6 +55,7 @@ The tracked [`.env.example`](.env.example) documents the available settings. Cop
 | `NEXT_PUBLIC_GAME_HTTP_URL` | Browser-facing game HTTP URL. |
 | `NEXT_PUBLIC_GAME_WS_URL` | Browser-facing game WebSocket URL. |
 | `ROOM_CREATION_ADMIN_ONLY` | Restrict table creation to one configured account. |
+| `GUEST_ACCOUNTS_DEFAULT_MODE` | Guest play without an account: `off`, `all` (every table), or `per-room` (host decides). The admin can change it later on `/admin/settings`, which takes precedence. |
 | `ROOM_CREATION_ADMIN_USERNAME` | Username allowed to create tables when the restriction is enabled. |
 
 House rules are stored in [`config/house-rules.json`](config/house-rules.json). The web service mounts this file at runtime, so updating it only requires restarting the web container:

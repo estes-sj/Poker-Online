@@ -58,9 +58,14 @@ model User {
   email             String           @unique
   username          String           @unique
   passwordHash      String
+  isGuest           Boolean          @default(false)
+  displayName       String?
+  recoveryCodeHash  String?          @unique
+  lastSeenAt        DateTime?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
   sessions          Session[]
+  deviceLinkCodes   DeviceLinkCode[]
   ownedClubs        Club[]           @relation("ClubOwner")
   memberships       ClubMembership[]
   adminRooms        Room[]           @relation("RoomAdmin")
@@ -79,6 +84,24 @@ model Session {
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+model DeviceLinkCode {
+  id          String    @id @default(cuid())
+  userId      String
+  codeHash    String    @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model SiteSetting {
+  key         String    @id
+  value       Json
+  updatedAt   DateTime  @updatedAt
 }
 
 model Club {

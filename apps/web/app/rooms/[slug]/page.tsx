@@ -2,27 +2,24 @@ import { RoomClient } from "./room-client";
 import { buildDemoRoomPreset } from "./demo-room";
 import { getBrandName } from "../../lib/brand";
 import { loadHouseRulesConfig } from "../../lib/house-rules-config-server";
+import { fetchGuestMode } from "../../lib/guest-policy";
 import type { RoomSnapshot } from "./room-types";
 
 export const dynamic = "force-dynamic";
 
 export default async function RoomPage({
     params,
-    searchParams,
 }: {
     params: Promise<{ slug: string }>;
-    searchParams: Promise<{ accountId?: string | string[] }>;
 }) {
     const { slug } = await params;
-    const resolvedSearchParams = await searchParams;
-    const requestedAccountId = Array.isArray(resolvedSearchParams.accountId)
-        ? resolvedSearchParams.accountId[0]
-        : resolvedSearchParams.accountId;
     const demoPreset = buildDemoRoomPreset(slug);
-    const accountId = requestedAccountId ?? demoPreset?.initialAccountId;
-    const snapshot = demoPreset?.snapshot ?? await fetchRoomSnapshot(slug, requestedAccountId);
+    const accountId = demoPreset?.initialAccountId;
+    // Server render is a spectator view; the client subscribes with its session token for the personal view.
+    const snapshot = demoPreset?.snapshot ?? await fetchRoomSnapshot(slug);
     const houseRulesConfig = await loadHouseRulesConfig();
     const brandName = getBrandName();
+    const guestMode = demoPreset ? "off" : await fetchGuestMode();
 
     return (
         <RoomClient
@@ -33,19 +30,16 @@ export default async function RoomPage({
             demoMediaParticipants={demoPreset?.demoMediaParticipants ?? []}
             houseRulesConfig={houseRulesConfig}
             brandName={brandName}
+            guestMode={guestMode}
         />
     );
 }
 
-async function fetchRoomSnapshot(slug: string, accountId?: string): Promise<RoomSnapshot | null> {
+async function fetchRoomSnapshot(slug: string): Promise<RoomSnapshot | null> {
     const baseUrl = process.env.GAME_INTERNAL_BASE_URL ?? process.env.NEXT_PUBLIC_GAME_HTTP_URL ?? "http://localhost:4200";
 
     try {
         const url = new URL(`/v1/rooms/${slug}`, baseUrl);
-
-        if (accountId) {
-            url.searchParams.set("accountId", accountId);
-        }
 
         const response = await fetch(url, {
             cache: "no-store",

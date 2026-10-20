@@ -200,6 +200,7 @@ export interface RoomAdminOptionsState {
   timeBankSeconds: number | null;
   timeBankRefillHands: number | null;
   isPubliclyListed: boolean;
+  allowGuests?: boolean;
   minBuyInAmount: number;
   maxBuyInRule: RoomBuyInMaxRule;
   revealAllShowdownHands: boolean;
@@ -306,8 +307,10 @@ export interface RoomSnapshot {
 export interface SessionState {
   account: {
     id: string;
-    email: string;
+    email: string | null;
     username: string;
+    displayName?: string;
+    isGuest?: boolean;
     createdAt: string;
   };
   token: string;
