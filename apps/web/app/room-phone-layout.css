@@ -1,0 +1,584 @@
+/*
+ * Phone table layout.
+ *
+ * Loaded after the other room stylesheets so it is the last word on phone sizing.
+ * Seat pods: a square avatar on the left, a name/stack plate along the bottom, and
+ * hole cards tucked above the plate. Everything that hangs off a pod (action pill,
+ * blinds, dealer chip, hand label, reactions) is sized to stay readable at ~390px.
+ */
+
+.room-shell--phone {
+  --phone-pod-width: 104px;
+  --phone-pod-height: 50px;
+  --phone-avatar: 40px;
+  --phone-plate-height: 32px;
+  --phone-pill-height: 18px;
+  --phone-pill-font: 10px;
+  --phone-tag-font: 9px;
+}
+
+/* ---------- Shell: fit the viewport exactly, no page scroll ---------- */
+
+.room-shell--phone.room-shell--play {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.room-shell--phone .room-play-stack {
+  gap: 0 !important;
+}
+
+.room-shell--phone .table-arena--clean {
+  height: 100dvh !important;
+  min-height: 0 !important;
+  padding: 4px !important;
+}
+
+/* ---------- Top HUD: menu (left) and status rack (right) ---------- */
+
+.room-shell--phone .table-menu-cluster {
+  top: 6px !important;
+  left: 6px !important;
+  width: 104px !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 0 !important;
+}
+
+.room-shell--phone .table-menu-cluster__button {
+  width: 100% !important;
+  min-height: 26px !important;
+  padding: 7px 2px 4px !important;
+  font-size: 9px !important;
+  letter-spacing: 0.08em !important;
+}
+
+.room-shell--phone .table-menu-cluster__button::before {
+  top: 4px !important;
+  width: 9px !important;
+}
+
+.room-shell--phone .table-felt > .table-status-rack {
+  top: 6px !important;
+  right: 8px !important;
+  width: auto !important;
+  max-width: calc(100% - 128px) !important;
+  gap: 4px !important;
+}
+
+.room-shell--phone .table-felt > .table-status-rack > .table-status-rack__blind-line {
+  align-items: baseline !important;
+  flex-wrap: nowrap !important;
+  gap: 6px !important;
+}
+
+.room-shell--phone .table-status-rack__current-blind {
+  font-size: 15px !important;
+  line-height: 1.1 !important;
+}
+
+.room-shell--phone .table-status-rack__next-blind {
+  font-size: 10px !important;
+  white-space: nowrap !important;
+}
+
+/* Badges and controls share one row when they fit, and wrap right-aligned when they do not. */
+.room-shell--phone .table-felt > .table-status-rack {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+}
+
+.room-shell--phone .table-felt > .table-status-rack > .table-status-rack__summary {
+  flex: 1 0 100% !important;
+}
+
+/* Hand number and turn timer only; whose turn it is shows on the felt. */
+.room-shell--phone .table-status-rack__badges .chip-pill:nth-child(n + 3) {
+  display: none !important;
+}
+
+.room-shell--phone .table-felt > .table-status-rack > .table-status-rack__badges,
+.room-shell--phone .table-felt > .table-status-rack > .table-status-rack__controls {
+  width: auto !important;
+  flex-wrap: nowrap !important;
+  gap: 4px !important;
+}
+
+.room-shell--phone .table-status-rack .chip-pill,
+.room-shell--phone .table-status-rack__control {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-height: 24px !important;
+  padding: 0 7px !important;
+  font-size: 10px !important;
+  letter-spacing: 0.02em !important;
+}
+
+/* ---------- Center: pot, board, turn clock ---------- */
+
+.room-shell--phone .table-center {
+  top: 56% !important;
+  width: calc(100% - 40px) !important;
+  gap: 6px !important;
+}
+
+.room-shell--phone .table-center__label {
+  font-size: 9px !important;
+  letter-spacing: 0.16em !important;
+}
+
+.room-shell--phone .table-center__pot {
+  padding: 4px 12px !important;
+  font-size: 14px !important;
+}
+
+.room-shell--phone .table-board {
+  gap: 4px !important;
+}
+
+.room-shell--phone .playing-card--board,
+.room-shell--phone .playing-card--compact {
+  width: 40px !important;
+  height: 56px !important;
+}
+
+.room-shell--phone .playing-card--board .playing-card__rank {
+  font-size: 19px !important;
+}
+
+.room-shell--phone .playing-card--board .playing-card__pip {
+  font-size: 22px !important;
+}
+
+.room-shell--phone .playing-card--board .playing-card__back-label {
+  font-size: 7px !important;
+  letter-spacing: 0.08em !important;
+}
+
+.room-shell--phone .table-center__turn-clock {
+  display: inline-flex !important;
+  align-items: baseline !important;
+  gap: 6px !important;
+  width: auto !important;
+  min-width: 0 !important;
+  padding: 4px 12px !important;
+  border-radius: 999px !important;
+  font-size: 11px !important;
+}
+
+.room-shell--phone .table-center__turn-clock strong,
+.room-shell--phone .table-center__turn-clock span {
+  font-size: 11px !important;
+  letter-spacing: 0.06em !important;
+}
+
+.room-shell--phone .table-center__status {
+  max-width: 30ch !important;
+  font-size: 11px !important;
+}
+
+/* ---------- Seat pod ---------- */
+
+.room-shell--phone .table-seat--focusable,
+.room-shell--phone .table-seat--focusable.table-seat--with-media {
+  width: var(--phone-pod-width) !important;
+  min-height: var(--phone-pod-height) !important;
+}
+
+.room-shell--phone .table-seat--focusable.table-seat--hero,
+.room-shell--phone .table-seat--focusable.table-seat--hero.table-seat--with-media {
+  width: 116px !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__visuals {
+  min-height: var(--phone-pod-height) !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__media-wrap {
+  top: auto !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  width: var(--phone-avatar) !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__media {
+  width: var(--phone-avatar) !important;
+  border-radius: 8px 0 0 8px !important;
+  overflow: hidden;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__media-fallback-avatar {
+  font-size: 13px !important;
+}
+
+/* Mock camera tiles (sample table) are too small for their captions; keep the tint and initials. */
+.room-shell--phone .table-seat--focusable .table-seat__media--demo .media-tile__demo-header,
+.room-shell--phone .table-seat--focusable .table-seat__media--demo .media-tile__demo-meta {
+  display: none !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__media--demo .media-tile__demo {
+  display: grid !important;
+  place-items: center !important;
+  padding: 0 !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__media--demo .media-tile__demo-footer {
+  display: contents !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__content {
+  height: var(--phone-plate-height) !important;
+  padding: 3px 6px 3px calc(var(--phone-avatar) + 6px) !important;
+  border-radius: 8px !important;
+  gap: 0 !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__content .table-seat__identity strong {
+  font-size: 10px !important;
+  line-height: 12px !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__content .table-seat__identity span {
+  margin-top: 0 !important;
+  font-size: 12px !important;
+  line-height: 14px !important;
+}
+
+/* Wins / rebuys live in the Info panel; they do not fit on a phone plate. */
+.room-shell--phone .table-seat--focusable .table-seat__stats {
+  display: none !important;
+}
+
+/* grid-area is reset so the plate, not a grid cell, is the containing block. */
+.room-shell--phone .table-seat--focusable .table-seat__content .table-seat__markers {
+  grid-area: auto !important;
+  position: absolute !important;
+  top: 3px !important;
+  right: 4px !important;
+  bottom: auto !important;
+  max-width: none !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__marker {
+  min-height: 12px !important;
+  padding: 0 4px !important;
+  border-radius: 4px !important;
+  font-size: 7px !important;
+  line-height: 12px !important;
+}
+
+.room-shell--phone .table-seat--focusable.table-seat--active .table-seat__marker,
+.room-shell--phone .table-seat--focusable.table-seat--winner .table-seat__marker {
+  border-color: rgba(0, 0, 0, 0.16) !important;
+  background: rgba(0, 0, 0, 0.08) !important;
+  color: #3a3a3a !important;
+}
+
+/* Status tag sits just under the plate's right end. "Ready" and "Action" repeat what the pod already shows. */
+.room-shell--phone .table-seat--focusable .table-seat__footer {
+  grid-area: auto !important;
+  position: absolute !important;
+  inset: calc(100% + 2px) 4px auto auto !important;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__footer .table-seat__state {
+  position: static !important;
+  top: auto !important;
+  right: auto !important;
+  display: inline-flex !important;
+  align-items: center;
+  min-height: 14px !important;
+  padding: 0 5px !important;
+  border-radius: 4px !important;
+  background: rgba(16, 18, 22, 0.94);
+  font-size: var(--phone-tag-font) !important;
+  line-height: 14px !important;
+  letter-spacing: 0.04em !important;
+  white-space: nowrap;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__footer .table-seat__state--ready,
+.room-shell--phone .table-seat--focusable .table-seat__footer .table-seat__state--active {
+  display: none !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__footer .table-seat__state--winner {
+  border: 0 !important;
+  background: rgba(255, 112, 112, 0.94) !important;
+  font-size: var(--phone-tag-font) !important;
+}
+
+/* Hole cards peek out above the plate, right of the avatar. */
+.room-shell--phone .table-seat--focusable .table-seat__cards,
+.room-shell--phone .table-seat--focusable.table-seat--with-media .table-seat__cards {
+  top: -16px !important;
+  right: auto !important;
+  left: calc(var(--phone-avatar) + 4px) !important;
+  width: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__cards .playing-card--seat,
+.room-shell--phone .table-seat--focusable .table-seat__cards--revealed .playing-card--seat {
+  width: 30px !important;
+  height: 42px !important;
+}
+
+.room-shell--phone .table-seat--focusable.table-seat--hero .table-seat__cards .playing-card--seat {
+  width: 36px !important;
+  height: 50px !important;
+}
+
+.room-shell--phone .table-seat--focusable.table-seat--hero .table-seat__cards {
+  top: -26px !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__cards .playing-card--seat .playing-card__rank {
+  font-size: 12px !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__cards .playing-card--seat .playing-card__pip {
+  font-size: 14px !important;
+}
+
+.room-shell--phone .table-seat--focusable.table-seat--hero .table-seat__cards .playing-card--seat .playing-card__rank {
+  font-size: 15px !important;
+}
+
+.room-shell--phone .table-seat--focusable.table-seat--hero .table-seat__cards .playing-card--seat .playing-card__pip {
+  font-size: 18px !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__turn-bar {
+  left: calc(var(--phone-avatar) + 4px) !important;
+  right: 4px !important;
+  bottom: 1px !important;
+  width: auto !important;
+  height: 3px !important;
+}
+
+/* ---------- Pills that hang off a pod ---------- */
+
+.room-shell--phone .table-seat--focusable .table-seat__bubble--live,
+.room-shell--phone .table-seat--focusable .table-seat__chips {
+  min-height: var(--phone-pill-height) !important;
+  padding: 0 7px !important;
+  font-size: var(--phone-pill-font) !important;
+  line-height: var(--phone-pill-height) !important;
+}
+
+/* One pill per seat: the action pill already carries the amount. */
+.room-shell--phone .table-seat--focusable.table-seat--dual-pills .table-seat__chips {
+  display: none !important;
+}
+
+/* Pills point at the middle of the table. */
+.room-shell--phone .table-seat--focusable.table-seat--media-below .table-seat__bubble--live,
+.room-shell--phone .table-seat--focusable.table-seat--media-below .table-seat__chips {
+  top: calc(100% + 16px) !important;
+  bottom: auto !important;
+  left: 50% !important;
+  right: auto !important;
+  transform: translateX(-50%) !important;
+}
+
+.room-shell--phone .table-seat--focusable.table-seat--media-above .table-seat__bubble--live,
+.room-shell--phone .table-seat--focusable.table-seat--media-above .table-seat__chips {
+  top: auto !important;
+  bottom: calc(100% + 20px) !important;
+  left: 50% !important;
+  right: auto !important;
+  transform: translateX(-50%) !important;
+}
+
+.room-shell--phone .table-seat--focusable.table-seat--hero.table-seat--media-above .table-seat__bubble--live,
+.room-shell--phone .table-seat--focusable.table-seat--hero.table-seat--media-above .table-seat__chips {
+  left: -8px !important;
+  right: auto !important;
+  bottom: calc(100% + 30px) !important;
+  transform: none !important;
+}
+
+.room-shell--phone .table-seat--focusable.table-seat--media-right .table-seat__bubble--live,
+.room-shell--phone .table-seat--focusable.table-seat--media-right .table-seat__chips {
+  top: 50% !important;
+  bottom: auto !important;
+  left: calc(100% + 6px) !important;
+  right: auto !important;
+  transform: translateY(-50%) !important;
+}
+
+.room-shell--phone .table-seat--focusable.table-seat--media-left .table-seat__bubble--live,
+.room-shell--phone .table-seat--focusable.table-seat--media-left .table-seat__chips {
+  top: 50% !important;
+  bottom: auto !important;
+  left: auto !important;
+  right: calc(100% + 6px) !important;
+  transform: translateY(-50%) !important;
+}
+
+/* Hero: gesture toggle on the avatar's top-left corner, action pill up and to the left clear of the cards,
+   blind badge to the pod's left. */
+.room-shell--phone .table-seat--focusable.table-seat--hero.table-seat--media-above .table-seat__bubble--live,
+.room-shell--phone .table-seat--focusable.table-seat--hero.table-seat--media-above .table-seat__chips {
+  left: auto !important;
+  right: calc(100% - 52px) !important;
+  bottom: calc(100% + 30px) !important;
+}
+
+.room-shell--phone .table-seat--focusable.table-seat--hero .table-seat__blind-badges {
+  top: 0 !important;
+  left: auto !important;
+  right: calc(100% + 4px) !important;
+}
+
+.room-shell--phone .table-seat--hero .table-seat__reaction-control {
+  top: -10px !important;
+  bottom: auto !important;
+  left: -10px !important;
+  right: auto !important;
+  z-index: 8;
+}
+
+.room-shell--phone .table-seat--hero .table-seat__reaction-toggle {
+  left: 0 !important;
+}
+
+/* Blinds sit above the avatar; the dealer chip sits on the avatar's lower-left corner. */
+.room-shell--phone .table-seat--focusable .table-seat__blind-badges {
+  top: -16px !important;
+  left: 0 !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__blind-badge {
+  min-height: 14px !important;
+  padding: 0 4px !important;
+  border-radius: 4px !important;
+  font-size: var(--phone-tag-font) !important;
+  line-height: 14px !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__dealer-button {
+  top: auto !important;
+  right: auto !important;
+  bottom: -6px !important;
+  left: -6px !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__dealer-button-chip {
+  width: 16px !important;
+  height: 16px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  font-size: 9px !important;
+  letter-spacing: 0 !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__hero-hand,
+.room-shell--phone .table-seat--focusable .table-seat__showdown-label {
+  top: -42px !important;
+  right: 0 !important;
+  min-height: 14px !important;
+  padding: 0 5px !important;
+  border-radius: 4px !important;
+  font-size: var(--phone-tag-font) !important;
+  line-height: 14px !important;
+}
+
+.room-shell--phone .table-seat--focusable .table-seat__bubble--winner {
+  top: -38px !important;
+  left: 0 !important;
+  right: 0 !important;
+  min-height: 18px !important;
+  padding: 0 6px !important;
+  border-radius: 6px !important;
+  font-size: 10px !important;
+  line-height: 18px !important;
+}
+
+.room-shell--phone .table-seat--focusable.table-seat--media-below .table-seat__bubble--winner {
+  top: calc(100% + 20px) !important;
+  bottom: auto !important;
+}
+
+/* Reactions: a compact badge on the avatar's top-left corner instead of a big disc over the cards. */
+.room-shell--phone .table-seat__reaction {
+  top: -14px !important;
+  left: -8px !important;
+  width: 26px !important;
+  height: 26px !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  display: grid !important;
+  place-items: center !important;
+  font-size: 15px !important;
+  line-height: 1 !important;
+  transform: none !important;
+}
+
+/* ---------- Bottom: hero stats + dock ---------- */
+
+.room-shell--phone .table-hero-stats-bar {
+  width: 148px !important;
+  max-width: 148px !important;
+  gap: 3px !important;
+  padding-bottom: 6px !important;
+}
+
+.room-shell--phone .table-hero-stats-bar__item {
+  min-height: 20px !important;
+  padding: 0 10px !important;
+}
+
+.room-shell--phone .table-hero-stats-bar__item strong {
+  font-size: 9px !important;
+}
+
+.room-shell--phone .table-hero-stats-bar__item span {
+  font-size: 12px !important;
+}
+
+.room-shell--phone .table-chat-floater {
+  bottom: 6px !important;
+}
+
+.room-shell--phone .table-chat-mobile-dock__button {
+  min-height: 32px !important;
+  font-size: 10px !important;
+}
+
+.room-shell--phone .table-action-panel .button-1.action-button,
+.room-shell--phone .table-action-panel__queue-row > .button-1.action-button {
+  min-height: 34px !important;
+  padding: 0 4px !important;
+  font-size: 10px !important;
+  letter-spacing: 0.04em !important;
+  line-height: 1.15 !important;
+  white-space: normal !important;
+}
+
+/* Notes above the arena would push the table past the bottom of the screen. */
+.room-shell--phone .room-play-stack > .muted-copy {
+  display: none !important;
+}
+
+.room-shell--phone .room-play-stack__error {
+  position: fixed !important;
+  top: 64px;
+  left: 50%;
+  z-index: 70;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  margin: 0 !important;
+  transform: translateX(-50%);
+}

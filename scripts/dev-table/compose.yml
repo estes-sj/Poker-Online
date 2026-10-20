@@ -1,0 +1,50 @@
+# Isolated test stack for layout work and screenshots.
+# Reuses the poker-api / poker-game images from the main stack, but runs its own
+# Postgres and Redis on a separate compose project so production data is untouched.
+#   docker compose -p pokerdev -f scripts/dev-table/compose.yml up -d
+name: pokerdev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: poker
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d poker"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+
+  api:
+    image: poker-api
+    command: sh -lc "pnpm --filter @poker/db prisma db push --skip-generate && pnpm --filter @poker/api start"
+    env_file:
+      - ../../.env.example
+    environment:
+      ROOM_CREATION_ADMIN_ONLY: "false"
+      GUEST_ACCOUNTS_DEFAULT_MODE: "off"
+    ports:
+      - "14100:4100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  game:
+    image: poker-game
+    env_file:
+      - ../../.env.example
+    environment:
+      ROOM_CREATION_ADMIN_ONLY: "false"
+      GUEST_ACCOUNTS_DEFAULT_MODE: "off"
+    ports:
+      - "14200:4200"
+    depends_on:
+      api:
+        condition: service_started

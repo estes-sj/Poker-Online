@@ -7,6 +7,7 @@ import "./room-foundation.css";
 import "./room-play-shell.css";
 import "./room-table-visuals.css";
 import "./room-seat-overrides.css";
+import "./room-phone-layout.css";
 import "./site.css";
 
 const sans = DM_Sans({
