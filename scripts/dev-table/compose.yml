@@ -22,6 +22,24 @@ services:
   redis:
     image: redis:7-alpine
 
+  # Dev LiveKit for testing mic/cam. Ports are offset so they do not clash with the main stack.
+  livekit:
+    image: livekit/livekit-server:v1.10.1
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        keys:
+          devkey: devsecretdevsecretdevsecretdevse
+        rtc:
+          tcp_port: 17881
+          udp_port: 17882
+          node_ip: 127.0.0.1
+          use_external_ip: false
+    ports:
+      - "17880:7880"
+      - "17881:17881"
+      - "17882:17882/udp"
+
   api:
     image: poker-api
     command: sh -lc "pnpm --filter @poker/db prisma db push --skip-generate && pnpm --filter @poker/api start"

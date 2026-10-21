@@ -1661,26 +1661,34 @@ export function RoomClient({
                         <p className="muted-copy">This sample room uses mocked camera tiles so you can size a full 10-player table without connecting LiveKit.</p>
                     ) : !session ? (
                         <p className="muted-copy">Sign in to connect voice and video for the table.</p>
-                    ) : !media.isConnected ? (
-                        <button
-                            className="button button--secondary table-menu-drawer__button"
-                            type="button"
-                            onClick={() => void media.handleConnectMedia()}
-                            disabled={media.mediaStatus === "connecting" || Boolean(media.environmentError)}
-                        >
-                            {media.mediaStatus === "connecting" ? "Connecting media" : "Connect media"}
-                        </button>
                     ) : (
+                        // Mic and camera connect to the table's media on first use, so there is no separate connect step.
                         <div className="seat-control-list seat-control-list--stacked">
-                            <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void media.handleToggleMicrophone()}>
-                                {media.microphoneEnabled ? "Mute mic" : "Unmute mic"}
+                            <button
+                                className="button button--secondary table-menu-drawer__button"
+                                type="button"
+                                onClick={() => void handleChatMediaToggle("microphone")}
+                                disabled={chatMediaActionState !== "idle" || Boolean(media.environmentError)}
+                            >
+                                {chatMediaActionState === "connecting" || chatMediaActionState === "microphone"
+                                    ? "Connecting…"
+                                    : media.isConnected && media.microphoneEnabled ? "Mute mic" : "Turn on mic"}
                             </button>
-                            <button className="button button--secondary table-menu-drawer__button" type="button" onClick={() => void media.handleToggleCamera()}>
-                                {media.cameraEnabled ? "Stop camera" : "Start camera"}
+                            <button
+                                className="button button--secondary table-menu-drawer__button"
+                                type="button"
+                                onClick={() => void handleChatMediaToggle("camera")}
+                                disabled={chatMediaActionState !== "idle" || Boolean(media.environmentError)}
+                            >
+                                {chatMediaActionState === "connecting" || chatMediaActionState === "camera"
+                                    ? "Connecting…"
+                                    : media.isConnected && media.cameraEnabled ? "Stop camera" : "Turn on camera"}
                             </button>
-                            <button className="button button--primary table-menu-drawer__button" type="button" onClick={media.handleDisconnectMedia}>
-                                Disconnect media
-                            </button>
+                            {media.isConnected ? (
+                                <button className="button button--primary table-menu-drawer__button" type="button" onClick={media.handleDisconnectMedia}>
+                                    Disconnect media
+                                </button>
+                            ) : null}
                         </div>
                     )}
 
@@ -2950,7 +2958,7 @@ export function RoomClient({
             setChatMediaActionState("connecting");
 
             try {
-                await media.handleConnectMedia();
+                await media.handleConnectMedia(kind);
             } finally {
                 setChatMediaActionState("idle");
             }
@@ -4239,7 +4247,7 @@ export function RoomClient({
                 if (media.isConnected) {
                     void media.handleToggleMicrophone();
                 } else if (!media.environmentError) {
-                    void media.handleConnectMedia();
+                    void media.handleConnectMedia("microphone");
                 }
                 return;
             }
@@ -4254,7 +4262,7 @@ export function RoomClient({
                 if (media.isConnected) {
                     void media.handleToggleCamera();
                 } else if (!media.environmentError) {
-                    void media.handleConnectMedia();
+                    void media.handleConnectMedia("camera");
                 }
                 return;
             }

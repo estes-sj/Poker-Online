@@ -65,7 +65,8 @@ export interface TableMediaState {
     microphoneEnabled: boolean;
     cameraEnabled: boolean;
     isConnected: boolean;
-    handleConnectMedia: () => Promise<void>;
+    /** Connects to the table's media room, then turns on `enableDevice` if one is given. */
+    handleConnectMedia: (enableDevice?: "microphone" | "camera") => Promise<void>;
     handleToggleMicrophone: () => Promise<void>;
     handleToggleCamera: () => Promise<void>;
     handleDisconnectMedia: () => void;
@@ -110,7 +111,7 @@ export function useTableMedia({ slug, session, canConnect, displayName }: TableM
     const microphoneEnabled = isPublicationEnabled(localParticipant?.audioPublication ?? null);
     const cameraEnabled = isPublicationEnabled(localParticipant?.videoPublication ?? null);
 
-    async function handleConnectMedia() {
+    async function handleConnectMedia(enableDevice?: "microphone" | "camera") {
         const activeSession = readStoredBrowserSession() ?? session;
 
         if (!activeSession) {
@@ -189,6 +190,26 @@ export function useTableMedia({ slug, session, canConnect, displayName }: TableM
         } catch (error) {
             disconnectRoom(roomRef, setParticipants, setMediaStatus);
             setMediaError(formatMediaError(error));
+            return;
+        }
+
+        if (!enableDevice || !roomRef.current) {
+            return;
+        }
+
+        // A failed device (e.g. permission denied) leaves the table connected so the other device still works.
+        const activeRoom = roomRef.current;
+
+        try {
+            if (enableDevice === "microphone") {
+                await activeRoom.localParticipant.setMicrophoneEnabled(true);
+            } else {
+                await activeRoom.localParticipant.setCameraEnabled(true);
+            }
+
+            setParticipants(buildParticipantState(activeRoom));
+        } catch (error) {
+            setMediaError(error instanceof Error ? error.message : `Unable to turn on the ${enableDevice === "microphone" ? "microphone" : "camera"}.`);
         }
     }
 
