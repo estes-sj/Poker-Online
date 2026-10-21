@@ -109,6 +109,8 @@ import type { ArchivedHandRecord, Card, HandActionRecord, HeroActionState, LastH
 
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 900px)";
 const MOBILE_LAYOUT_RECOMMENDATION_STORAGE_KEY = "river-club-mobile-layout-recommendation-dismissed";
+// Pause before a queued move fires so a run of queued checks/folds plays out visibly instead of all at once.
+const QUEUED_ACTION_DELAY_MS = 700;
 const ACTION_PAD_IDLE_DIM_STORAGE_KEY = "river-club-action-pad-idle-dim";
 const ROOM_PASSWORD_PROMPT_QUERY_PARAM = "roomPrompt";
 const ROOM_PASSWORD_PROMPT_QUERY_VALUE = "unlock";
@@ -4210,10 +4212,15 @@ export function RoomClient({
             return;
         }
 
-        autoActionRef.current = actionKey;
-        setPreselectedHeroAction(null);
-        void handlePlayerAction(actionType);
-    }, [currentHand, heroActionState, isMutating, preselectedHeroAction]);
+        const timer = window.setTimeout(() => {
+            autoActionRef.current = actionKey;
+            setPreselectedHeroAction(null);
+            void handlePlayerAction(actionType);
+        }, QUEUED_ACTION_DELAY_MS);
+
+        return () => window.clearTimeout(timer);
+        // Keyed on the turn itself, so chat or reactions arriving mid-delay do not restart the timer.
+    }, [currentHand?.id, currentHand?.street, heroActionState?.canAct, heroActionState?.callAmount, isMutating, preselectedHeroAction]);
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
